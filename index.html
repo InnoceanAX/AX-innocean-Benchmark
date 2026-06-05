@@ -6,7 +6,7 @@ const STATE={pg:'L',media:'G',sbOpen:true,netGross:'net',fee:15,kpiIdx:'cpm',ext
 const CPV_DATA={labels:['25.06','25.07','25.08','25.09','25.10','25.11','25.12','26.01','26.02','26.03','26.04','26.05'],hyundai:[26.2,24.8,25.5,27.1,32.4,35.8,38.2,27.5,25.9,26.8,28.1,27.3],bench:[34.2,34.2,34.2,34.2,34.2,34.2,34.2,34.2,34.2,34.2,34.2,34.2]};
 const TREND={labels:['Jan','Feb','Mar','Apr','May'],cpm:[8500,9200,8800,7900,8100],cpc:[1200,1350,1280,1100,1190],ctr:[1.42,1.38,1.45,1.39,1.41],cpv:[28.5,27.3,29.1,26.8,28.9],vtr:[42.1,43.5,41.8,44.2,42.7]};
 
-function goPg(p){var mn=document.getElementById('mainNav');if(mn)mn.style.display=(p==='L')?'none':'flex';history.pushState({pg:p},'',(p==='L')?'/':'?pg='+p);
+function goPg(p){var mn=document.getElementById('mainNav');if(mn)mn.style.display=(p==='L')?'none':'flex';var sh=document.querySelector('.subhdr');if(sh)sh.style.display=(p==='L')?'flex':'none';document.querySelector('.poff').style.paddingTop=(p==='L')?'calc(var(--hh) + var(--sh))':'var(--hh)';history.pushState({pg:p},'',(p==='L')?'/':'?pg='+p);
   document.querySelectorAll('.pg').forEach(el=>el.classList.remove('on'));
   document.querySelectorAll('.ntab').forEach(el=>el.classList.remove('on'));
   document.getElementById('pg'+{L:'L',A:'AI',B:'BM'}[p]).classList.add('on');
