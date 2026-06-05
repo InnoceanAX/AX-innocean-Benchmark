@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>INNOCEAN BENCHMARK | INNOCEAN</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --in:#4F46E5;--ink:#4338CA;--bk:#000;--wh:#fff;--bd:#E5E5E5;
+  --bg:#F3F4F6;--tg:#4B5563;--ts:#767676;--tb:#333;--tm:#555;
+  --gn:#16A34A;--am:#D97706;--rd:#DC2626;
+}
+body{font-family:"Noto Sans KR",sans-serif;background:#fff;color:#000;font-size:15px;line-height:1.6}
+.hdr{position:sticky;top:0;z-index:200;background:#fff;height:70px;display:flex;align-items:center;justify-content:space-between;padding:0 40px}
+.logo{font-size:18px;font-weight:800;letter-spacing:.08em;cursor:pointer;min-width:120px}
+.logo span{color:var(--in)}
+.nav{display:flex;gap:32px;align-items:center}
+.ntab{font-size:14px;font-weight:500;color:var(--ts);cursor:pointer;padding:6px 0;border-bottom:2px solid transparent;transition:color .15s,border-color .15s;white-space:nowrap}
+.ntab:hover{color:#000}
+.ntab.active{color:#000;font-weight:700;border-bottom:2px solid #000}
+.subhdr{height:40px;display:flex;align-items:center;justify-content:space-between;padding:0 40px;border-bottom:1px solid var(--bd)}
+.subhdr-l{font-size:12px;font-weight:700}
+.subhdr-r{font-size:12px;font-weight:500;color:var(--ts)}
+.ctn{max-width:1200px;margin:0 auto;padding:0 40px}
+.page{display:none}
+.page.active{display:block}
+.landing{padding:80px 0;text-align:center}
+.badge{display:inline-block;background:var(--bg);color:var(--tg);font-size:11px;font-weight:600;letter-spacing:.08em;padding:6px 14px;margin-bottom:24px}
+.ltitle{font-size:48px;font-weight:800;letter-spacing:-.02em;line-height:1.2;margin-bottom:16px}
+.ldesc{font-size:16px;color:var(--tm);line-height:1.7;margin-bottom:56px;max-width:560px;margin-left:auto;margin-right:auto}
+.sec-lbl{font-size:14px;font-weight:700;text-align:left;margin-bottom:20px}
+.cgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:24px;margin-bottom:80px}
+.card{border:1px solid var(--bd);padding:32px;text-align:left;position:relative;background:#fff;display:flex;flex-direction:column;cursor:pointer;transition:border-color .2s}
+.card:hover{border-color:#000}
+.cidx{position:absolute;top:32px;right:32px;font-size:16px;font-weight:700;color:var(--bd)}
+.cico{width:24px;height:24px;margin-bottom:20px}
+.csub{font-size:11px;font-weight:600;color:var(--in);letter-spacing:.05em;margin-bottom:8px}
+.ctitle{font-size:20px;font-weight:700;letter-spacing:-.01em;line-height:1.3;margin-bottom:12px}
+.cdesc{font-size:14px;color:var(--tm);line-height:1.5;flex:1;margin-bottom:28px}
+.cbtn{display:block;width:100%;background:#000;color:#fff;font-size:14px;font-weight:600;text-align:center;padding:13px;border:none;cursor:pointer;font-family:inherit;transition:background .15s}
+.cbtn:hover{background:var(--in)}
+.aipage{padding:40px 0 80px}
+.pghd{font-size:24px;font-weight:600;letter-spacing:-.01em;margin-bottom:4px}
+.pgsub{font-size:14px;color:var(--ts);margin-bottom:32px}
+.ai-split{display:grid;grid-template-columns:2fr 3fr;gap:24px;height:680px}
+.chat-panel{border:1px solid var(--bd);display:flex;flex-direction:column;background:#fff}
+.chat-hdr{padding:18px 20px;border-bottom:1px solid var(--bd);font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px}
+.ai-dot{width:8px;height:8px;border-radius:50%;background:var(--in);display:inline-block}
+.chat-msgs{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px}
+.msg{display:flex;gap:10px;align-items:flex-start}
+.msg.user{flex-direction:row-reverse}
+.mav{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0}
+.msg.ai .mav{background:var(--bg);color:var(--in)}
+.msg.user .mav{background:var(--in);color:#fff}
+.mbb{max-width:78%;padding:12px 14px;font-size:13px;line-height:1.55}
+.msg.ai .mbb{background:#F9FAFB;border:1px solid var(--bd);color:#111}
+.msg.user .mbb{background:var(--in);color:#fff}
+.mtm{font-size:10px;color:#ccc;margin-top:4px}
+.chat-ibar{padding:16px 20px;border-top:1px solid var(--bd);display:flex;gap:10px}
+.cinput{flex:1;border:1px solid var(--bd);padding:10px 14px;font-size:13px;font-family:inherit;outline:none}
+.cinput:focus{border-color:var(--in)}
+.csend{background:#000;color:#fff;border:none;padding:10px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:background .15s}
+.csend:hover{background:var(--in)}
+.dash-panel{border:1px solid var(--bd);overflow:hidden;display:flex;flex-direction:column}
+.dash-top{padding:18px 24px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between}
+.dash-ttl{font-size:13px;font-weight:700}
+.dash-meta{font-size:12px;color:var(--ts)}
+.dash-body{flex:1;overflow-y:auto;padding:24px}
+.krow4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
+.kmini{border:1px solid var(--bd);padding:14px 16px}
+.km-lbl{font-size:11px;color:var(--ts);font-weight:500;margin-bottom:4px}
+.km-val{font-size:20px;font-weight:700}
+.km-bdg{display:inline-block;font-size:10px;font-weight:600;padding:2px 6px;margin-top:4px}
+.km-bdg.above{background:#DCFCE7;color:var(--gn)}
+.km-bdg.below{background:#FEE2E2;color:var(--rd)}
+.km-bdg.at{background:#FEF9C3;color:var(--am)}
+.cbox{margin-bottom:20px}
+.cbox-lbl{font-size:12px;font-weight:600;margin-bottom:12px}
+.cwrap{height:200px;position:relative}
+.bmpage{padding:32px 0 80px}
+.mtabs{display:flex;border-bottom:2px solid var(--bd);margin-bottom:28px}
+.mtab{padding:10px 24px;font-size:13px;font-weight:500;color:var(--ts);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;transition:color .15s,border-color .15s;white-space:nowrap}
+.mtab:hover{color:#000}
+.mtab.active{color:#000;font-weight:700;border-bottom:2px solid #000}
+.stabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}
+.stab{padding:5px 14px;font-size:12px;font-weight:500;border:1px solid var(--bd);cursor:pointer;color:var(--ts);background:#fff;transition:all .15s}
+.stab.active{background:#000;color:#fff;border-color:#000}
+.stab:hover:not(.active){border-color:#000;color:#000}
+.filters{border:1px solid var(--bd);padding:20px 24px;margin-bottom:24px;background:#FAFAFA}
+.frow{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.frow:last-child{margin-bottom:0}
+.flbl{font-size:12px;font-weight:600;min-width:60px;flex-shrink:0}
+.fgrp{display:flex;align-items:center;gap:8px;flex:1;flex-wrap:wrap}
+.fsel{border:1px solid var(--bd);background:#fff;padding:7px 12px;font-size:13px;font-family:inherit;color:#000;outline:none;min-width:120px;cursor:pointer}
+.fsel:focus{border-color:var(--in)}
+.fdt{display:flex;align-items:center;gap:6px}
+.fdt input[type=date]{border:1px solid var(--bd);padding:7px 10px;font-size:13px;font-family:inherit;color:#000;outline:none;cursor:pointer;background:#fff}
+.fdt input[type=date]:focus{border-color:var(--in)}
+.dsep{font-size:13px;color:var(--ts)}
+.ex-info{font-size:12px;color:var(--ts);padding:6px 12px;background:#F3F4F6;border:1px solid var(--bd);white-space:nowrap}
+.ex-info b{color:var(--in)}
+.tgrp{display:flex;border:1px solid var(--bd);overflow:hidden}
+.tbtn{padding:7px 16px;font-size:12px;font-weight:600;cursor:pointer;border:none;background:#fff;color:var(--ts);font-family:inherit;transition:all .15s}
+.tbtn.active{background:#000;color:#fff}
+.tbtn:hover:not(.active){background:var(--bg)}
+.sbtn{background:#000;color:#fff;border:none;padding:8px 28px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:background .15s;white-space:nowrap;margin-left:auto}
+.sbtn:hover{background:var(--in)}
+.stitle{font-size:15px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.stitle::before{content:"";display:inline-block;width:3px;height:16px;background:var(--in);flex-shrink:0}
+.kpi5{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:28px}
+.kcard{border:1px solid var(--bd);padding:20px 16px}
+.kc-lbl{font-size:11px;color:var(--ts);font-weight:500;margin-bottom:6px}
+.kc-val{font-size:22px;font-weight:700;letter-spacing:-.01em;margin-bottom:4px}
+.kc-unit{font-size:11px;color:var(--ts)}
+.ktrend{display:flex;align-items:center;gap:4px;margin-top:6px;font-size:12px;font-weight:600}
+.ktrend.up{color:var(--gn)}
+.ktrend.dn{color:var(--rd)}
+.crow2{display:grid;grid-template-columns:2fr 1fr;gap:20px;margin-bottom:28px}
+.cht-card{border:1px solid var(--bd);padding:20px}
+.cc-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.cc-ttl{font-size:13px;font-weight:700}
+.cc-sel{border:1px solid var(--bd);padding:5px 10px;font-size:12px;font-family:inherit;color:#000;outline:none;cursor:pointer;background:#fff}
+.twrap{overflow-x:auto;margin-bottom:32px}
+.dtbl{width:100%;border-collapse:collapse;font-size:13px}
+.dtbl th{background:#F9FAFB;border:1px solid var(--bd);padding:10px 14px;text-align:center;font-size:11px;font-weight:700;white-space:nowrap}
+.dtbl td{border:1px solid var(--bd);padding:10px 14px;text-align:right;color:var(--tb);white-space:nowrap}
+.dtbl td:first-child{text-align:left;font-weight:600;color:#000}
+.dtbl tr:hover td{background:#FAFAFA}
+.det-ctrl{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px}
+.det-l,.det-r{display:flex;gap:8px;align-items:center}
+.ibtn{border:1px solid var(--bd);background:#fff;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;color:#000;transition:all .15s}
+.ibtn:hover{background:var(--bg)}
+.dlbtn{background:#000;color:#fff;border:1px solid #000;padding:7px 16px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:background .15s}
+.dlbtn:hover{background:var(--in);border-color:var(--in)}
+.ssel{border:1px solid var(--bd);padding:7px 10px;font-size:12px;font-family:inherit;color:#000;outline:none;cursor:pointer;background:#fff}
+.cbdg{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:2px}
+.cbdg.above{background:#DCFCE7;color:var(--gn)}
+.cbdg.at{background:#FEF9C3;color:var(--am)}
+.cbdg.below{background:#FEE2E2;color:var(--rd)}
+.det-twrap{overflow-x:auto;margin-bottom:32px}
+.det-tbl{width:100%;border-collapse:collapse;min-width:2400px}
+.det-tbl th{background:#F9FAFB;border:1px solid var(--bd);padding:9px 10px;text-align:center;font-size:10px;font-weight:700;white-space:nowrap}
+.det-tbl td{border:1px solid var(--bd);padding:9px 10px;text-align:right;color:var(--tb);white-space:nowrap;font-size:11px}
+.det-tbl td:first-child{text-align:left;font-weight:600;color:#000;position:sticky;left:0;background:#fff;z-index:1;min-width:100px}
+.det-tbl tr:hover td{background:#FAFAFA}
+.divider{height:1px;background:var(--bd);margin:28px 0}
+.ftr{height:80px;display:flex;align-items:center;justify-content:space-between;padding:0 40px;border-top:1px solid #F0F0F0;margin-top:40px}
+.ftr-l{font-size:14px;font-weight:700}
+.ftr-r{font-size:12px;color:#999}
+</style>
+</head>
+<body>
+<header class="hdr">
+  <div class="logo" onclick="showPage('home')">INNOCEAN<span>.</span></div>
+  <nav class="nav">
+    <div class="ntab active" id="nav-home" onclick="showPage('home')">홈</div>
+    <div class="ntab" id="nav-ai" onclick="showPage('ai')">AI 분석</div>
+    <div class="ntab" id="nav-bm" onclick="showPage('bm')">벤치마크</div>
+  </nav>
+</header>
+<div class="subhdr"><span class="subhdr-l">INNOCEAN AI SOLUTION</span><span class="subhdr-r">Vol. 2026</span></div>
+<!-- HOME PAGE -->
+<div id="page-home" class="page active"><div class="ctn"><div class="landing">
+  <div class="badge">AI-POWERED ANALYSIS SUITE</div>
+  <h1 class="ltitle">INNOCEAN BENCHMARK</h1>
+  <p class="ldesc">디지털 광고 성과를 업계 벤치마크와 비교하고,<br>AI가 인사이트를 제공합니다.</p>
+  <p class="sec-lbl">솔루션 선택</p>
+  <div class="cgrid">
+    <div class="card" onclick="showPage('ai')">
+      <span class="cidx">01</span>
+      <svg class="cico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+      <p class="csub">AI ANALYSIS SOLUTION</p>
+      <h2 class="ctitle">AI 분석</h2>
+      <p class="cdesc">AI 대화를 통해 벤치마크 데이터를 분석하고 인사이트를 도출합니다. 자연어로 질문하면 차트와 해석을 즉시 제공합니다.</p>
+      <button class="cbtn">시작하기 &rarr;</button>
+    </div>
+    <div class="card" onclick="showPage('bm')">
+      <span class="cidx">02</span>
+      <svg class="cico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      <p class="csub">BENCHMARK INDEX SOLUTION</p>
+      <h2 class="ctitle">벤치마크 인덱스</h2>
+      <p class="cdesc">매체별, 업종별 벤치마크 인덱스를 조회하고 비교합니다. 30개 KPI를 Net/Gross 기준으로 상세 분석합니다.</p>
+      <button class="cbtn">시작하기 &rarr;</button>
+    </div>
+  </div>
+</div></div></div>
+
+<!-- AI PAGE -->
+<div id="page-ai" class="page"><div class="ctn"><div class="aipage">
+  <div class="pghd">AI 분석</div>
+  <div class="pgsub">AI와 대화하며 벤치마크 인사이트를 탐색해주세요.</div>
+  <div class="ai-split">
+    <div class="chat-panel">
+      <div class="chat-hdr"><span class="ai-dot"></span>&nbsp;BENCHMARK AI</div>
+      <div class="chat-msgs" id="chatMsgs">
+        <div class="msg ai"><div class="mav">AI</div><div><div class="mbb">안녕하세요! INNOCEAN BENCHMARK AI입니다. 매체별 벤치마크 데이터에 대해 질문해주세요.</div><div class="mtm">15:42</div></div></div>
+        <div class="msg user"><div class="mav">인</div><div><div class="mbb">지난주 Meta CPM 벤치마크 대비 어때?</div><div class="mtm">15:43</div></div></div>
+        <div class="msg ai"><div class="mav">AI</div><div><div class="mbb">자동차 업종 기준으로 분석했습니다.<br><br>지난주 Meta CPM은 <b>&#8361;4,820</b>으로 업종 평균(&#8361;5,200) 대비 <b style="color:#16A34A">7.3% 낮습니다 (양호)</b>. Top 25% 기준(&#8361;3,900)까지는 약 19% 개선 여지가 있습니다.<br><br>주요 요인: Instagram Feed 중심 집행으로 Reels 대비 경쟁이 낮은 지면을 활용하고 있습니다.</div><div class="mtm">15:43</div></div></div>
+        <div class="msg user"><div class="mav">인</div><div><div class="mbb">Google CTR은?</div><div class="mtm">15:45</div></div></div>
+        <div class="msg ai"><div class="mav">AI</div><div><div class="mbb">Google (Search + Display + YouTube 통합) 기준입니다.<br><br>&bull; <b>Search CTR:</b> 4.2% &mdash; 업종 평균(3.8%) 대비 <span style="color:#16A34A">&#9650;10.5%</span><br>&bull; <b>Display CTR:</b> 0.12% &mdash; 업종 평균(0.10%) 대비 <span style="color:#16A34A">&#9650;20%</span><br>&bull; <b>YouTube CTR:</b> 0.38% &mdash; Top 25% 수준<br><br>전반적으로 Google 매체에서 CTR 성과가 양호합니다.</div><div class="mtm">15:45</div></div></div>
+      </div>
+      <div class="chat-ibar">
+        <input class="cinput" id="chatIn" type="text" placeholder="벤치마크에 대해 질문해주세요..." onkeydown="if(event.key==='Enter')sendMsg()">
+        <button class="csend" onclick="sendMsg()">전송</button>
+      </div>
+    </div>
+    <div class="dash-panel">
+      <div class="dash-top"><span class="dash-ttl">&#128202; Meta CPM &mdash; 업종별 비교 (2026.05.26~06.01)</span><span class="dash-meta">자동차 업종</span></div>
+      <div class="dash-body">
+        <div class="krow4">
+          <div class="kmini"><div class="km-lbl">CPM (자사)</div><div class="km-val">&#8361;4,820</div><div class="km-bdg above">평균 대비 &#9660;7.3%</div></div>
+          <div class="kmini"><div class="km-lbl">업종 평균</div><div class="km-val">&#8361;5,200</div><div class="km-bdg at">기준선</div></div>
+          <div class="kmini"><div class="km-lbl">Top 25%</div><div class="km-val">&#8361;3,900</div><div class="km-bdg above">우수 기준</div></div>
+          <div class="kmini"><div class="km-lbl">CTR (자사)</div><div class="km-val">1.24%</div><div class="km-bdg above">평균 이상 &#9650;</div></div>
+        </div>
+        <div class="cbox"><div class="cbox-lbl">업종별 Meta CPM (2026.05, KRW)</div><div class="cwrap"><canvas id="aiChart1"></canvas></div></div>
+        <div class="cbox"><div class="cbox-lbl">주간 CPM 트렌드 &mdash; 자사 vs 업종평균</div><div class="cwrap"><canvas id="aiChart2"></canvas></div></div>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+<!-- BENCHMARK PAGE -->
+<div id="page-bm" class="page"><div class="ctn"><div class="bmpage">
+  <div class="pghd">벤치마크 인덱스</div>
+  <div class="pgsub">매체 및 업종별 벤치마크 KPI를 조회하고 자사 성과와 비교해주세요.</div>
+  <!-- Media tabs: Google | Meta | 네이버 | 카카오 -->
+  <div class="mtabs">
+    <div class="mtab active" id="mt-google" onclick="setMedia('google')">Google</div>
+    <div class="mtab" id="mt-meta" onclick="setMedia('meta')">Meta</div>
+    <div class="mtab" id="mt-naver" onclick="setMedia('naver')">네이버</div>
+    <div class="mtab" id="mt-kakao" onclick="setMedia('kakao')">카카오</div>
+  </div>
+  <div id="stabs-google" class="stabs">
+    <div class="stab active" onclick="setSub(this)">전체 통합</div>
+    <div class="stab" onclick="setSub(this)">Search</div>
+    <div class="stab" onclick="setSub(this)">Display (DV360)</div>
+    <div class="stab" onclick="setSub(this)">YouTube</div>
+  </div>
+  <div id="stabs-meta" class="stabs" style="display:none">
+    <div class="stab active" onclick="setSub(this)">전체</div>
+    <div class="stab" onclick="setSub(this)">Facebook</div>
+    <div class="stab" onclick="setSub(this)">Instagram</div>
+  </div>
+  <div id="stabs-naver" class="stabs" style="display:none">
+    <div class="stab active" onclick="setSub(this)">전체 통합</div>
+    <div class="stab" onclick="setSub(this)">GFA (성과형)</div>
+    <div class="stab" onclick="setSub(this)">검색광고</div>
+  </div>
+  <div id="stabs-kakao" class="stabs" style="display:none">
+    <div class="stab active" onclick="setSub(this)">전체 통합</div>
+    <div class="stab" onclick="setSub(this)">카카오 모먼트</div>
+    <div class="stab" onclick="setSub(this)">카카오 키워드</div>
+  </div>
+
+  <!-- FILTERS -->
+  <div class="filters">
+    <div class="frow">
+      <span class="flbl">공통 필터</span>
+      <div class="fgrp">
+        <div class="fdt">
+          <input type="date" value="2026-05-01">
+          <span class="dsep">~</span>
+          <input type="date" value="2026-06-04">
+        </div>
+        <select class="fsel">
+          <option>업종 전체</option><option>자동차</option><option>FMCG</option><option>IT/SaaS</option><option>금융</option><option>패션/뷰티</option><option>식음료</option><option>여행/레저</option>
+        </select>
+        <select class="fsel">
+          <option>국가 전체</option><option>대한민국</option><option>미국</option><option>일본</option><option>영국</option>
+        </select>
+      </div>
+    </div>
+    <div class="frow">
+      <span class="flbl">매체 조건</span>
+      <div class="fgrp">
+        <select class="fsel"><option>구매유형 전체</option><option>CPM</option><option>CPC</option><option>CPV</option></select>
+        <select class="fsel"><option>캠페인목표 전체</option><option>인지도</option><option>트래픽</option><option>전환</option><option>동영상 조회</option><option>잠재고객</option></select>
+        <select class="fsel"><option>노출위치 전체</option><option>Feed</option><option>Stories</option><option>Reels</option><option>Search</option><option>Display</option></select>
+      </div>
+    </div>
+    <div class="frow">
+      <span class="flbl">통화/Net</span>
+      <div class="fgrp">
+        <select class="fsel"><option>KRW (&#8361;)</option><option>USD ($)</option><option>JPY (&#165;)</option><option>EUR (&euro;)</option></select>
+        <div class="tgrp">
+          <button class="tbtn active" onclick="setNetGross(this,'Net')">Net</button>
+          <button class="tbtn" onclick="setNetGross(this,'Gross')">Gross</button>
+        </div>
+        <span class="ex-info">환율 기준: <b>1 USD = &#8361;1,378.5</b> &nbsp;|&nbsp; 2026.06.04 기준</span>
+        <button class="sbtn" onclick="runSearch()">&#128269; 데이터 검색</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RESULTS (shown after search) -->
+  <div id="bmResults" style="display:none">
+    <!-- SUMMARY -->
+    <div class="stitle">요약</div>
+    <div class="kpi5">
+      <div class="kcard"><div class="kc-lbl">CPM</div><div class="kc-val">&#8361;5,840</div><div class="kc-unit">업종 평균</div><div class="ktrend up">&#9650; vs 지난달 +3.2%</div></div>
+      <div class="kcard"><div class="kc-lbl">CPC</div><div class="kc-val">&#8361;312</div><div class="kc-unit">업종 평균</div><div class="ktrend dn">&#9660; vs 지난달 -1.8%</div></div>
+      <div class="kcard"><div class="kc-lbl">CTR</div><div class="kc-val">0.89%</div><div class="kc-unit">업종 평균</div><div class="ktrend up">&#9650; vs 지난달 +0.1%p</div></div>
+      <div class="kcard"><div class="kc-lbl">VTR (3초+)</div><div class="kc-val">18.4%</div><div class="kc-unit">업종 평균</div><div class="ktrend dn">&#9660; vs 지난달 -0.8%p</div></div>
+      <div class="kcard"><div class="kc-lbl">ROAS</div><div class="kc-val">284%</div><div class="kc-unit">업종 평균</div><div class="ktrend up">&#9650; vs 지난달 +12%p</div></div>
+    </div>
+
+    <!-- CHARTS -->
+    <div class="crow2">
+      <div class="cht-card">
+        <div class="cc-hdr">
+          <span class="cc-ttl">업종별 CPM 비교 (Google, 2026.05)</span>
+          <select class="cc-sel" onchange="updateBmChart(this.value)">
+            <option value="cpm">CPM</option><option value="cpc">CPC</option><option value="ctr">CTR</option><option value="vtr">VTR</option><option value="roas">ROAS</option>
+          </select>
+        </div>
+        <div style="height:260px;position:relative"><canvas id="bmBarChart"></canvas></div>
+      </div>
+      <div class="cht-card">
+        <div class="cc-hdr"><span class="cc-ttl">매체 구성 비율</span></div>
+        <div style="height:260px;position:relative"><canvas id="bmDonut"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Industry Summary Table -->
+    <div class="stitle">업종별 요약</div>
+    <div class="twrap">
+      <table class="dtbl">
+        <thead><tr><th>업종</th><th>CPM (&#8361;)</th><th>CPC (&#8361;)</th><th>CTR (%)</th><th>VTR 3초+ (%)</th><th>VTR ThruPlay (%)</th><th>ROAS (%)</th><th>노출수</th><th>클릭수</th></tr></thead>
+        <tbody>
+          <tr><td>자동차</td><td>5,840</td><td>312</td><td>0.89</td><td>18.4</td><td>8.2</td><td>284</td><td>42,180,000</td><td>375,402</td></tr>
+          <tr><td>FMCG</td><td>4,120</td><td>218</td><td>1.12</td><td>22.1</td><td>10.8</td><td>412</td><td>68,450,000</td><td>766,640</td></tr>
+          <tr><td>IT/SaaS</td><td>7,230</td><td>485</td><td>0.72</td><td>15.3</td><td>6.1</td><td>198</td><td>18,920,000</td><td>136,224</td></tr>
+          <tr><td>금융</td><td>8,940</td><td>621</td><td>0.58</td><td>12.8</td><td>5.4</td><td>156</td><td>12,340,000</td><td>71,572</td></tr>
+          <tr><td>패션/뷰티</td><td>3,680</td><td>178</td><td>1.38</td><td>25.4</td><td>13.2</td><td>538</td><td>55,210,000</td><td>761,898</td></tr>
+          <tr><td>식음료</td><td>3,950</td><td>195</td><td>1.18</td><td>21.8</td><td>9.9</td><td>368</td><td>48,760,000</td><td>575,368</td></tr>
+          <tr><td>여행/레저</td><td>5,120</td><td>278</td><td>0.95</td><td>17.2</td><td>7.8</td><td>322</td><td>32,580,000</td><td>309,510</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- DETAIL -->
+    <div class="stitle">상세 데이터 (30 KPI)</div>
+    <div class="det-ctrl">
+      <div class="det-l">
+        <button class="ibtn" onclick="alert('지표 추가/제거 기능')">&#43; 지표 추가</button>
+        <span style="font-size:12px;color:var(--ts)">리스트 크기</span>
+        <select class="ssel"><option>10</option><option>25</option><option>50</option></select>
+      </div>
+      <div class="det-r">
+        <button class="dlbtn">&#8595; CSV 다운로드</button>
+      </div>
+    </div>
+    <div class="det-twrap">
+      <table class="det-tbl">
+        <thead>
+          <tr>
+            <th>업종</th>
+            <th>통화</th><th>지출예산</th><th>노출수</th><th>클릭수(전체)</th><th>조회수(3초+)</th>
+            <th>조회수(ThruPlay)</th><th>CTR(전체)</th><th>VTR(3초+)</th><th>VTR(ThruPlay)</th>
+            <th>CPM</th><th>CPC(전체)</th><th>CPV(3초+)</th><th>CPV(ThruPlay)</th>
+            <th>게시물참여</th><th>게시물댓글</th><th>게시물공감</th><th>게시물공유</th><th>사진조회</th>
+            <th>클릭수(링크)</th><th>CPC(링크)</th><th>CTR(링크)</th>
+            <th>잠재고객</th>
+            <th>25%조회</th><th>50%조회</th><th>75%조회</th><th>100%조회</th>
+            <th>25%VTR</th><th>50%VTR</th><th>75%VTR</th><th>100%VTR</th>
+            <th>비교</th>
+          </tr>
+        </thead>
+        <tbody id="detailTbody">
+          <tr><td>자동차</td><td>KRW</td><td>248,400,000</td><td>42,534,246</td><td>379,055</td><td>7,826,462</td><td>3,488,008</td><td>0.89%</td><td>18.4%</td><td>8.2%</td><td>5,840</td><td>655</td><td>32</td><td>71</td><td>284,012</td><td>8,421</td><td>192,408</td><td>83,183</td><td>412,840</td><td>285,621</td><td>870</td><td>0.67%</td><td>18,241</td><td>28,412,847</td><td>22,115,420</td><td>14,882,318</td><td>8,244,128</td><td>66.8%</td><td>52.0%</td><td>35.0%</td><td>19.4%</td><td><span class="cbdg at">At</span></td></tr>
+          <tr><td>FMCG</td><td>KRW</td><td>281,890,000</td><td>68,421,544</td><td>766,561</td><td>15,121,181</td><td>7,390,727</td><td>1.12%</td><td>22.1%</td><td>10.8%</td><td>4,120</td><td>368</td><td>19</td><td>38</td><td>521,408</td><td>12,841</td><td>358,124</td><td>150,443</td><td>684,215</td><td>541,218</td><td>521</td><td>0.79%</td><td>24,108</td><td>48,281,411</td><td>38,124,182</td><td>25,841,441</td><td>14,221,882</td><td>70.5%</td><td>55.7%</td><td>37.8%</td><td>20.8%</td><td><span class="cbdg above">Above</span></td></tr>
+          <tr><td>IT/SaaS</td><td>KRW</td><td>136,780,000</td><td>18,921,345</td><td>136,234</td><td>2,894,766</td><td>1,154,802</td><td>0.72%</td><td>15.3%</td><td>6.1%</td><td>7,230</td><td>1,004</td><td>47</td><td>118</td><td>98,412</td><td>3,241</td><td>68,124</td><td>27,047</td><td>189,213</td><td>102,841</td><td>1,330</td><td>0.54%</td><td>8,124</td><td>12,614,230</td><td>9,460,673</td><td>6,368,053</td><td>3,507,449</td><td>66.7%</td><td>50.0%</td><td>33.7%</td><td>18.5%</td><td><span class="cbdg below">Below</span></td></tr>
+          <tr><td>금융</td><td>KRW</td><td>110,420,000</td><td>12,347,890</td><td>71,618</td><td>1,580,530</td><td>666,786</td><td>0.58%</td><td>12.8%</td><td>5.4%</td><td>8,940</td><td>1,543</td><td>70</td><td>166</td><td>52,418</td><td>1,842</td><td>36,124</td><td>14,452</td><td>123,479</td><td>53,218</td><td>2,077</td><td>0.43%</td><td>5,218</td><td>8,231,594</td><td>6,173,945</td><td>4,152,107</td><td>2,284,659</td><td>66.7%</td><td>50.0%</td><td>33.6%</td><td>18.5%</td><td><span class="cbdg below">Below</span></td></tr>
+          <tr><td>패션/뷰티</td><td>KRW</td><td>203,170,000</td><td>55,209,782</td><td>761,895</td><td>14,023,284</td><td>7,287,691</td><td>1.38%</td><td>25.4%</td><td>13.2%</td><td>3,680</td><td>267</td><td>14</td><td>28</td><td>612,410</td><td>15,421</td><td>428,124</td><td>168,865</td><td>552,098</td><td>618,412</td><td>329</td><td>1.12%</td><td>28,412</td><td>39,648,242</td><td>31,468,176</td><td>21,183,225</td><td>11,655,772</td><td>71.8%</td><td>57.0%</td><td>38.4%</td><td>21.1%</td><td><span class="cbdg above">Above</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div></div></div>
+<!-- FOOTER -->
+<footer class="ftr"><span class="ftr-l">| INNOCEAN</span><span class="ftr-r">&copy; 2026 INNOCEAN. All rights reserved.</span></footer>
+
+<script>
+// ── PAGE NAV ──
+const pages = ['home','ai','bm'];
+function showPage(id) {
+  pages.forEach(p => {
+    document.getElementById('page-'+p).classList.toggle('active', p===id);
+    const nav = document.getElementById('nav-'+p);
+    if(nav) nav.classList.toggle('active', p===id);
+  });
+  if(id==='ai' && !window._aiChartsInit) initAiCharts();
+  if(id==='bm' && !window._bmChartsInit) setTimeout(()=>{ /* charts init after search */ },0);
+}
+
+// ── MEDIA TABS ──
+function setMedia(m) {
+  ['google','meta','naver','kakao'].forEach(k => {
+    document.getElementById('mt-'+k).classList.toggle('active', k===m);
+    const s = document.getElementById('stabs-'+k);
+    if(s) s.style.display = k===m ? 'flex' : 'none';
+  });
+  // reset sub-tabs
+  const stabs = document.querySelectorAll('#stabs-'+m+' .stab');
+  stabs.forEach((t,i) => t.classList.toggle('active', i===0));
+  // reset chart label
+  const ttl = document.querySelector('#bmBarChart')?.closest('.cht-card')?.querySelector('.cc-ttl');
+  if(ttl) {
+    const names = {google:'Google',meta:'Meta',naver:'네이버',kakao:'카카오'};
+    ttl.textContent = '업종별 CPM 비교 (' + names[m] + ', 2026.05)';
+  }
+}
+function setSub(el) {
+  el.closest('.stabs').querySelectorAll('.stab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+}
+
+// ── NET/GROSS ──
+function setNetGross(el, v) {
+  el.closest('.tgrp').querySelectorAll('.tbtn').forEach(b => b.classList.toggle('active', b===el));
+}
+
+// ── SEARCH ──
+function runSearch() {
+  const res = document.getElementById('bmResults');
+  res.style.display = 'block';
+  res.scrollIntoView({behavior:'smooth',block:'start'});
+  setTimeout(()=>{ if(!window._bmChartsInit) initBmCharts(); },100);
+}
+
+// ── CHAT ──
+const aiReplies = [
+  '분석 중입니다... Meta 기준으로 지난 4주 데이터를 확인했습니다. CPM은 전주 대비 2.1% 상승 추세입니다.',
+  '네이버 GFA 기준 CTR은 0.24%로 업종 평균(0.19%) 대비 26% 높습니다. 검색광고 CTR은 3.8%입니다.',
+  '카카오 모먼트 CPV(3초+)는 &#8361;28로 업종 평균(&#8361;35) 대비 20% 낮아 효율적입니다.',
+  'Google YouTube VTR(ThruPlay)은 8.9%로 자동차 업종 Top 25% 기준(10.2%)에 근접합니다.',
+  'ROAS 기준 Top 25%는 FMCG 업종 Meta에서 538%입니다. 자동차 업종 평균은 284%입니다.',
+];
+let _ri = 0;
+function sendMsg() {
+  const inp = document.getElementById('chatIn');
+  const txt = inp.value.trim();
+  if(!txt) return;
+  const msgs = document.getElementById('chatMsgs');
+  const now = new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
+  msgs.innerHTML += '<div class="msg user"><div class="mav">인</div><div><div class="mbb">'+escHtml(txt)+'</div><div class="mtm">'+now+'</div></div></div>';
+  inp.value = '';
+  msgs.scrollTop = msgs.scrollHeight;
+  setTimeout(()=>{
+    msgs.innerHTML += '<div class="msg ai"><div class="mav">AI</div><div><div class="mbb">'+aiReplies[_ri++ % aiReplies.length]+'</div><div class="mtm">'+now+'</div></div></div>';
+    msgs.scrollTop = msgs.scrollHeight;
+  }, 800);
+}
+function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── AI CHARTS ──
+function initAiCharts() {
+  window._aiChartsInit = true;
+  const industries = ['자동차','FMCG','IT/SaaS','금융','패션/뷰티','식음료','여행/레저'];
+  const cpms = [5840,4120,7230,8940,3680,3950,5120];
+  const colors = cpms.map((v,i) => i===0 ? '#4F46E5' : '#E5E5E5');
+  new Chart(document.getElementById('aiChart1'), {
+    type:'bar',
+    data:{ labels:industries, datasets:[{ label:'CPM (KRW)', data:cpms, backgroundColor:colors, borderWidth:0 }] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+      scales:{ y:{beginAtZero:true, ticks:{callback:v=>'&#8361;'+v.toLocaleString()}} },
+      annotation:{annotations:[{type:'line',yMin:5200,yMax:5200,borderColor:'#DC2626',borderWidth:1.5,borderDash:[4,4],label:{content:'업종평균',display:true}}]} }
+  });
+  const weeks = ['5/5','5/12','5/19','5/26','6/2'];
+  new Chart(document.getElementById('aiChart2'), {
+    type:'line',
+    data:{ labels:weeks, datasets:[
+      {label:'자사',data:[4950,4820,4760,4820,4780],borderColor:'#4F46E5',backgroundColor:'rgba(79,70,229,0.08)',borderWidth:2,pointRadius:3,fill:true,tension:0.3},
+      {label:'업종평균',data:[5100,5180,5200,5200,5220],borderColor:'#DC2626',backgroundColor:'transparent',borderWidth:1.5,borderDash:[4,4],pointRadius:2,tension:0.3}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:12,font:{size:11}}}},
+      scales:{y:{ticks:{callback:v=>'&#8361;'+v.toLocaleString()}}}}
+  });
+}
+
+// ── BM CHARTS ──
+const bmData = {
+  cpm:  [5840,4120,7230,8940,3680,3950,5120],
+  cpc:  [655,368,1004,1543,267,195,278],
+  ctr:  [0.89,1.12,0.72,0.58,1.38,1.18,0.95],
+  vtr:  [18.4,22.1,15.3,12.8,25.4,21.8,17.2],
+  roas: [284,412,198,156,538,368,322],
+};
+let bmChart = null, donutChart = null;
+function initBmCharts() {
+  window._bmChartsInit = true;
+  const industries = ['자동차','FMCG','IT/SaaS','금융','패션/뷰티','식음료','여행/레저'];
+  const colors = ['#4F46E5','#818CF8','#A5B4FC','#C7D2FE','#6366F1','#8B5CF6','#A78BFA'];
+  bmChart = new Chart(document.getElementById('bmBarChart'), {
+    type:'bar',
+    data:{ labels:industries, datasets:[{ label:'CPM (KRW)', data:bmData.cpm, backgroundColor:colors, borderWidth:0 }] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+      scales:{y:{beginAtZero:true}} }
+  });
+  donutChart = new Chart(document.getElementById('bmDonut'), {
+    type:'doughnut',
+    data:{ labels:['자동차','FMCG','IT/SaaS','금융','패션/뷰티','기타'],
+      datasets:[{ data:[28,22,15,12,14,9], backgroundColor:['#4F46E5','#818CF8','#A5B4FC','#C7D2FE','#6366F1','#E5E7EB'], borderWidth:0 }] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'bottom',labels:{boxWidth:10,font:{size:10}}}} }
+  });
+}
+function updateBmChart(metric) {
+  if(!bmChart) return;
+  const labels = {cpm:'CPM (KRW)',cpc:'CPC (KRW)',ctr:'CTR (%)',vtr:'VTR 3초+ (%)',roas:'ROAS (%)'};
+  bmChart.data.datasets[0].label = labels[metric];
+  bmChart.data.datasets[0].data = bmData[metric];
+  bmChart.update();
+}
+</script>
+</body>
+</html>
