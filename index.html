@@ -14,7 +14,7 @@ function goPg(p){var mn=document.getElementById('mainNav');if(mn)mn.style.displa
   document.getElementById('pg'+{L:'L',A:'AI',B:'BM'}[p]).classList.add('on');
   document.getElementById('nt'+p).classList.add('on');
   STATE.pg=p;
-  if(p==='A')setTimeout(()=>{initCPV();initChat();},100);
+  if(p==='A')setTimeout(()=>{initCPV();initChat();showSuggestions('chatbox','');},100);
   if(p==='B')setTimeout(()=>{initSumCharts();renderDetTbl();},100);
 }
 function tglSb(){
