@@ -254,6 +254,11 @@ function bmSend(){
   setTimeout(()=>{hideTyping('chatbox');addMsg('chatbox','ai',genBmReply(txt));
   showSuggestions('chatbox',txt);},1200+Math.random()*600);
 }
+function chipQ(q){
+  addMsg('chatbox','user',q);
+  showTyping('chatbox');
+  setTimeout(function(){hideTyping('chatbox');addMsg('chatbox','ai',genBmReply(q));showSuggestions('chatbox',q);},1200+Math.random()*600);
+}
 function genBmReply(t){
   t=t.toLowerCase();
   if(t.includes('cpv')&&t.includes('업종'))return '현대자동차 YouTube VVC 30초 기준 CPV는 \u20a928.5로, 수송/항공 업종 평균(\u20a934.2) 대비 -16.7% 효율적입니다.\n\n업종별 CPV 순위:\n1. 게임: \u20a918.9 (최저)\n2. 유통/쇼핑: \u20a920.3\n3. 미용/화장품: \u20a922.1\n4. 패션: \u20a924.8\n5. 수송/항공: \u20a928.5\n6. 전자/가전: \u20a935.2\n7. 금융/보험: \u20a942.1 (최고)';
@@ -1028,16 +1033,6 @@ function showSuggestions(boxId,lastQ){
     items.map(function(q){return '<button class="sug-btn" onclick="sugClick(this,\''+q.replace(/'/g,"\\'")+'\')">' + q + '</button>';}).join('');
   box.appendChild(div);
   box.scrollTop=box.scrollHeight;
-}
-function chipQ(q){
-  var inp=document.getElementById('bm_cinp');
-  if(!inp)return;
-  inp.value=q;
-  var txt=q;
-  inp.value='';
-  addMsg('chatbox','user',txt);
-  showTyping('chatbox');
-  setTimeout(function(){hideTyping('chatbox');addMsg('chatbox','ai',genBmReply(txt));showSuggestions('chatbox',txt);},1200+Math.random()*600);
 }
 function tglSq(){
   var btns=document.querySelector('.sqbtns');
