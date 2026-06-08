@@ -11,7 +11,7 @@ const TREND={labels:['Jan','Feb','Mar','Apr','May'],cpm:[8500,9200,8800,7900,810
   ctr_all:[1.42,1.38,1.45,1.39,1.41],ctr_link:[0.98,0.95,1.02,0.96,0.99],
   cpv3s:[22.1,21.3,23.0,20.5,22.4],cpvthru:[28.5,27.3,29.1,26.8,28.9],cpv6s:[25.3,24.1,26.2,23.8,25.7],
   cpc_all:[1200,1350,1280,1100,1190],cpc_link:[1850,2020,1930,1720,1840],
-  vtryt:[45.3,46.8,44.5,47.1,45.9],cpvyt:[26.2,25.0,27.1,24.5,26.8]
+  vtrtv:[44.8,46.2,43.9,46.5,45.3],vtr100:[31.2,32.8,30.5,33.1,31.9],cpvtv:[27.0,25.8,27.9,25.2,27.5],cpv100:[38.5,36.8,39.2,35.9,38.1]
 };
 
 function goPg(p){var mn=document.getElementById('mainNav');if(mn)mn.style.display=(p==='L')?'none':'flex';var hc=document.getElementById('hdrContainer');if(hc)hc.style.maxWidth=(p==='L')?'1280px':'none';var sh=document.querySelector('.subhdr');if(sh)sh.style.display=(p==='L')?'flex':'none';document.querySelector('.poff').style.paddingTop=(p==='L')?'calc(var(--hh) + var(--sh))':'var(--hh)';history.pushState({pg:p},'',(p==='L')?'/':'?pg='+p);
@@ -64,7 +64,7 @@ const KPI_LBL={cpm:'CPM',cpc:'CPC',ctr:'CTR (%)',cpv:'CPV',vtr:'VTR (%)',
   vtr3s:'VTR(3초)',vtrthru:'VTR(ThruPlay)',vtr6s:'VTR(6초)',
   ctr_all:'CTR(전체클릭)',ctr_link:'CTR(링크클릭)',
   cpv3s:'CPV(3초)',cpvthru:'CPV(ThruPlay)',cpv6s:'CPV(6초)',
-  cpc_all:'CPC(전체클릭)',cpc_link:'CPC(링크클릭)',vtryt:'VTR(YouTube조회)',cpvyt:'CPV(YouTube조회)'};
+  cpc_all:'CPC(전체클릭)',cpc_link:'CPC(링크클릭)',vtrtv:'VTR(TrueView)',vtr100:'VTR(100%조회)',cpvtv:'CPV(TrueView)',cpv100:'CPV(100%조회)'};
 function fmtK(k,v){return(k.startsWith('ctr')||k.startsWith('vtr'))?v+'%':'\u20a9'+Number(v).toLocaleString();}
 
 const IND_METRICS={
@@ -76,7 +76,8 @@ const IND_METRICS={
   cpc:{data:[1820,2100,1350,890,1100,2850,1200]},
   cpc_all:{data:[1820,2100,1350,890,1100,2850,1200]},
   cpc_link:{data:[2650,3100,1980,1320,1650,4200,1780]},
-  cpvyt:{data:[26.2,32.8,20.5,17.2,18.8,39.5,23.0]}
+  cpvtv:{data:[27.0,33.5,21.2,17.8,19.5,40.2,23.8]},
+  cpv100:{data:[38.5,46.2,30.1,25.5,27.8,55.8,33.2]}
 };
 const IND_LABELS=['수송/항공','전자/가전','미용/화장품','게임','유통/쇼핑','금융/보험','패션'];
 const IND_COLORS=['#4F46E5','#7C3AED','#EC4899','#10B981','#F59E0B','#EF4444','#3B82F6'];
@@ -92,16 +93,18 @@ const SUM_EXTRA_DATA={
   ctr_link:['0.78%','0.65%','1.08%','1.45%','1.18%','0.52%','1.12%'],
   cpc_all:['\u20a91,820','\u20a92,100','\u20a91,350','\u20a9890','\u20a91,100','\u20a92,850','\u20a91,200'],
   cpc_link:['\u20a92,650','\u20a93,100','\u20a91,980','\u20a91,320','\u20a91,650','\u20a94,200','\u20a91,780'],
-  vtryt:['45.3%','40.2%','51.8%','55.1%','47.5%','35.8%','50.2%'],
-  cpvyt:['\u20a926.2','\u20a932.8','\u20a920.5','\u20a917.2','\u20a918.8','\u20a939.5','\u20a923.0']
+  vtrtv:['44.8%','39.5%','50.2%','54.3%','46.8%','34.9%','49.5%'],
+  vtr100:['31.2%','27.8%','35.5%','38.9%','33.1%','24.2%','35.0%'],
+  cpvtv:['\u20a927.0','\u20a933.5','\u20a921.2','\u20a917.8','\u20a919.5','\u20a940.2','\u20a923.8'],
+  cpv100:['\u20a938.5','\u20a946.2','\u20a930.1','\u20a925.5','\u20a927.8','\u20a955.8','\u20a933.2']
 };
-const SUM_EXTRA_LBL={vtr3s:'VTR(3초)',vtr6s:'VTR(6초)',vtrthru:'VTR(ThruPlay)',cpv3s:'CPV(3초)',cpv6s:'CPV(6초)',cpvthru:'CPV(ThruPlay)',ctr_all:'CTR(전체)',ctr_link:'CTR(링크)',cpc_all:'CPC(전체)',cpc_link:'CPC(링크)',vtryt:'VTR(YT조회)',cpvyt:'CPV(YT조회)'};
+const SUM_EXTRA_LBL={vtr3s:'VTR(3초)',vtr6s:'VTR(6초)',vtrthru:'VTR(ThruPlay)',cpv3s:'CPV(3초)',cpv6s:'CPV(6초)',cpvthru:'CPV(ThruPlay)',ctr_all:'CTR(전체)',ctr_link:'CTR(링크)',cpc_all:'CPC(전체)',cpc_link:'CPC(링크)',vtrtv:'VTR(TrueView)',vtr100:'VTR(100%)',cpvtv:'CPV(TrueView)',cpv100:'CPV(100%)'};
 STATE.sumExtraCols={};
 
 function getSubOptions(kpi){
-  if(kpi==='vtr')return [{v:'',l:'전체'},{v:'vtr3s',l:'3초 조회'},{v:'vtr6s',l:'6초 조회'},{v:'vtrthru',l:'ThruPlay'},{v:'vtryt',l:'YouTube 조회(Google)'}];
+  if(kpi==='vtr')return [{v:'',l:'전체'},{v:'vtr3s',l:'3초 조회'},{v:'vtr6s',l:'6초 조회'},{v:'vtrthru',l:'ThruPlay'},{v:'vtrtv',l:'TrueView 조회'},{v:'vtr100',l:'100% 조회'}];
   if(kpi==='ctr')return [{v:'',l:'전체'},{v:'ctr_all',l:'전체클릭'},{v:'ctr_link',l:'링크클릭'}];
-  if(kpi==='cpv')return [{v:'',l:'전체'},{v:'cpv3s',l:'3초 조회'},{v:'cpv6s',l:'6초 조회'},{v:'cpvthru',l:'ThruPlay'},{v:'cpvyt',l:'YouTube 조회(Google)'}];
+  if(kpi==='cpv')return [{v:'',l:'전체'},{v:'cpv3s',l:'3초 조회'},{v:'cpv6s',l:'6초 조회'},{v:'cpvthru',l:'ThruPlay'},{v:'cpvtv',l:'TrueView 조회'},{v:'cpv100',l:'100% 조회'}];
   if(kpi==='cpc')return [{v:'',l:'전체'},{v:'cpc_all',l:'전체클릭'},{v:'cpc_link',l:'링크클릭'}];
   return [];
 }
@@ -1027,5 +1030,5 @@ function sugClick(btn,q){
 }
 
 </script>
-<div class="movl" id="sumKpiMdl"><div class="mdl"><div class="mhd"><span class="mtit">Summary 지표 추가</span><button class="mxbtn" onclick="closeMdl('sumKpiMdl')">&#215;</button></div><div class="mbdy"><div class="mgrp"><div class="mgrpt">조회 기준별 지표</div><div class="cbg"><label class="cblbl"><input type="checkbox" data-scol="vtr3s">VTR(3초)</label><label class="cblbl"><input type="checkbox" data-scol="vtr6s">VTR(6초)</label><label class="cblbl"><input type="checkbox" data-scol="vtrthru">VTR(ThruPlay)</label><label class="cblbl"><input type="checkbox" data-scol="cpv3s">CPV(3초)</label><label class="cblbl"><input type="checkbox" data-scol="cpv6s">CPV(6초)</label><label class="cblbl"><input type="checkbox" data-scol="cpvthru">CPV(ThruPlay)</label><label class="cblbl"><input type="checkbox" data-scol="vtryt">VTR(YouTube조회)</label><label class="cblbl"><input type="checkbox" data-scol="cpvyt">CPV(YouTube조회)</label></div></div><div class="mgrp"><div class="mgrpt">클릭 기준별 지표</div><div class="cbg"><label class="cblbl"><input type="checkbox" data-scol="ctr_all">CTR(전체클릭)</label><label class="cblbl"><input type="checkbox" data-scol="ctr_link">CTR(링크클릭)</label><label class="cblbl"><input type="checkbox" data-scol="cpc_all">CPC(전체클릭)</label><label class="cblbl"><input type="checkbox" data-scol="cpc_link">CPC(링크클릭)</label></div></div></div><div class="mft"><button class="mbtn cc" onclick="closeMdl('sumKpiMdl')">취소</button><button class="mbtn ok" onclick="applySumKpi()">적용</button></div></div></div></body>
+<div class="movl" id="sumKpiMdl"><div class="mdl"><div class="mhd"><span class="mtit">Summary 지표 추가</span><button class="mxbtn" onclick="closeMdl('sumKpiMdl')">&#215;</button></div><div class="mbdy"><div class="mgrp"><div class="mgrpt">조회 기준별 지표</div><div class="cbg"><label class="cblbl"><input type="checkbox" data-scol="vtr3s">VTR(3초)</label><label class="cblbl"><input type="checkbox" data-scol="vtr6s">VTR(6초)</label><label class="cblbl"><input type="checkbox" data-scol="vtrthru">VTR(ThruPlay)</label><label class="cblbl"><input type="checkbox" data-scol="cpv3s">CPV(3초)</label><label class="cblbl"><input type="checkbox" data-scol="cpv6s">CPV(6초)</label><label class="cblbl"><input type="checkbox" data-scol="cpvthru">CPV(ThruPlay)</label><label class="cblbl"><input type="checkbox" data-scol="vtrtv">VTR(TrueView)</label><label class="cblbl"><input type="checkbox" data-scol="vtr100">VTR(100%조회)</label><label class="cblbl"><input type="checkbox" data-scol="cpvtv">CPV(TrueView)</label><label class="cblbl"><input type="checkbox" data-scol="cpv100">CPV(100%조회)</label></div></div><div class="mgrp"><div class="mgrpt">클릭 기준별 지표</div><div class="cbg"><label class="cblbl"><input type="checkbox" data-scol="ctr_all">CTR(전체클릭)</label><label class="cblbl"><input type="checkbox" data-scol="ctr_link">CTR(링크클릭)</label><label class="cblbl"><input type="checkbox" data-scol="cpc_all">CPC(전체클릭)</label><label class="cblbl"><input type="checkbox" data-scol="cpc_link">CPC(링크클릭)</label></div></div></div><div class="mft"><button class="mbtn cc" onclick="closeMdl('sumKpiMdl')">취소</button><button class="mbtn ok" onclick="applySumKpi()">적용</button></div></div></div></body>
 </html>
