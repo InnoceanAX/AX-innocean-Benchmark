@@ -1,0 +1,31 @@
+# 작업 중 생성되는 임시 파일
+*.bak
+*.old
+*~
+*.tmp
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# 작업용 인덱스 파일 변형
+index_*.html
+index.html.bak
+index.html.copy
+*.copy
+*.copy.*
+
+# 로컬 환경
+.env
+.env.local
+.vscode/
+.idea/
+
+# Python 스크립트 작업 임시 (혹시 리포에 흘러들어올 경우)
+__pycache__/
+*.pyc
+
+# 빌드 산출물 (이 리포는 정적 — 빌드 없음, 안전망)
+node_modules/
+dist/
+build/
