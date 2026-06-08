@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-08 18:50 — 룰/기능 명세서 추가
+
+- `docs/ARCHITECTURE.md` 작성 (절대 규칙, 디자인 토큰, 폴더 구조)
+- `docs/FEATURES.md` 작성 (페이지별 기능, AI 채팅 패턴, Phase 2 예정)
+- README 보강 (문서 링크 추가)
+
+# Changelog (previous)
+
 원칙: 사용자(CEO)에게 영향이 있는 변경만 기재. 코드 정리/리팩터는 git 커밋 메시지로만.
 
 ## 2026-06-08
