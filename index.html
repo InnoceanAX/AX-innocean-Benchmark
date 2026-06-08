@@ -1014,7 +1014,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';goPg(p);});
 
-function showSuggestions(boxId,lastQ){
+function showSuggestions(boxId,lastQ){ return; /* CEO 2026-06-08: 관련 질문 제거 (추천 질문 chips만 유지) */
   var box=document.getElementById(boxId);if(!box)return;
   var sug={
     '기본':['현대자동차 YouTube CPV 업종 비교','Meta 광고 ROAS 트렌드 분석','업종별 CTR 벤치마크 비교'],
