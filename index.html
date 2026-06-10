@@ -1188,17 +1188,43 @@ function sugClick(btn,q){
   window.renderSumTbl=renderBench; window.renderDetTbl=renderDet;
   window.initSumCharts=renderCharts; window.updateSumChart=renderCharts;
   window.updateLeftChart=renderCharts; window.updateRightChart=renderCharts;
-  // ── AI 페이지: 목업 대시보드/시드 제거, 실데이터 안내·추천질문으로 교체 ──
-  window.initCPV=function(){};   // 목업 CPV 차트 비활성
-  window.initChat=function(){    // 가짜 시드(₩28.5) 대신 실 안내
-    if(window._chatSeeded)return; window._chatSeeded=true;
-    addMsg('chatbox','ai','안녕하세요. 권역·매체별 광고 벤치마크를 실데이터로 분석해 드립니다. 예) "브라질 Google CPM", "한국 vs 인도 CTR 비교".');
-  };
+  // ── 채팅 마크다운 렌더 (가독성: **굵게**, 불릿, 줄바꿈) ──
+  function mdToHtml(t){ t=String(t); t=t.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>'); t=t.replace(/^[ \t]*[\*\-]\s+/gm,'• '); t=t.replace(/\n/g,'<br>'); return t; }
+  var _addMsg=window.addMsg;
+  window.addMsg=function(box,role,text,time){ _addMsg(box,role, role==='ai'?mdToHtml(text):text, time); };
+
+  // ── AI 페이지: 목업 제거 + 실데이터 개요 대시보드(우측) ──
+  window.initCPV=function(){};
+  window.initChat=function(){ if(window._chatSeeded)return; window._chatSeeded=true; addMsg('chatbox','ai','안녕하세요. 우측 대시보드에서 현재 데이터를 확인하고, 아래 추천 질문이나 직접 입력으로 분석을 요청하세요.'); };
+
+  function aiMedia(){ return (typeof STATE!=='undefined'&&STATE.media)||'G'; }
+  async function renderAIOverview(){
+    var main=document.querySelector('#pgAI .aimain'); if(!main) return;
+    var r=range(), med=aiMedia();
+    var MN={G:'Google',M:'Meta',D:'DV360',T:'TikTok'};
+    var medbtns=['G','M','D','T'].map(function(x){ return '<button class="dbtn'+(x===med?' pri':'')+'" onclick="window.aiSetMedia(\''+x+'\')">'+MN[x]+'</button>'; }).join('');
+    var head='<div class="aimtit">데이터 분석 대시보드</div><div style="display:flex;gap:8px;margin:10px 0 16px;align-items:center"><span style="font-size:12px;color:#767676;font-weight:600">분석 매체:</span>'+medbtns+'</div>';
+    main.innerHTML=head+'<div class="aimsub">데이터 불러오는 중...</div>';
+    var d; try{ d=await (await fetch(API+'/benchmark?media='+med+'&date_from='+r.df+'&date_to='+r.dt+'&currency='+curCur())).json(); }catch(e){ main.innerHTML=head+'<div style="color:#767676;padding:16px">데이터 조회 실패</div>'; return; }
+    var m=d.meta||{}, b=d.benchmark||[], tot=b[0]||{};
+    if(!m.available){ main.innerHTML=head+'<div style="color:#767676;padding:16px;border:1px solid #E5E7EB">'+(m.note||'해당 매체 데이터가 아직 없습니다(네이버/카카오 수집 대기).')+'</div>'; return; }
+    var html=head;
+    html+='<div class="aimsub" style="margin-bottom:14px">권역 '+m.markets+'개 · '+(m.date_from||'').slice(0,7)+'~'+(m.date_to||'').slice(0,7)+' · 통화 '+(m.currency||'KRW')+' · 데이터 ~99% 현대·기아 자동차</div>';
+    html+='<div style="display:flex;gap:14px;margin-bottom:18px;flex-wrap:wrap">';
+    [['총 노출',tot.imp],['총 지출',tot.spend],['평균 CPM',tot.cpm],['평균 CTR',tot.ctr]].forEach(function(c){ html+='<div style="flex:1;min-width:120px;border:1px solid #E5E7EB;padding:14px"><div style="font-size:11px;color:#767676;margin-bottom:6px">'+c[0]+'</div><div style="font-size:19px;font-weight:800">'+(c[1]||'-')+'</div></div>'; });
+    html+='</div>';
+    html+='<div style="border:1px solid #E5E7EB;padding:16px;margin-bottom:16px"><div style="font-size:13px;font-weight:700;margin-bottom:10px">권역별 CPM 중앙값 (벤치마크 분포)</div><div style="height:230px"><canvas id="aiOvChart"></canvas></div></div>';
+    html+='<div style="border:1px solid #E5E7EB;padding:16px;background:#FAFAFA"><div style="font-size:13px;font-weight:700;margin-bottom:8px">이렇게 물어보세요</div><div style="font-size:13px;color:#555;line-height:1.9">· "브라질 CPM 알려줘" · "한국 vs 인도 CTR 비교"<br>· "권역별 CPC 상위 알려줘" · "전체 요약"<br><span style="color:#9CA3AF">좌측 채팅에 입력하면 답변이 채팅창에 표시됩니다.</span></div></div>';
+    main.innerHTML=html;
+    var ch=d.charts; if(ch&&ch.compare&&typeof Chart!=='undefined'){ var ctx=document.getElementById('aiOvChart'); if(ctx) new Chart(ctx,{type:'bar',data:{labels:ch.compare.labels,datasets:[{data:ch.compare.cpm,backgroundColor:'#4F46E5',borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{grid:{color:'#F3F4F6'}}}}}); }
+  }
+  window.aiSetMedia=function(m){ if(typeof STATE!=='undefined')STATE.media=m; renderAIOverview(); };
+
   function injectAI(){
-    ['#pgAI .krow','#pgAI .chcard','#pgAI .inscard'].forEach(function(s){ document.querySelectorAll(s).forEach(function(el){ el.style.display='none'; }); });
     var chips=document.querySelectorAll('#pgAI .sqchip');
-    var qs=['브라질 Google CPM 벤치마크','한국 vs 인도 CPC 비교','권역별 CTR 상위 알려줘','Meta 권역별 벤치마크','전체 매체 요약'];
+    var qs=['브라질 CPM 알려줘','한국 vs 인도 CTR 비교','권역별 CPC 상위','전체 요약','일본 벤치마크'];
     chips.forEach(function(c,i){ if(qs[i]){ c.textContent=qs[i]; c.setAttribute('onclick',"chipQ('"+qs[i]+"')"); } else { c.style.display='none'; } });
+    renderAIOverview();
   }
 
   var _goPg=window.goPg;
