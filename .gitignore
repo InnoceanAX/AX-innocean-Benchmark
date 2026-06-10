@@ -25,6 +25,11 @@ index.html.copy
 __pycache__/
 *.pyc
 
+# 백엔드 시크릿 (절대 커밋 금지)
+**/sa_key.json
+*_token*.txt
+*api*key*.txt
+
 # 빌드 산출물 (이 리포는 정적 — 빌드 없음, 안전망)
 node_modules/
 dist/

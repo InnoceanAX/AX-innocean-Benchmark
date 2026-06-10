@@ -1052,5 +1052,70 @@ function sugClick(btn,q){
 }
 
 </script>
-<div class="movl" id="sumKpiMdl"><div class="mdl"><div class="mhd"><span class="mtit">Summary 지표 추가</span><button class="mxbtn" onclick="closeMdl('sumKpiMdl')">&#215;</button></div><div class="mbdy"><div class="mgrp"><div class="mgrpt">조회 기준별 지표</div><div class="cbg"><label class="cblbl"><input type="checkbox" data-scol="vtr3s">VTR(3초)</label><label class="cblbl"><input type="checkbox" data-scol="vtr6s">VTR(6초)</label><label class="cblbl"><input type="checkbox" data-scol="vtrthru">VTR(ThruPlay)</label><label class="cblbl"><input type="checkbox" data-scol="cpv3s">CPV(3초)</label><label class="cblbl"><input type="checkbox" data-scol="cpv6s">CPV(6초)</label><label class="cblbl"><input type="checkbox" data-scol="cpvthru">CPV(ThruPlay)</label><label class="cblbl"><input type="checkbox" data-scol="vtrtv">VTR(TrueView)</label><label class="cblbl"><input type="checkbox" data-scol="vtr100">VTR(100%조회)</label><label class="cblbl"><input type="checkbox" data-scol="cpvtv">CPV(TrueView)</label><label class="cblbl"><input type="checkbox" data-scol="cpv100">CPV(100%조회)</label></div></div><div class="mgrp"><div class="mgrpt">클릭 기준별 지표</div><div class="cbg"><label class="cblbl"><input type="checkbox" data-scol="ctr_all">CTR(전체클릭)</label><label class="cblbl"><input type="checkbox" data-scol="ctr_link">CTR(링크클릭)</label><label class="cblbl"><input type="checkbox" data-scol="cpc_all">CPC(전체클릭)</label><label class="cblbl"><input type="checkbox" data-scol="cpc_link">CPC(링크클릭)</label></div></div></div><div class="mft"><button class="mbtn cc" onclick="closeMdl('sumKpiMdl')">취소</button><button class="mbtn ok" onclick="applySumKpi()">적용</button></div></div></div></body>
+<div class="movl" id="sumKpiMdl"><div class="mdl"><div class="mhd"><span class="mtit">Summary 지표 추가</span><button class="mxbtn" onclick="closeMdl('sumKpiMdl')">&#215;</button></div><div class="mbdy"><div class="mgrp"><div class="mgrpt">조회 기준별 지표</div><div class="cbg"><label class="cblbl"><input type="checkbox" data-scol="vtr3s">VTR(3초)</label><label class="cblbl"><input type="checkbox" data-scol="vtr6s">VTR(6초)</label><label class="cblbl"><input type="checkbox" data-scol="vtrthru">VTR(ThruPlay)</label><label class="cblbl"><input type="checkbox" data-scol="cpv3s">CPV(3초)</label><label class="cblbl"><input type="checkbox" data-scol="cpv6s">CPV(6초)</label><label class="cblbl"><input type="checkbox" data-scol="cpvthru">CPV(ThruPlay)</label><label class="cblbl"><input type="checkbox" data-scol="vtrtv">VTR(TrueView)</label><label class="cblbl"><input type="checkbox" data-scol="vtr100">VTR(100%조회)</label><label class="cblbl"><input type="checkbox" data-scol="cpvtv">CPV(TrueView)</label><label class="cblbl"><input type="checkbox" data-scol="cpv100">CPV(100%조회)</label></div></div><div class="mgrp"><div class="mgrpt">클릭 기준별 지표</div><div class="cbg"><label class="cblbl"><input type="checkbox" data-scol="ctr_all">CTR(전체클릭)</label><label class="cblbl"><input type="checkbox" data-scol="ctr_link">CTR(링크클릭)</label><label class="cblbl"><input type="checkbox" data-scol="cpc_all">CPC(전체클릭)</label><label class="cblbl"><input type="checkbox" data-scol="cpc_link">CPC(링크클릭)</label></div></div></div><div class="mft"><button class="mbtn cc" onclick="closeMdl('sumKpiMdl')">취소</button><button class="mbtn ok" onclick="applySumKpi()">적용</button></div></div></div><script>
+/* ── 실데이터 연동 레이어 (block0 원본 보존, window 함수만 실데이터 버전으로 대체) ──
+   기존 API_CONFIG 계약(/api/v1/benchmark, /ai/chat)에 fetch 연결. 데이터 출처만 교체. */
+(function(){
+  var API=(window.API_CONFIG&&API_CONFIG.baseUrl)||'/api/v1';
+  function range(){ return {df:'2025-06-01', dt:'2026-06-08'}; } // 마트 grain=월. 필터 연동 전 기본창.
+  window.BM_SUMMARY=null;
+  // 원본 goPg('A')가 호출하나 정의는 미로드 block1에만 있던 함수 → 안전 가드(콘솔에러 방지)
+  if(typeof window.showSuggestions!=='function'){ window.showSuggestions=function(){}; }
+
+  async function bmLoad(){
+    var r=range(), media=(typeof STATE!=='undefined'&&STATE.media)||'G';
+    try{
+      var res=await fetch(API+'/benchmark?media='+encodeURIComponent(media)+'&date_from='+r.df+'&date_to='+r.dt);
+      var d=await res.json();
+      if(typeof MOCK_DETAIL!=='undefined'){ MOCK_DETAIL.length=0; (d.detail||[]).forEach(function(x){MOCK_DETAIL.push(x);}); }
+      window.BM_SUMMARY=d.summary||[];
+      if(d.meta&&d.meta.available===false&&window.toast) toast(d.meta.note||'해당 매체 데이터가 아직 없습니다.','ℹ');
+    }catch(e){ window.BM_SUMMARY=[]; if(typeof MOCK_DETAIL!=='undefined')MOCK_DETAIL.length=0; if(window.toast) toast('데이터 조회 실패','⚠'); }
+  }
+  window.bmLoad=bmLoad;
+
+  var _renderSum=window.renderSumTbl;
+  window.renderSumTbl=function(){
+    if(!window.BM_SUMMARY){ return _renderSum?_renderSum():undefined; }
+    var tbl=document.querySelector('#pgBM .twrap table'); if(!tbl) return;
+    var thead=tbl.querySelector('thead tr'), tbody=tbl.querySelector('tbody'); if(!thead||!tbody) return;
+    var baseCols=['업종','노출수','CPM','CPC','CTR','지출예산'];
+    var extraKeys=Object.keys(STATE.sumExtraCols||{}).filter(function(k){return STATE.sumExtraCols[k];});
+    thead.innerHTML='';
+    baseCols.forEach(function(c){ var th=document.createElement('th'); th.innerHTML=c+' <span class="sico">↕</span>'; thead.appendChild(th); });
+    extraKeys.forEach(function(k){ var th=document.createElement('th'); th.innerHTML=((window.SUM_EXTRA_LBL&&SUM_EXTRA_LBL[k])||k)+' <span class="sico">↕</span>'; thead.appendChild(th); });
+    tbody.innerHTML='';
+    BM_SUMMARY.forEach(function(r,ri){
+      var tr=document.createElement('tr'); if(r.cls)tr.className=r.cls;
+      tr.innerHTML='<td>'+r.ind+'</td><td>'+r.imp+'</td><td>'+r.cpm+'</td><td>'+r.cpc+'</td><td>'+r.ctr+'</td><td>'+r.spend+'</td>';
+      extraKeys.forEach(function(k){ var v=(ri===0)?'—':((window.SUM_EXTRA_DATA&&SUM_EXTRA_DATA[k])?SUM_EXTRA_DATA[k][ri-1]:'—'); var td=document.createElement('td'); td.textContent=v; tr.appendChild(td); });
+      tbody.appendChild(tr);
+    });
+  };
+
+  var _goPg=window.goPg;
+  window.goPg=function(p){ _goPg(p); if(p==='B'){ bmLoad().then(function(){ window.renderDetTbl&&renderDetTbl(); window.renderSumTbl&&renderSumTbl(); }); } };
+
+  window.runSearch=function(){
+    if(window.toast) toast('데이터를 검색하고 있습니다...','🔍');
+    bmLoad().then(function(){ window.renderDetTbl&&renderDetTbl(); window.renderSumTbl&&renderSumTbl(); window.initSumCharts&&initSumCharts(); if(window.toast) toast('검색이 완료되었습니다.'); });
+  };
+
+  var _swM=window.swM;
+  if(_swM){ window.swM=function(m){ _swM(m); if(typeof STATE!=='undefined'&&STATE.pg==='B'){ bmLoad().then(function(){ window.renderDetTbl&&renderDetTbl(); window.renderSumTbl&&renderSumTbl(); }); } }; }
+
+  async function aiAsk(q){
+    addMsg('chatbox','user',q); showTyping('chatbox');
+    var media=(typeof STATE!=='undefined'&&STATE.media)||'G', r=range();
+    try{
+      var res=await fetch(API+'/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q,media:media,date_from:r.df,date_to:r.dt})});
+      var d=await res.json(); hideTyping('chatbox'); addMsg('chatbox','ai',d.reply||'(응답 없음)');
+    }catch(e){ hideTyping('chatbox'); addMsg('chatbox','ai','(오류) 분석 서버에 연결하지 못했습니다.'); }
+    if(window.showSuggestions) showSuggestions('chatbox',q);
+  }
+  window.bmSend=function(){ var inp=document.getElementById('bm_cinp'); if(!inp)return; var t=(inp.value||'').trim(); if(!t)return; inp.value=''; aiAsk(t); };
+  window.chipQ=function(q){ aiAsk(q); };
+})();
+</script>
+</body>
 </html>

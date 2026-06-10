@@ -1,0 +1,6 @@
+# (보존) 백엔드 도입 전 정적 전용 배포본 — nginx:alpine.
+# 백엔드 포함 배포는 루트 Dockerfile(python/uvicorn) 사용.
+FROM nginx:alpine
+COPY index.html /usr/share/nginx/html/index.html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 8080
