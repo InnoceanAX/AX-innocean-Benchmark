@@ -153,6 +153,51 @@ def deploy_service(with_secret=True):
     return uri
 
 
+MART_JOB = "benchmark-mart-builder"
+
+
+def deploy_mart_job():
+    """마트 일일 갱신용 Cloud Run Job (같은 이미지, command=python mart.py)."""
+    base = f"https://{REGION}-run.googleapis.com/v2/projects/{PROJECT}/locations/{REGION}/jobs"
+    body = {"template": {"template": {
+        "containers": [{"image": IMG_URI, "command": ["python", "mart.py"],
+                        "resources": {"limits": {"cpu": "1", "memory": "512Mi"}}}],
+        "serviceAccount": RUNTIME_SA, "maxRetries": 1, "timeout": "600s",
+    }}}
+    exists = S.get(f"{base}/{MART_JOB}").status_code == 200
+    if exists:
+        r = _ok(S.patch(f"{base}/{MART_JOB}", json=body))
+    else:
+        r = _ok(S.post(f"{base}?jobId={MART_JOB}", json=body))
+    _wait_op(f"https://{REGION}-run.googleapis.com/v2/{r.json()['name']}")
+    print(f"· Cloud Run Job {'갱신' if exists else '생성'}: {MART_JOB}")
+
+
+def deploy_scheduler():
+    """매일 05:00 KST(수집 03:00 이후) 마트 갱신 트리거."""
+    parent = f"projects/{PROJECT}/locations/{REGION}"
+    name = f"{parent}/jobs/{MART_JOB}-trigger"
+    uri = (f"https://{REGION}-run.googleapis.com/apis/run.googleapis.com/v1/"
+           f"namespaces/{PROJECT}/jobs/{MART_JOB}:run")
+    body = {"name": name, "schedule": "0 5 * * *", "timeZone": "Asia/Seoul",
+            "httpTarget": {"uri": uri, "httpMethod": "POST",
+                           "oauthToken": {"serviceAccountEmail": RUNTIME_SA}}}
+    g = S.get(f"https://cloudscheduler.googleapis.com/v1/{name}")
+    if g.status_code == 200:
+        _ok(S.patch(f"https://cloudscheduler.googleapis.com/v1/{name}"
+                    f"?updateMask=schedule,timeZone,httpTarget", json=body))
+        print("· Scheduler 갱신: 매일 05:00 KST")
+    else:
+        _ok(S.post(f"https://cloudscheduler.googleapis.com/v1/{parent}/jobs", json=body))
+        print("· Scheduler 생성: 매일 05:00 KST")
+
+
+def run_mart_job_now():
+    base = f"https://{REGION}-run.googleapis.com/v2/projects/{PROJECT}/locations/{REGION}/jobs"
+    r = _ok(S.post(f"{base}/{MART_JOB}:run"))
+    print("· 마트 Job 수동 1회 실행 트리거:", r.json().get("name", "")[:80])
+
+
 def verify():
     base = f"https://{REGION}-run.googleapis.com/v2/projects/{PROJECT}/locations/{REGION}/services"
     uri = S.get(f"{base}/{SERVICE}").json().get("uri")

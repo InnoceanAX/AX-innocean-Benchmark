@@ -31,23 +31,10 @@ for _k in [os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", ""),
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _k
         break
 
-# 매체(UI 탭 G/M/N/K) → 업스트림 소스 정의 (읽기 전용)
-UPSTREAM = {
-    "G": {  # Google Ads
-        "platform": "google_ads",
-        "table": f"`{PROJECT}.apac_kr_unified.v_unified_google_ads`",
-        "date": "date", "imp": "impressions", "clk": "clicks", "cost": "cost",
-        "conv": "conversions", "text": "campaign_name",
-    },
-    "M": {  # Meta
-        "platform": "meta",
-        "table": f"`{PROJECT}.apac_kr_raw.meta_insights_daily`",
-        "date": "_date", "imp": "impressions", "clk": "clicks", "cost": "spend",
-        "conv": "conversions",
-        "text": "CONCAT(IFNULL(account_name,''),' ',IFNULL(campaign_name,''),' ',IFNULL(_brand,''))",
-    },
-    # N(네이버)·K(카카오): 데이터 수집 전 → 마트 미생성
-}
+# 단일 업스트림 = DB팀 공용 통합 계약 뷰 (읽기 전용, dedup·통화정규화·제외플래그 포함)
+SOURCE = f"`{PROJECT}.apac_kr_unified.v_perf_unified`"
+# v_perf_unified.platform → 프론트 매체 탭(G/M/N/K). dv360/tiktok/sa360 은 UI 탭 없음 → 제외.
+PLATFORM_TO_MEDIA = {"google_ads": "G", "meta": "M"}
 
 
 def _client():
@@ -85,45 +72,36 @@ def build_mapping_table(c):
     print(f"bm_advertiser_industry: {len(rows)} keyword rules")
 
 
-def _media_select(media, src):
-    ind = industry_case_sql(src["text"])
-    conv = src.get("conv")
-    # 일부 소스(Meta)는 지표가 STRING 으로 적재됨 → SAFE_CAST 로 안전 변환
-    def num(col):
-        return f"SAFE_CAST({col} AS FLOAT64)"
-    conv_expr = f"SUM({num(conv)})" if conv else "0"
-    return f"""
-    SELECT
-      FORMAT_DATE('%Y-%m', {src['date']}) AS period,
-      '{media}' AS media,
-      '{src['platform']}' AS platform,
-      {ind} AS industry,
-      SUM({num(src['imp'])}) AS impressions,
-      SUM({num(src['clk'])}) AS clicks,
-      SUM({num(src['cost'])}) AS cost,
-      {conv_expr} AS conversions
-    FROM {src['table']}
-    WHERE {src['date']} IS NOT NULL
-    GROUP BY period, media, platform, industry
-    """
-
-
 def build_fact(c):
-    selects = [_media_select(m, s) for m, s in UPSTREAM.items()]
-    union = "\nUNION ALL\n".join(selects)
+    # 업종은 advertiser_name + campaign_name 텍스트로 추정 (v_perf_unified 엔 업종 필드 없음)
+    ind = industry_case_sql("CONCAT(IFNULL(advertiser_name,''),' ',IFNULL(campaign_name,''))")
+    # platform → media 매핑 CASE
+    whens = " ".join([f"WHEN '{p}' THEN '{m}'" for p, m in PLATFORM_TO_MEDIA.items()])
+    media_case = f"CASE platform {whens} ELSE NULL END"
+    plats = ",".join([f"'{p}'" for p in PLATFORM_TO_MEDIA])
     tbl_id = f"`{PROJECT}.{MART_DS}.bm_fact_monthly`"
     sql = f"""
     CREATE OR REPLACE TABLE {tbl_id}
     CLUSTER BY media, industry AS
-    WITH unioned AS (
-    {union}
-    )
-    SELECT *, CURRENT_TIMESTAMP() AS _built_at
-    FROM unioned
-    WHERE impressions > 0
+    SELECT
+      FORMAT_DATE('%Y-%m', date) AS period,
+      {media_case} AS media,
+      platform,
+      {ind} AS industry,
+      SUM(impressions) AS impressions,
+      SUM(clicks) AS clicks,
+      SUM(spend_krw) AS cost,            -- 정규화 KRW (프론트 ₩ 표시와 일치)
+      SUM(conversions) AS conversions,
+      CURRENT_TIMESTAMP() AS _built_at
+    FROM {SOURCE}
+    WHERE date IS NOT NULL
+      AND NOT IFNULL(is_excluded, FALSE)   -- 제외 플래그 반영(F2)
+      AND platform IN ({plats})
+    GROUP BY period, media, platform, industry
+    HAVING impressions > 0
     """
     c.query(sql).result()
-    print("bm_fact_monthly: rebuilt")
+    print("bm_fact_monthly: rebuilt from v_perf_unified")
 
 
 def build():
