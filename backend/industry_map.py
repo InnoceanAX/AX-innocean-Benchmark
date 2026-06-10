@@ -16,20 +16,32 @@ INDUSTRIES = [
     "유통/쇼핑", "금융/보험", "패션", "앱/사이트", "기타",
 ]
 
-# 키워드 → 업종 seed. 현재 실데이터는 대부분 현대·기아(자동차=수송/항공).
-# 알려진 비-자동차 광고주 일부를 함께 시드(확장 가능, 대소문자 무시).
+# 키워드 → 업종. 순서 = 우선순위(위에서부터 먼저 매칭). 대소문자 무시.
+# 실데이터는 스펜드 ~95%가 현대·기아·제네시스(자동차) 글로벌. 자동차 코드(HMB/HMID 등) 폭넓게 포함.
 _KEYWORD_RULES = [
-    # (업종, [키워드들])
-    ("수송/항공", ["hyundai", "현대", "kia", "기아", "genesis", "제네시스",
-                  "korean air", "대한항공", "asiana", "아시아나", "air", "motor", "auto"]),
-    ("전자/가전", ["samsung", "삼성", "lg", "엘지", "electronics", "전자", "가전"]),
-    ("미용/화장품", ["beauty", "cosmetic", "화장품", "amorepacific", "아모레", "올리브영", "oliveyoung"]),
-    ("게임", ["game", "게임", "nexon", "넥슨", "netmarble", "넷마블", "ncsoft", "krafton"]),
-    ("유통/쇼핑", ["shopping", "쇼핑", "commerce", "유통", "coupang", "쿠팡", "lotte", "롯데", "emart", "이마트"]),
-    ("금융/보험", ["finance", "금융", "bank", "은행", "insurance", "보험", "card", "카드", "kb", "shinhan", "신한"]),
-    ("패션", ["fashion", "패션", "apparel", "musinsa", "무신사", "nike", "adidas"]),
-    ("앱/사이트", ["naver", "네이버", "kakao", "카카오", "app", "앱", "baemin", "배민", "toss", "토스"]),
-    ("주택/건설", ["hanssem", "한샘", "건설", "construction"]),  # 프론트엔 없음 → 기타로 흡수
+    ("미용/화장품", ["beauty", "cosmetic", "화장품", "amorepacific", "아모레", "올리브영",
+                  "oliveyoung", "클래시스", "classys", "더마", "derma", "skin", "에스티로더"]),
+    ("의료/건강", ["자생", "한방", "병원", "hospital", "clinic", "의료", "health", "메디",
+                 "medi", "pharma", "제약", "건강", "덴탈", "dental", "심층수", "탱글"]),
+    ("게임", ["nexon", "넥슨", "netmarble", "넷마블", "ncsoft", "krafton", "크래프톤",
+            "펄어비스", "게임", " game", "gaming", "rpg", "puzzle"]),
+    ("금융/보험", ["현대해상", "보험", "insurance", "bank", "은행", "card", "카드", "kb",
+                "shinhan", "신한", "토스", "toss", "금융", "finance", "증권", "캐피탈", "capital", "페이"]),
+    ("패션", ["에잇세컨즈", "8 seconds", "8seconds", "무신사", "musinsa", "fashion", "패션",
+            "apparel", "nike", "adidas", "의류", "shoes", "시계", "watch", "주얼리"]),
+    ("교육/취업", ["교육", "edu", "학원", "academy", "사이버평생", "취업", "career", "스쿨", "school"]),
+    ("전자/가전", ["samsung", "삼성", "lg전자", "엘지", "electronics", "전자", "가전",
+                "스마트카라", "디스플레이", "반도체"]),
+    ("유통/쇼핑", ["shopping", "쇼핑", "commerce", "유통", "coupang", "쿠팡", "lotte", "롯데",
+                "emart", "이마트", "삼양", "식품", "food", "센골드", "gold", "마켓", "mall", "리테일몰"]),
+    ("앱/사이트", ["당근", "danggn", "naver", "네이버", "kakao app", "배민", "baemin",
+                "app", " 앱", "플랫폼", "platform", "커넥트", "connect"]),
+    ("관광/레저", ["관광", "여행", "travel", "tour", "레저", "호텔", "hotel", "리조트", "resort"]),
+    # ── 자동차(수송/항공): 현대·기아·제네시스 + 마켓/브랜드 코드 폭넓게 (마지막 폴백 직전) ──
+    ("수송/항공", ["hyundai", "현대", "kia", "기아", "genesis", "제네시스", "hmb", "hmid",
+                "hmph", "hmth", "hmmy", "hmgics", "hmcsa", "hmc", "hmth", "hmpv", "hmg",
+                "ioniq", "아이오닉", "creta", "venue", "santa", "tucson", "motor",
+                "korean air", "대한항공", "asiana", "아시아나", " air", "항공", "모빌리티", "mobility"]),
 ]
 
 # 프론트에 없는 업종은 '기타'로 접는다

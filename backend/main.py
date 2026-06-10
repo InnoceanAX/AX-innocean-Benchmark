@@ -32,28 +32,30 @@ def index():
 
 @app.get("/api/v1/benchmark")
 def benchmark(media: str = "G",
-              date_from: str = "2026-01-01",
-              date_to: str = "2026-06-08"):
-    """매체별 업종 벤치마크 (summary + detail), 프론트 렌더 모양."""
+              date_from: str = "2025-06-01",
+              date_to: str = "2026-06-08",
+              brand: str = ""):
+    """매체별 권역 벤치마크 (4분위 benchmark + detail + charts)."""
     try:
-        data = bq.get_benchmark(media=media, date_from=date_from, date_to=date_to)
+        data = bq.get_benchmark(media=media, date_from=date_from, date_to=date_to, brand=brand)
         return JSONResponse(data)
     except Exception as e:  # noqa: BLE001
-        return JSONResponse({"error": str(e), "summary": [], "detail": []}, status_code=500)
+        return JSONResponse({"error": str(e), "benchmark": [], "detail": []}, status_code=500)
 
 
 class ChatReq(BaseModel):
     message: str
     media: str = "G"
-    date_from: str = "2026-01-01"
+    date_from: str = "2025-06-01"
     date_to: str = "2026-06-08"
+    brand: str = ""
 
 
 @app.post("/api/v1/ai/chat")
 def ai_chat(req: ChatReq):
-    """벤치마크 데이터 기반 AI 분석 답변 (Vertex AI)."""
+    """벤치마크 데이터 기반 AI 분석 답변."""
     try:
-        context = bq.get_summary_context(req.media, req.date_from, req.date_to)
+        context = bq.get_summary_context(req.media, req.date_from, req.date_to, req.brand)
         reply = ai.answer(req.message, context)
         return {"reply": reply}
     except Exception as e:  # noqa: BLE001

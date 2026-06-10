@@ -1053,77 +1053,152 @@ function sugClick(btn,q){
 
 </script>
 <div class="movl" id="sumKpiMdl"><div class="mdl"><div class="mhd"><span class="mtit">Summary 지표 추가</span><button class="mxbtn" onclick="closeMdl('sumKpiMdl')">&#215;</button></div><div class="mbdy"><div class="mgrp"><div class="mgrpt">조회 기준별 지표</div><div class="cbg"><label class="cblbl"><input type="checkbox" data-scol="vtr3s">VTR(3초)</label><label class="cblbl"><input type="checkbox" data-scol="vtr6s">VTR(6초)</label><label class="cblbl"><input type="checkbox" data-scol="vtrthru">VTR(ThruPlay)</label><label class="cblbl"><input type="checkbox" data-scol="cpv3s">CPV(3초)</label><label class="cblbl"><input type="checkbox" data-scol="cpv6s">CPV(6초)</label><label class="cblbl"><input type="checkbox" data-scol="cpvthru">CPV(ThruPlay)</label><label class="cblbl"><input type="checkbox" data-scol="vtrtv">VTR(TrueView)</label><label class="cblbl"><input type="checkbox" data-scol="vtr100">VTR(100%조회)</label><label class="cblbl"><input type="checkbox" data-scol="cpvtv">CPV(TrueView)</label><label class="cblbl"><input type="checkbox" data-scol="cpv100">CPV(100%조회)</label></div></div><div class="mgrp"><div class="mgrpt">클릭 기준별 지표</div><div class="cbg"><label class="cblbl"><input type="checkbox" data-scol="ctr_all">CTR(전체클릭)</label><label class="cblbl"><input type="checkbox" data-scol="ctr_link">CTR(링크클릭)</label><label class="cblbl"><input type="checkbox" data-scol="cpc_all">CPC(전체클릭)</label><label class="cblbl"><input type="checkbox" data-scol="cpc_link">CPC(링크클릭)</label></div></div></div><div class="mft"><button class="mbtn cc" onclick="closeMdl('sumKpiMdl')">취소</button><button class="mbtn ok" onclick="applySumKpi()">적용</button></div></div></div><script>
-/* ── 실데이터 연동 레이어 (block0 원본 보존, window 함수만 실데이터 버전으로 대체) ──
-   기존 API_CONFIG 계약(/api/v1/benchmark, /ai/chat)에 fetch 연결. 데이터 출처만 교체. */
+/* ── 실데이터 연동 레이어 v2 (block0 원본 보존, 권역 4분위 벤치마크) ──
+   데이터 ~99%가 현대·기아 자동차 → 벤치마크 축 = 권역(market). 4분위 = 분포 대비 내 위치. */
 (function(){
   var API=(window.API_CONFIG&&API_CONFIG.baseUrl)||'/api/v1';
-  // 조회기간: 화면의 월 필터(frmDate/toDate)에 연동. 없으면 기본창.
+  var curKpi='cpm';
+  var KU={cpm:'CPM',cpc:'CPC',ctr:'CTR'};
+  window.BM_DATA=null;
+  if(typeof window.showSuggestions!=='function'){ window.showSuggestions=function(){}; }
+
   function range(){
     var f=document.getElementById('frmDate'), t=document.getElementById('toDate');
     return { df:(f&&f.value?f.value:'2025-06')+'-01', dt:(t&&t.value?t.value:'2026-06')+'-28' };
   }
-  window.BM_SUMMARY=null;
-  // 원본 goPg('A')가 호출하나 정의는 미로드 block1에만 있던 함수 → 안전 가드(콘솔에러 방지)
-  if(typeof window.showSuggestions!=='function'){ window.showSuggestions=function(){}; }
-  // 매체 탭 확장: DV360·TikTok (v_perf_unified 실데이터). 원본 swM은 mt<코드> 버튼만 있으면 처리됨.
-  (function(){
+  function curBrand(){ var s=document.getElementById('bmBrand'); return s?s.value:''; }
+  function findByText(sel,txt){ var els=document.querySelectorAll(sel),i; for(i=0;i<els.length;i++){ if((els[i].textContent||'').trim()===txt) return els[i]; } return null; }
+
+  // ── 1회 UI 보정: 탭 추가 / 라벨 변경 / 죽은 필터 숨김 / 브랜드 필터 / KPI 토글 ──
+  function injectUI(){
+    // DV360·TikTok 탭
     var tabs=document.querySelector('#pgBM .mtabs');
-    if(!tabs || document.getElementById('mtD')) return;
-    [['D','DV360'],['T','TikTok']].forEach(function(x){
-      var btn=document.createElement('button');
-      btn.className='mtab'; btn.id='mt'+x[0]; btn.textContent=x[1];
-      btn.setAttribute('onclick', "swM('"+x[0]+"')");
-      tabs.appendChild(btn);
+    if(tabs && !document.getElementById('mtD')){
+      [['D','DV360'],['T','TikTok']].forEach(function(x){
+        var b=document.createElement('button'); b.className='mtab'; b.id='mt'+x[0]; b.textContent=x[1];
+        b.setAttribute('onclick',"swM('"+x[0]+"')"); tabs.appendChild(b);
+      });
+    }
+    // 작동 안 하는 필터 숨김 (실연동 불가 차원)
+    document.querySelectorAll('#pgBM .fg').forEach(function(fg){
+      var l=fg.querySelector('.flbl'); if(!l)return; var t=l.textContent.trim();
+      if(['국가','광고 상품','라인아이템 유형','디바이스','영상 길이','캠페인 목표','노출 위치','광고 형태','구매 유형','캠페인 유형','소재 유형','소재 형태','입찰 방식'].indexOf(t)>=0) fg.style.display='none';
+      // 업종 → 브랜드 필터로 전환
+      if(t==='업종'){
+        l.textContent='브랜드';
+        var sel=fg.querySelector('select'); if(sel){ sel.id='bmBrand'; sel.innerHTML='<option value="">전체</option><option value="hyundai">현대(Hyundai)</option><option value="kia">기아(Kia)</option>'; sel.onchange=function(){ if(STATE.pg==='B') reloadAll(); }; }
+      }
     });
-  })();
+    // 통화: 실데이터가 KRW 정규화뿐 → KRW만 활성, 나머지 비활성(정직)
+    document.querySelectorAll('#pgBM input[name="bm_cur"]').forEach(function(r){
+      if(r.value!=='KRW'){ r.disabled=true; if(r.parentNode)r.parentNode.style.opacity='0.35'; } else { r.checked=true; }
+    });
+    // 섹션 라벨 변경
+    var s1=findByText('#pgBM *','업종별 Summary'); if(s1) s1.textContent='권역별 벤치마크 (캠페인 분포 4분위)';
+    // 단가/Rate 지표 셀렉터 행 숨김(목업 KPI) → 대신 CPM/CPC/CTR 토글
+    document.querySelectorAll('#pgBM .flbl, #pgBM span').forEach(function(el){ var t=(el.textContent||'').trim(); if(t==='Rate 지표'||t==='단가 지표'){ var row=el.closest('div'); } });
+    // '지표 추가' 버튼 숨김 (마트에 확장지표 없음 → 가짜 방지)
+    document.querySelectorAll('#pgBM button').forEach(function(b){ if((b.textContent||'').indexOf('지표 추가')>=0) b.style.display='none'; });
+    // KPI 토글 주입 (요약표 위)
+    var sumTwrap=document.querySelector('#pgBM .twrap');
+    if(sumTwrap && !document.getElementById('bmKpiTgl')){
+      var bar=document.createElement('div'); bar.id='bmKpiTgl'; bar.style.cssText='display:flex;gap:8px;margin-bottom:12px;align-items:center';
+      var lab=document.createElement('span'); lab.textContent='벤치마크 지표:'; lab.style.cssText='font-size:12px;color:#767676;font-weight:600;margin-right:4px'; bar.appendChild(lab);
+      ['cpm','cpc','ctr'].forEach(function(k){
+        var b=document.createElement('button'); b.className='dbtn'+(k==='cpm'?' pri':''); b.textContent=KU[k]; b.dataset.k=k;
+        b.onclick=function(){ curKpi=k; document.querySelectorAll('#bmKpiTgl button').forEach(function(x){x.className='dbtn';}); b.className='dbtn pri'; renderBench(); renderCharts(); };
+        bar.appendChild(b);
+      });
+      sumTwrap.parentNode.insertBefore(bar, sumTwrap);
+    }
+  }
 
   async function bmLoad(){
     var r=range(), media=(typeof STATE!=='undefined'&&STATE.media)||'G';
     try{
-      var res=await fetch(API+'/benchmark?media='+encodeURIComponent(media)+'&date_from='+r.df+'&date_to='+r.dt);
-      var d=await res.json();
-      if(typeof MOCK_DETAIL!=='undefined'){ MOCK_DETAIL.length=0; (d.detail||[]).forEach(function(x){MOCK_DETAIL.push(x);}); }
-      window.BM_SUMMARY=d.summary||[];
-      if(d.meta&&d.meta.available===false&&window.toast) toast(d.meta.note||'해당 매체 데이터가 아직 없습니다.','ℹ');
-    }catch(e){ window.BM_SUMMARY=[]; if(typeof MOCK_DETAIL!=='undefined')MOCK_DETAIL.length=0; if(window.toast) toast('데이터 조회 실패','⚠'); }
+      var res=await fetch(API+'/benchmark?media='+encodeURIComponent(media)+'&date_from='+r.df+'&date_to='+r.dt+'&brand='+encodeURIComponent(curBrand()));
+      window.BM_DATA=await res.json();
+      if(BM_DATA.meta&&BM_DATA.meta.available===false&&window.toast) toast(BM_DATA.meta.note||'해당 매체 데이터가 아직 없습니다.','ℹ');
+    }catch(e){ window.BM_DATA={benchmark:[],detail:[],charts:null,meta:{available:false}}; if(window.toast) toast('데이터 조회 실패','⚠'); }
   }
   window.bmLoad=bmLoad;
 
-  var _renderSum=window.renderSumTbl;
-  window.renderSumTbl=function(){
-    if(!window.BM_SUMMARY){ return _renderSum?_renderSum():undefined; }
-    var tbl=document.querySelector('#pgBM .twrap table'); if(!tbl) return;
+  // 권역별 4분위 벤치마크 표 (선택 KPI)
+  function renderBench(){
+    var tbl=document.querySelector('#pgBM .twrap table'); if(!tbl||!window.BM_DATA) return;
     var thead=tbl.querySelector('thead tr'), tbody=tbl.querySelector('tbody'); if(!thead||!tbody) return;
-    var baseCols=['업종','노출수','CPM','CPC','CTR','지출예산'];
-    var extraKeys=Object.keys(STATE.sumExtraCols||{}).filter(function(k){return STATE.sumExtraCols[k];});
-    thead.innerHTML='';
-    baseCols.forEach(function(c){ var th=document.createElement('th'); th.innerHTML=c+' <span class="sico">↕</span>'; thead.appendChild(th); });
-    extraKeys.forEach(function(k){ var th=document.createElement('th'); th.innerHTML=((window.SUM_EXTRA_LBL&&SUM_EXTRA_LBL[k])||k)+' <span class="sico">↕</span>'; thead.appendChild(th); });
+    var u=KU[curKpi];
+    var cols=['권역','캠페인수',u+' 평균',u+' 중앙값',u+' 상위25%',u+' 상위10%','지출'];
+    thead.innerHTML=''; cols.forEach(function(c){ var th=document.createElement('th'); th.textContent=c; thead.appendChild(th); });
     tbody.innerHTML='';
-    BM_SUMMARY.forEach(function(r,ri){
+    (BM_DATA.benchmark||[]).forEach(function(r){
       var tr=document.createElement('tr'); if(r.cls)tr.className=r.cls;
-      tr.innerHTML='<td>'+r.ind+'</td><td>'+r.imp+'</td><td>'+r.cpm+'</td><td>'+r.cpc+'</td><td>'+r.ctr+'</td><td>'+r.spend+'</td>';
-      extraKeys.forEach(function(k){ var v=(ri===0)?'—':((window.SUM_EXTRA_DATA&&SUM_EXTRA_DATA[k])?SUM_EXTRA_DATA[k][ri-1]:'—'); var td=document.createElement('td'); td.textContent=v; tr.appendChild(td); });
+      var q=r[curKpi+'_q'], cells;
+      if(r.cls){ cells=[r.name,'—',r[curKpi]||'—','—','—','—',r.spend]; }   // Total: 전체 평균만
+      else { cells=[r.name, r.n, q?q.avg:'—', q?q.median:'—', q?q.top25:'—', q?q.top10:'—', r.spend]; }
+      tr.innerHTML=cells.map(function(c){ return '<td>'+c+'</td>'; }).join('');
       tbody.appendChild(tr);
     });
+  }
+  // 월×권역 상세
+  function renderDet(){
+    if(!window.BM_DATA) return;
+    var thead=document.getElementById('detHead'), tbody=document.getElementById('detBody'); if(!thead||!tbody) return;
+    var cols=[['period','기간'],['name','권역'],['spend','지출예산'],['imps','노출수'],['clicks','클릭수'],['cpm','CPM'],['cpc','CPC'],['ctr','CTR']];
+    thead.innerHTML=''; cols.forEach(function(c){ var th=document.createElement('th'); th.textContent=c[1]; thead.appendChild(th); });
+    var n=parseInt((document.getElementById('lsz')||{}).value)||20;
+    var rows=(BM_DATA.detail||[]).slice(0,n);
+    tbody.innerHTML='';
+    rows.forEach(function(r){ var tr=document.createElement('tr'); tr.innerHTML=cols.map(function(c){ return '<td>'+(r[c[0]]!=null?r[c[0]]:'—')+'</td>'; }).join(''); tbody.appendChild(tr); });
+    var rc=document.getElementById('rowCnt'); if(rc) rc.textContent=rows.length+' / '+(BM_DATA.detail||[]).length+'건';
+  }
+  // 실데이터 차트: 좌 월별추세 / 우 권역비교(중앙값)
+  function renderCharts(){
+    if(!window.BM_DATA||!BM_DATA.charts||typeof Chart==='undefined') return;
+    var ch=BM_DATA.charts, lbl=KU[curKpi]+(curKpi==='ctr'?' (%)':' (₩)');
+    var pal=['#4F46E5','#7C3AED','#EC4899','#10B981','#F59E0B','#EF4444','#3B82F6','#06B6D4','#8B5CF6','#F97316'];
+    var c1=document.getElementById('sumChart');
+    if(c1){ if(STATE.charts.sum)STATE.charts.sum.destroy();
+      STATE.charts.sum=new Chart(c1,{type:'line',data:{labels:ch.trend.labels,datasets:[{label:lbl,data:ch.trend[curKpi],borderColor:'#4F46E5',backgroundColor:'rgba(79,70,229,0.08)',borderWidth:2.5,pointRadius:3,tension:0.3,fill:true}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#F3F4F6'}},y:{grid:{color:'#F3F4F6'}}}}}); }
+    var ll=document.getElementById('kpiLblL'); if(ll)ll.textContent=lbl+' 월별 추세';
+    var c2=document.getElementById('indChart');
+    if(c2){ if(STATE.charts.ind)STATE.charts.ind.destroy();
+      STATE.charts.ind=new Chart(c2,{type:'bar',data:{labels:ch.compare.labels,datasets:[{label:lbl,data:ch.compare[curKpi],backgroundColor:pal,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{grid:{color:'#F3F4F6'}}}}}); }
+    var lr=document.getElementById('kpiLblR'); if(lr)lr.textContent='권역별 '+KU[curKpi]+' 벤치마크(중앙값)';
+  }
+  function renderAll(){ renderBench(); renderDet(); renderCharts(); }
+  function reloadAll(){ bmLoad().then(renderAll); }
+  window.reloadAll=reloadAll;
+
+  // 원본 함수 오버라이드 → 실데이터 렌더로 연결
+  window.renderSumTbl=renderBench; window.renderDetTbl=renderDet;
+  window.initSumCharts=renderCharts; window.updateSumChart=renderCharts;
+  window.updateLeftChart=renderCharts; window.updateRightChart=renderCharts;
+  // ── AI 페이지: 목업 대시보드/시드 제거, 실데이터 안내·추천질문으로 교체 ──
+  window.initCPV=function(){};   // 목업 CPV 차트 비활성
+  window.initChat=function(){    // 가짜 시드(₩28.5) 대신 실 안내
+    if(window._chatSeeded)return; window._chatSeeded=true;
+    addMsg('chatbox','ai','안녕하세요. 권역·매체별 광고 벤치마크를 실데이터로 분석해 드립니다. 예) "브라질 Google CPM", "한국 vs 인도 CTR 비교".');
   };
+  function injectAI(){
+    ['#pgAI .krow','#pgAI .chcard','#pgAI .inscard'].forEach(function(s){ document.querySelectorAll(s).forEach(function(el){ el.style.display='none'; }); });
+    var chips=document.querySelectorAll('#pgAI .sqchip');
+    var qs=['브라질 Google CPM 벤치마크','한국 vs 인도 CPC 비교','권역별 CTR 상위 알려줘','Meta 권역별 벤치마크','전체 매체 요약'];
+    chips.forEach(function(c,i){ if(qs[i]){ c.textContent=qs[i]; c.setAttribute('onclick',"chipQ('"+qs[i]+"')"); } else { c.style.display='none'; } });
+  }
 
   var _goPg=window.goPg;
-  window.goPg=function(p){ _goPg(p); if(p==='B'){ bmLoad().then(function(){ window.renderDetTbl&&renderDetTbl(); window.renderSumTbl&&renderSumTbl(); }); } };
-
-  window.runSearch=function(){
-    if(window.toast) toast('데이터를 검색하고 있습니다...','🔍');
-    bmLoad().then(function(){ window.renderDetTbl&&renderDetTbl(); window.renderSumTbl&&renderSumTbl(); window.initSumCharts&&initSumCharts(); if(window.toast) toast('검색이 완료되었습니다.'); });
-  };
-
+  window.goPg=function(p){ _goPg(p); if(p==='B'){ injectUI(); reloadAll(); } if(p==='A'){ injectAI(); } };
+  window.runSearch=function(){ if(window.toast)toast('데이터를 검색하고 있습니다...'); reloadAll(); setTimeout(function(){ if(window.toast)toast('검색이 완료되었습니다.'); },300); };
   var _swM=window.swM;
-  if(_swM){ window.swM=function(m){ _swM(m); if(typeof STATE!=='undefined'&&STATE.pg==='B'){ bmLoad().then(function(){ window.renderDetTbl&&renderDetTbl(); window.renderSumTbl&&renderSumTbl(); }); } }; }
+  if(_swM){ window.swM=function(m){ _swM(m); if(typeof STATE!=='undefined'&&STATE.pg==='B') reloadAll(); }; }
 
+  // AI 채팅
   async function aiAsk(q){
     addMsg('chatbox','user',q); showTyping('chatbox');
     var media=(typeof STATE!=='undefined'&&STATE.media)||'G', r=range();
     try{
-      var res=await fetch(API+'/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q,media:media,date_from:r.df,date_to:r.dt})});
+      var res=await fetch(API+'/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q,media:media,date_from:r.df,date_to:r.dt,brand:curBrand()})});
       var d=await res.json(); hideTyping('chatbox'); addMsg('chatbox','ai',d.reply||'(응답 없음)');
     }catch(e){ hideTyping('chatbox'); addMsg('chatbox','ai','(오류) 분석 서버에 연결하지 못했습니다.'); }
     if(window.showSuggestions) showSuggestions('chatbox',q);

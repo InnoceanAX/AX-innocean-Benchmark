@@ -4,38 +4,36 @@
 원칙:
 - 로우데이터(apac_kr_raw)·공용 통합층(apac_kr_unified)은 **읽기 전용**(SELECT only).
 - 쓰기는 오직 벤치마크 전용 데이터셋 `apac_kr_benchmark` 에만.
-- 벤치마크 백엔드(bq.py)는 이 마트만 소비한다(로우 직접 접근 금지).
+- 벤치마크 백엔드(bq.py)는 이 마트만 소비한다.
+
+데이터 현실: 스펜드 ~99%가 현대·기아(자동차). '업종' 다양성은 없음 →
+  벤치마크 1차 축 = **권역(market)**, 2차 = **브랜드(brand)**. (둘 다 v_perf_unified에 존재, 0% null)
+  4분위 벤치마크 = 권역×매체별 캠페인 KPI 분포(평균/중앙/상위25%/상위10%) = FEATURES.md 의도.
 
 산출물 (dataset: apac_kr_benchmark):
-- bm_advertiser_industry : 업종 매핑 시드 테이블 (F1 결정이 채울 자리)
-- bm_fact_monthly        : 월(period) × 매체(media) × 업종(industry) 사전집계 fact
+- bm_fact_monthly : 월 × 매체 × 권역 × 브랜드 집계 (표/차트/추세)
+- bm_benchmark    : 권역 × 매체 4분위(CPM/CPC/CTR 평균·중앙·상위25%·상위10% + 캠페인수)
 
-UPSTREAM: 현재는 인터im 소스. DB의 `v_perf_unified` 제공 시 여기만 교체.
-실행: python mart.py            (마트 생성/갱신)
-      python mart.py --check    (행수 확인)
+UPSTREAM: apac_kr_unified.v_perf_unified (dedup·spend_krw·brand·market·is_excluded)
+실행: python mart.py [--check]
 """
 import os
 import sys
 from google.cloud import bigquery
-from industry_map import industry_case_sql, _KEYWORD_RULES, _FRONT_SET
 
 PROJECT = "innocean-perf-apac-kr"
 MART_DS = "apac_kr_benchmark"
 LOCATION = "asia-northeast3"
+SOURCE = f"`{PROJECT}.apac_kr_unified.v_perf_unified`"
+# v_perf_unified.platform → 프론트 매체 탭. 네이버(N)·카카오(K)는 수집되면 추가.
+PLATFORM_TO_MEDIA = {"google_ads": "G", "meta": "M", "dv360": "D", "tiktok": "T"}
 
-# 키 로딩 (로컬). Cloud Run에선 ADC.
 for _k in [os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", ""),
            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..",
                            "setup", "innocean-perf-apac-kr-40e02bc0d0d8.json"))]:
     if _k and os.path.exists(_k):
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _k
         break
-
-# 단일 업스트림 = DB팀 공용 통합 계약 뷰 (읽기 전용, dedup·통화정규화·제외플래그 포함)
-SOURCE = f"`{PROJECT}.apac_kr_unified.v_perf_unified`"
-# v_perf_unified.platform → 프론트 매체 탭. sa360 은 표본 8행뿐 → 제외.
-# 네이버(N)·카카오(K)는 수집되면 여기에 "naver":"N","kakao":"K" 추가하면 자동 반영.
-PLATFORM_TO_MEDIA = {"google_ads": "G", "meta": "M", "dv360": "D", "tiktok": "T"}
 
 
 def _client():
@@ -54,76 +52,108 @@ def ensure_dataset(c):
         print(f"created dataset {ds_id}")
 
 
-def build_mapping_table(c):
-    """업종 매핑 시드 테이블 (감사/확장용). 현재는 규칙을 행으로 노출."""
-    rows = []
-    for industry, kws in _KEYWORD_RULES:
-        target = industry if industry in _FRONT_SET else "기타"
-        for kw in kws:
-            rows.append({"keyword": kw.lower(), "industry": target})
-    tbl_id = f"{PROJECT}.{MART_DS}.bm_advertiser_industry"
-    schema = [
-        bigquery.SchemaField("keyword", "STRING"),
-        bigquery.SchemaField("industry", "STRING"),
-    ]
-    t = bigquery.Table(tbl_id, schema=schema)
-    c.create_table(t, exists_ok=True)
-    c.query(f"TRUNCATE TABLE `{tbl_id}`").result()
-    c.insert_rows_json(tbl_id, rows)
-    print(f"bm_advertiser_industry: {len(rows)} keyword rules")
+# 매체/플랫폼 매핑 SQL 조각
+def _media_case():
+    whens = " ".join([f"WHEN '{p}' THEN '{m}'" for p, m in PLATFORM_TO_MEDIA.items()])
+    return f"CASE platform {whens} ELSE NULL END"
+
+
+def _plats():
+    return ",".join([f"'{p}'" for p in PLATFORM_TO_MEDIA])
 
 
 def build_fact(c):
-    # 업종은 advertiser_name + campaign_name 텍스트로 추정 (v_perf_unified 엔 업종 필드 없음)
-    ind = industry_case_sql("CONCAT(IFNULL(advertiser_name,''),' ',IFNULL(campaign_name,''))")
-    # platform → media 매핑 CASE
-    whens = " ".join([f"WHEN '{p}' THEN '{m}'" for p, m in PLATFORM_TO_MEDIA.items()])
-    media_case = f"CASE platform {whens} ELSE NULL END"
-    plats = ",".join([f"'{p}'" for p in PLATFORM_TO_MEDIA])
-    tbl_id = f"`{PROJECT}.{MART_DS}.bm_fact_monthly`"
+    """월 × 매체 × 권역 × 브랜드 집계 (표/추세/차트용)."""
+    tbl = f"`{PROJECT}.{MART_DS}.bm_fact_monthly`"
+    c.query(f"DROP TABLE IF EXISTS {tbl}").result()   # 클러스터링 변경 허용
     sql = f"""
-    CREATE OR REPLACE TABLE {tbl_id}
-    CLUSTER BY media, industry AS
+    CREATE OR REPLACE TABLE {tbl} CLUSTER BY media, market AS
     SELECT
       FORMAT_DATE('%Y-%m', date) AS period,
-      {media_case} AS media,
-      platform,
-      {ind} AS industry,
+      {_media_case()} AS media,
+      market,
+      brand,
       SUM(impressions) AS impressions,
       SUM(clicks) AS clicks,
-      SUM(spend_krw) AS cost,            -- 정규화 KRW (프론트 ₩ 표시와 일치)
+      SUM(spend_krw) AS cost,
       SUM(conversions) AS conversions,
       CURRENT_TIMESTAMP() AS _built_at
     FROM {SOURCE}
-    WHERE date IS NOT NULL
-      AND NOT IFNULL(is_excluded, FALSE)   -- 제외 플래그 반영(F2)
-      AND platform IN ({plats})
-    GROUP BY period, media, platform, industry
+    WHERE date IS NOT NULL AND NOT IFNULL(is_excluded, FALSE)
+      AND platform IN ({_plats()}) AND market IS NOT NULL AND market != ''
+    GROUP BY period, media, market, brand
     HAVING impressions > 0
     """
     c.query(sql).result()
-    print("bm_fact_monthly: rebuilt from v_perf_unified")
+    print("bm_fact_monthly: rebuilt")
+
+
+def build_benchmark(c):
+    """권역 × 매체 4분위 벤치마크 — 캠페인 단위 KPI 분포.
+    상위(top) = '더 좋은' 방향: CPM/CPC 낮을수록 좋음 → 낮은 분위, CTR 높을수록 좋음 → 높은 분위."""
+    tbl = f"`{PROJECT}.{MART_DS}.bm_benchmark`"
+    c.query(f"DROP TABLE IF EXISTS {tbl}").result()
+    sql = f"""
+    CREATE OR REPLACE TABLE {tbl} CLUSTER BY media, market AS
+    WITH camp AS (
+      SELECT {_media_case()} AS media, market, brand, campaign_id,
+        SUM(impressions) imp, SUM(clicks) clk, SUM(spend_krw) cost, SUM(conversions) conv
+      FROM {SOURCE}
+      WHERE NOT IFNULL(is_excluded, FALSE) AND platform IN ({_plats()})
+        AND market IS NOT NULL AND market != '' AND date IS NOT NULL
+      GROUP BY media, market, brand, campaign_id
+      HAVING imp >= 1000           -- 노이즈 캠페인 제외(최소 노출)
+    ),
+    kpi AS (
+      SELECT media, market,
+        SAFE_DIVIDE(cost, imp) * 1000 AS cpm,
+        SAFE_DIVIDE(cost, clk)        AS cpc,
+        SAFE_DIVIDE(clk, imp) * 100   AS ctr
+      FROM camp WHERE imp > 0 AND clk > 0
+    )
+    SELECT media, market, COUNT(*) AS n_campaigns,
+      -- CPM (낮을수록 좋음)
+      ROUND(AVG(cpm),1) cpm_avg,
+      ROUND(APPROX_QUANTILES(cpm,100)[OFFSET(50)],1) cpm_median,
+      ROUND(APPROX_QUANTILES(cpm,100)[OFFSET(25)],1) cpm_top25,
+      ROUND(APPROX_QUANTILES(cpm,100)[OFFSET(10)],1) cpm_top10,
+      -- CPC (낮을수록 좋음)
+      ROUND(AVG(cpc),1) cpc_avg,
+      ROUND(APPROX_QUANTILES(cpc,100)[OFFSET(50)],1) cpc_median,
+      ROUND(APPROX_QUANTILES(cpc,100)[OFFSET(25)],1) cpc_top25,
+      ROUND(APPROX_QUANTILES(cpc,100)[OFFSET(10)],1) cpc_top10,
+      -- CTR (높을수록 좋음 → 상위는 높은 분위)
+      ROUND(AVG(ctr),2) ctr_avg,
+      ROUND(APPROX_QUANTILES(ctr,100)[OFFSET(50)],2) ctr_median,
+      ROUND(APPROX_QUANTILES(ctr,100)[OFFSET(75)],2) ctr_top25,
+      ROUND(APPROX_QUANTILES(ctr,100)[OFFSET(90)],2) ctr_top10,
+      CURRENT_TIMESTAMP() AS _built_at
+    FROM kpi
+    GROUP BY media, market
+    HAVING n_campaigns >= 3        -- 표본 3개 미만 권역 제외
+    """
+    c.query(sql).result()
+    print("bm_benchmark: rebuilt")
 
 
 def build():
     c = _client()
     ensure_dataset(c)
-    build_mapping_table(c)
     build_fact(c)
+    build_benchmark(c)
     n = list(c.query(
-        f"SELECT COUNT(*) n, COUNT(DISTINCT media) m, COUNT(DISTINCT industry) i, "
-        f"MIN(period) mn, MAX(period) mx FROM `{PROJECT}.{MART_DS}.bm_fact_monthly`"
-    ).result())[0]
-    print(f"DONE. fact rows={n['n']} media={n['m']} industries={n['i']} {n['mn']}~{n['mx']}")
+        f"SELECT COUNT(*) n, COUNT(DISTINCT media) m, COUNT(DISTINCT market) mk "
+        f"FROM `{PROJECT}.{MART_DS}.bm_fact_monthly`").result())[0]
+    b = list(c.query(
+        f"SELECT COUNT(*) n FROM `{PROJECT}.{MART_DS}.bm_benchmark`").result())[0]
+    print(f"DONE. fact rows={n['n']} media={n['m']} markets={n['mk']} | benchmark rows={b['n']}")
 
 
 def check():
     c = _client()
     for r in c.query(
-        f"SELECT media, COUNT(*) n, COUNT(DISTINCT industry) inds, "
-        f"SUM(impressions) imp FROM `{PROJECT}.{MART_DS}.bm_fact_monthly` "
-        f"GROUP BY media ORDER BY media"
-    ).result():
+        f"SELECT media, COUNT(*) n, COUNT(DISTINCT market) markets "
+        f"FROM `{PROJECT}.{MART_DS}.bm_benchmark` GROUP BY media ORDER BY media").result():
         print(dict(r))
 
 
