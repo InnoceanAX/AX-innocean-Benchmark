@@ -23,7 +23,10 @@ GEMINI_KEY_FILE = (ROOT.parent.parent / "setup" / "innocean-gemini-api_aistudio.
 PROJECT = "innocean-perf-apac-kr"
 REGION = "asia-northeast3"
 SERVICE = "innocean-benchmark"
+# 빌더 SA: 통합뷰 읽기 + 마트 쓰기 (넓은 권한) → 마트 갱신 Job 전용
 RUNTIME_SA = f"perf-data-analyst@{PROJECT}.iam.gserviceaccount.com"
+# 서비스 SA: 마트 읽기 + 시크릿만 (최소권한) → 공개 서비스 전용
+SERVICE_SA = f"benchmark-app@{PROJECT}.iam.gserviceaccount.com"
 REPO = "cloud-run-source-deploy"                           # 기존 AR repo 재사용
 IMAGE = "innocean-benchmark"
 TAG = "backend-v2"
@@ -128,7 +131,7 @@ def deploy_service(with_secret=True):
     body = {
         "ingress": "INGRESS_TRAFFIC_ALL",
         "template": {
-            "serviceAccount": RUNTIME_SA,
+            "serviceAccount": SERVICE_SA,   # 최소권한: 마트 읽기 + 시크릿만
             "containers": [{
                 "image": IMG_URI,
                 "ports": [{"containerPort": 8080}],
