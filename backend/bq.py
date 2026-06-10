@@ -21,6 +21,12 @@ MEDIA_NAME = {"G": "Google", "M": "Meta", "N": "Naver", "K": "Kakao", "D": "DV36
 KPIS = ("cpm", "cpc", "ctr")
 KPI_LOWER_BETTER = {"cpm": True, "cpc": True, "ctr": False}
 
+# 통화: (1단위 = N KRW, 표시기호). 마트는 KRW 기준 → 선택 통화로 환산.
+CURRENCY = {
+    "KRW": (1.0, "₩"), "USD": (1384.72, "$"), "EUR": (1498.35, "€"),
+    "JPY": (9.52, "¥"), "CNY": (191.25, "¥"), "INR": (16.63, "₹"),
+}
+
 # 권역 코드 → 한글명
 MARKET_NAME = {
     "KR": "한국", "IN": "인도", "BR": "브라질", "ES": "스페인", "SA": "사우디",
@@ -68,9 +74,14 @@ def _kpi_fmt(kpi, v):
     return _pct(v) if kpi == "ctr" else _won(v)
 
 
-def get_benchmark(media="G", date_from="2025-01-01", date_to="2026-12-31", brand=None):
+def get_benchmark(media="G", date_from="2025-01-01", date_to="2026-12-31", brand=None, currency="KRW"):
     p0, p1 = date_from[:7], date_to[:7]
     cl = _client()
+    rate, sym = CURRENCY.get((currency or "KRW").upper(), CURRENCY["KRW"])
+    def money(v):
+        return sym + format(int(round((v or 0) / rate)), ",")
+    def kfmt(kpi, v):
+        return _pct(v) if kpi == "ctr" else money(v)
     params = [
         bigquery.ScalarQueryParameter("media", "STRING", media),
         bigquery.ScalarQueryParameter("p0", "STRING", p0),
@@ -110,18 +121,18 @@ def get_benchmark(media="G", date_from="2025-01-01", date_to="2026-12-31", brand
         row = {
             "market": mk, "name": mkt_name(mk),
             "n": b.get("n_campaigns", 0),
-            "imp": _num(imp), "spend": _won(cost),
-            "cpm": _won(cost / imp * 1000 if imp else 0),
-            "cpc": _won(cost / clk if clk else 0),
+            "imp": _num(imp), "spend": money(cost),
+            "cpm": money(cost / imp * 1000 if imp else 0),
+            "cpc": money(cost / clk if clk else 0),
             "ctr": _pct(clk / imp * 100 if imp else 0),
         }
         # 4분위 (각 KPI: 평균/중앙/상위25/상위10) — 표시문자열
         for k in KPIS:
             row[k + "_q"] = {
-                "avg": _kpi_fmt(k, b.get(f"{k}_avg")),
-                "median": _kpi_fmt(k, b.get(f"{k}_median")),
-                "top25": _kpi_fmt(k, b.get(f"{k}_top25")),
-                "top10": _kpi_fmt(k, b.get(f"{k}_top10")),
+                "avg": kfmt(k, b.get(f"{k}_avg")),
+                "median": kfmt(k, b.get(f"{k}_median")),
+                "top25": kfmt(k, b.get(f"{k}_top25")),
+                "top10": kfmt(k, b.get(f"{k}_top10")),
             }
         benchmark.append(row)
 
@@ -130,9 +141,9 @@ def get_benchmark(media="G", date_from="2025-01-01", date_to="2026-12-31", brand
     tclk = sum(a["clk"] or 0 for a in agg.values())
     tcost = sum(a["cost"] or 0.0 for a in agg.values())
     total = {"market": "TOTAL", "name": "전체", "n": sum(b.get("n_campaigns", 0) for b in bench_rows.values()),
-             "imp": _num(timp), "spend": _won(tcost),
-             "cpm": _won(tcost / timp * 1000 if timp else 0),
-             "cpc": _won(tcost / tclk if tclk else 0),
+             "imp": _num(timp), "spend": money(tcost),
+             "cpm": money(tcost / timp * 1000 if timp else 0),
+             "cpc": money(tcost / tclk if tclk else 0),
              "ctr": _pct(tclk / timp * 100 if timp else 0), "cls": "ttl"}
 
     # 3) detail (월×권역)
@@ -147,9 +158,9 @@ def get_benchmark(media="G", date_from="2025-01-01", date_to="2026-12-31", brand
         imp, clk, cost = r["imp"] or 0, r["clk"] or 0, r["cost"] or 0.0
         detail.append({
             "period": r["period"], "market": r["market"], "name": mkt_name(r["market"]),
-            "spend": _won(cost), "imps": _num(imp), "clicks": _num(clk),
-            "cpm": _won(cost / imp * 1000 if imp else 0),
-            "cpc": _won(cost / clk if clk else 0),
+            "spend": money(cost), "imps": _num(imp), "clicks": _num(clk),
+            "cpm": money(cost / imp * 1000 if imp else 0),
+            "cpc": money(cost / clk if clk else 0),
             "ctr": _pct(clk / imp * 100 if imp else 0),
         })
 
@@ -165,15 +176,17 @@ def get_benchmark(media="G", date_from="2025-01-01", date_to="2026-12-31", brand
         mtot[r["period"]] = [r["imp"] or 0, r["clk"] or 0, r["cost"] or 0.0]
     for m in months:
         imp, clk, cost = mtot[m]
-        trend["cpm"].append(round(cost / imp * 1000, 1) if imp else 0)
-        trend["cpc"].append(round(cost / clk, 1) if clk else 0)
+        trend["cpm"].append(round(cost / imp * 1000 / rate, 1) if imp else 0)
+        trend["cpc"].append(round(cost / clk / rate, 1) if clk else 0)
         trend["ctr"].append(round(clk / imp * 100, 2) if imp else 0)
     # compare: 상위 10개 권역의 median CPM/CPC/CTR (벤치마크 분포)
     top = benchmark[:10]
+    def cv(v):
+        return round((v or 0) / rate, 1)
     compare = {
         "labels": [b["name"] for b in top],
-        "cpm": [bench_rows.get(b["market"], {}).get("cpm_median", 0) for b in top],
-        "cpc": [bench_rows.get(b["market"], {}).get("cpc_median", 0) for b in top],
+        "cpm": [cv(bench_rows.get(b["market"], {}).get("cpm_median")) for b in top],
+        "cpc": [cv(bench_rows.get(b["market"], {}).get("cpc_median")) for b in top],
         "ctr": [bench_rows.get(b["market"], {}).get("ctr_median", 0) for b in top],
     }
 
@@ -185,6 +198,7 @@ def get_benchmark(media="G", date_from="2025-01-01", date_to="2026-12-31", brand
             "media": media, "media_name": MEDIA_NAME.get(media, media), "available": True,
             "markets": len(benchmark), "rows": len(detail),
             "date_from": date_from, "date_to": date_to,
+            "currency": (currency or "KRW").upper(), "symbol": sym,
             "dimension": "market", "note": "권역(market)별 벤치마크. 데이터 ~99% 현대·기아 자동차.",
         },
     }

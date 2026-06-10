@@ -1067,6 +1067,14 @@ function sugClick(btn,q){
     return { df:(f&&f.value?f.value:'2025-06')+'-01', dt:(t&&t.value?t.value:'2026-06')+'-28' };
   }
   function curBrand(){ var s=document.getElementById('bmBrand'); return s?s.value:''; }
+  function curCur(){ var r=document.querySelector('#pgBM input[name="bm_cur"]:checked'); return r?r.value:'KRW'; }
+  function setLoading(on){
+    var el=document.getElementById('bmLoading');
+    if(!el){ el=document.createElement('div'); el.id='bmLoading'; el.style.cssText='display:none;position:fixed;inset:0;background:rgba(255,255,255,.55);z-index:5000;align-items:center;justify-content:center';
+      el.innerHTML='<div style="padding:14px 22px;background:#000;color:#fff;font-size:13px;display:flex;gap:10px;align-items:center"><span class="tdots" style="display:inline-flex;gap:4px"><span></span><span></span><span></span></span> 데이터 불러오는 중...</div>';
+      document.body.appendChild(el); }
+    el.style.display=on?'flex':'none';
+  }
   function findByText(sel,txt){ var els=document.querySelectorAll(sel),i; for(i=0;i<els.length;i++){ if((els[i].textContent||'').trim()===txt) return els[i]; } return null; }
 
   // ── 1회 UI 보정: 탭 추가 / 라벨 변경 / 죽은 필터 숨김 / 브랜드 필터 / KPI 토글 ──
@@ -1089,10 +1097,14 @@ function sugClick(btn,q){
         var sel=fg.querySelector('select'); if(sel){ sel.id='bmBrand'; sel.innerHTML='<option value="">전체</option><option value="hyundai">현대(Hyundai)</option><option value="kia">기아(Kia)</option>'; sel.onchange=function(){ if(STATE.pg==='B') reloadAll(); }; }
       }
     });
-    // 통화: 실데이터가 KRW 정규화뿐 → KRW만 활성, 나머지 비활성(정직)
+    // 통화: 선택 시 환산 재조회 (마트 KRW → 선택 통화)
     document.querySelectorAll('#pgBM input[name="bm_cur"]').forEach(function(r){
-      if(r.value!=='KRW'){ r.disabled=true; if(r.parentNode)r.parentNode.style.opacity='0.35'; } else { r.checked=true; }
+      r.disabled=false; if(r.parentNode)r.parentNode.style.opacity='';
+      r.onchange=function(){ if(typeof STATE!=='undefined'&&STATE.pg==='B') reloadAll(); };
     });
+    // Summary 컨트롤 행(Net/Gross + Rate/단가 셀렉터) 숨김 — CPM/CPC/CTR 토글로 대체
+    var ksl=document.getElementById('kpiSelL');
+    if(ksl){ var row=ksl.parentNode; while(row && row.id!=='pgBM' && !row.querySelector('input[name="ng"]')) row=row.parentNode; if(row && row.id!=='pgBM') row.style.display='none'; }
     // 섹션 라벨 변경
     var s1=findByText('#pgBM *','업종별 Summary'); if(s1) s1.textContent='권역별 벤치마크 (캠페인 분포 4분위)';
     // 단가/Rate 지표 셀렉터 행 숨김(목업 KPI) → 대신 CPM/CPC/CTR 토글
@@ -1115,11 +1127,13 @@ function sugClick(btn,q){
 
   async function bmLoad(){
     var r=range(), media=(typeof STATE!=='undefined'&&STATE.media)||'G';
+    setLoading(true);
     try{
-      var res=await fetch(API+'/benchmark?media='+encodeURIComponent(media)+'&date_from='+r.df+'&date_to='+r.dt+'&brand='+encodeURIComponent(curBrand()));
+      var res=await fetch(API+'/benchmark?media='+encodeURIComponent(media)+'&date_from='+r.df+'&date_to='+r.dt+'&brand='+encodeURIComponent(curBrand())+'&currency='+curCur());
       window.BM_DATA=await res.json();
       if(BM_DATA.meta&&BM_DATA.meta.available===false&&window.toast) toast(BM_DATA.meta.note||'해당 매체 데이터가 아직 없습니다.','ℹ');
     }catch(e){ window.BM_DATA={benchmark:[],detail:[],charts:null,meta:{available:false}}; if(window.toast) toast('데이터 조회 실패','⚠'); }
+    finally{ setLoading(false); }
   }
   window.bmLoad=bmLoad;
 

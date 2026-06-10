@@ -34,10 +34,12 @@ def index():
 def benchmark(media: str = "G",
               date_from: str = "2025-06-01",
               date_to: str = "2026-06-08",
-              brand: str = ""):
+              brand: str = "",
+              currency: str = "KRW"):
     """매체별 권역 벤치마크 (4분위 benchmark + detail + charts)."""
     try:
-        data = bq.get_benchmark(media=media, date_from=date_from, date_to=date_to, brand=brand)
+        data = bq.get_benchmark(media=media, date_from=date_from, date_to=date_to,
+                                brand=brand, currency=currency)
         return JSONResponse(data)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e), "benchmark": [], "detail": []}, status_code=500)
