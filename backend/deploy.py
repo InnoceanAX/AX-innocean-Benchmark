@@ -26,7 +26,7 @@ SERVICE = "innocean-benchmark"
 RUNTIME_SA = f"perf-data-analyst@{PROJECT}.iam.gserviceaccount.com"
 REPO = "cloud-run-source-deploy"                           # 기존 AR repo 재사용
 IMAGE = "innocean-benchmark"
-TAG = "backend-v1"
+TAG = "backend-v2"
 IMG_URI = f"{REGION}-docker.pkg.dev/{PROJECT}/{REPO}/{IMAGE}:{TAG}"
 STAGE_BUCKET = "innocean-perf-apac-kr-cloudbuild-source"
 SRC_OBJECT = "benchmark/source.tar.gz"
@@ -102,7 +102,7 @@ def build_image():
     build = {
         "source": {"storageSource": {"bucket": STAGE_BUCKET, "object": SRC_OBJECT}},
         "steps": [{"name": "gcr.io/cloud-builders/docker",
-                   "args": ["build", "-t", IMG_URI, "-f", "Dockerfile", "."]}],
+                   "args": ["build", "--no-cache", "-t", IMG_URI, "-f", "Dockerfile", "."]}],
         "images": [IMG_URI],
     }
     r = _ok(S.post(f"https://cloudbuild.googleapis.com/v1/projects/{PROJECT}/builds", json=build))

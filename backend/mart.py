@@ -33,8 +33,9 @@ for _k in [os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", ""),
 
 # 단일 업스트림 = DB팀 공용 통합 계약 뷰 (읽기 전용, dedup·통화정규화·제외플래그 포함)
 SOURCE = f"`{PROJECT}.apac_kr_unified.v_perf_unified`"
-# v_perf_unified.platform → 프론트 매체 탭(G/M/N/K). dv360/tiktok/sa360 은 UI 탭 없음 → 제외.
-PLATFORM_TO_MEDIA = {"google_ads": "G", "meta": "M"}
+# v_perf_unified.platform → 프론트 매체 탭. sa360 은 표본 8행뿐 → 제외.
+# 네이버(N)·카카오(K)는 수집되면 여기에 "naver":"N","kakao":"K" 추가하면 자동 반영.
+PLATFORM_TO_MEDIA = {"google_ads": "G", "meta": "M", "dv360": "D", "tiktok": "T"}
 
 
 def _client():

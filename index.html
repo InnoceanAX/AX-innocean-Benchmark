@@ -1057,10 +1057,25 @@ function sugClick(btn,q){
    기존 API_CONFIG 계약(/api/v1/benchmark, /ai/chat)에 fetch 연결. 데이터 출처만 교체. */
 (function(){
   var API=(window.API_CONFIG&&API_CONFIG.baseUrl)||'/api/v1';
-  function range(){ return {df:'2025-06-01', dt:'2026-06-08'}; } // 마트 grain=월. 필터 연동 전 기본창.
+  // 조회기간: 화면의 월 필터(frmDate/toDate)에 연동. 없으면 기본창.
+  function range(){
+    var f=document.getElementById('frmDate'), t=document.getElementById('toDate');
+    return { df:(f&&f.value?f.value:'2025-06')+'-01', dt:(t&&t.value?t.value:'2026-06')+'-28' };
+  }
   window.BM_SUMMARY=null;
   // 원본 goPg('A')가 호출하나 정의는 미로드 block1에만 있던 함수 → 안전 가드(콘솔에러 방지)
   if(typeof window.showSuggestions!=='function'){ window.showSuggestions=function(){}; }
+  // 매체 탭 확장: DV360·TikTok (v_perf_unified 실데이터). 원본 swM은 mt<코드> 버튼만 있으면 처리됨.
+  (function(){
+    var tabs=document.querySelector('#pgBM .mtabs');
+    if(!tabs || document.getElementById('mtD')) return;
+    [['D','DV360'],['T','TikTok']].forEach(function(x){
+      var btn=document.createElement('button');
+      btn.className='mtab'; btn.id='mt'+x[0]; btn.textContent=x[1];
+      btn.setAttribute('onclick', "swM('"+x[0]+"')");
+      tabs.appendChild(btn);
+    });
+  })();
 
   async function bmLoad(){
     var r=range(), media=(typeof STATE!=='undefined'&&STATE.media)||'G';

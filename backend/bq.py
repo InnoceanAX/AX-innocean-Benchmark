@@ -18,7 +18,8 @@ PROJECT = "innocean-perf-apac-kr"
 MART = f"`{PROJECT}.apac_kr_benchmark.bm_fact_monthly`"   # 벤치마크 전용 마트 (유일한 소스)
 LOCATION = "asia-northeast3"
 
-MEDIA_NAME = {"G": "Google", "M": "Meta", "N": "Naver", "K": "Kakao"}
+MEDIA_NAME = {"G": "Google", "M": "Meta", "N": "Naver", "K": "Kakao",
+              "D": "DV360", "T": "TikTok"}
 
 for _k in [os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", ""),
            os.path.join(os.path.dirname(__file__), "sa_key.json"),
