@@ -1198,25 +1198,54 @@ function sugClick(btn,q){
   window.initChat=function(){ if(window._chatSeeded)return; window._chatSeeded=true; addMsg('chatbox','ai','안녕하세요. 우측 대시보드에서 현재 데이터를 확인하고, 아래 추천 질문이나 직접 입력으로 분석을 요청하세요.'); };
 
   function aiMedia(){ return (typeof STATE!=='undefined'&&STATE.media)||'G'; }
+  var aiKpi='cpm'; window._aiData=null; window._aiCharts={};
+  var KUU={cpm:'CPM',cpc:'CPC',ctr:'CTR'};
+  function drawAICharts(){
+    var d=window._aiData; if(!d||!d.charts||typeof Chart==='undefined') return;
+    var ku=KUU[aiKpi];
+    var bar=document.getElementById('aiBar'), line=document.getElementById('aiLine');
+    if(bar){ if(_aiCharts.bar)_aiCharts.bar.destroy(); _aiCharts.bar=new Chart(bar,{type:'bar',data:{labels:d.charts.compare.labels,datasets:[{data:d.charts.compare[aiKpi],backgroundColor:'#4F46E5',borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{font:{size:10}}},y:{grid:{color:'#F3F4F6'}}}}}); }
+    if(line){ if(_aiCharts.line)_aiCharts.line.destroy(); _aiCharts.line=new Chart(line,{type:'line',data:{labels:d.charts.trend.labels,datasets:[{data:d.charts.trend[aiKpi],borderColor:'#4F46E5',backgroundColor:'rgba(79,70,229,.08)',borderWidth:2,pointRadius:2,tension:.3,fill:true}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#F3F4F6'},ticks:{font:{size:10}}},y:{grid:{color:'#F3F4F6'}}}}}); }
+    var bt=document.getElementById('aiBarTit'); if(bt)bt.textContent='권역별 '+ku+' 중앙값 (벤치마크 분포)';
+    var lt=document.getElementById('aiLineTit'); if(lt)lt.textContent='월별 '+ku+' 추세';
+  }
+  window.aiSetKpi=function(k){ aiKpi=k; document.querySelectorAll('#aiKpiTgl button').forEach(function(x){x.className='dbtn';}); var b=document.querySelector('#aiKpiTgl button[data-k="'+k+'"]'); if(b)b.className='dbtn pri'; drawAICharts(); };
+
   async function renderAIOverview(){
     var main=document.querySelector('#pgAI .aimain'); if(!main) return;
     var r=range(), med=aiMedia();
     var MN={G:'Google',M:'Meta',D:'DV360',T:'TikTok'};
     var medbtns=['G','M','D','T'].map(function(x){ return '<button class="dbtn'+(x===med?' pri':'')+'" onclick="window.aiSetMedia(\''+x+'\')">'+MN[x]+'</button>'; }).join('');
-    var head='<div class="aimtit">데이터 분석 대시보드</div><div style="display:flex;gap:8px;margin:10px 0 16px;align-items:center"><span style="font-size:12px;color:#767676;font-weight:600">분석 매체:</span>'+medbtns+'</div>';
+    var banner='<div style="background:linear-gradient(135deg,#EEF2FF,#F5F3FF);border:1px solid rgba(79,70,229,.15);padding:13px 16px;margin-bottom:14px"><div style="font-size:13px;font-weight:700;color:#4338CA;margin-bottom:3px">이 화면은 현재 광고 벤치마크 데이터입니다</div><div style="font-size:12px;color:#555;line-height:1.6">아래 수치·차트·표를 보시고 <b>좌측 채팅</b>에 질문하면 AI가 설명·분석해 드립니다. 예) "사우디 CPM이 왜 높아?", "한국 vs 인도 비교"</div></div>';
+    var head='<div class="aimtit">데이터 분석 대시보드</div>'+banner+'<div style="display:flex;gap:8px;margin:0 0 14px;align-items:center"><span style="font-size:12px;color:#767676;font-weight:600">분석 매체:</span>'+medbtns+'</div>';
     main.innerHTML=head+'<div class="aimsub">데이터 불러오는 중...</div>';
     var d; try{ d=await (await fetch(API+'/benchmark?media='+med+'&date_from='+r.df+'&date_to='+r.dt+'&currency='+curCur())).json(); }catch(e){ main.innerHTML=head+'<div style="color:#767676;padding:16px">데이터 조회 실패</div>'; return; }
-    var m=d.meta||{}, b=d.benchmark||[], tot=b[0]||{};
+    window._aiData=d;
+    var m=d.meta||{}, b=d.benchmark||[], tot=b[0]||{}, mk=b.filter(function(x){return !x.cls;});
     if(!m.available){ main.innerHTML=head+'<div style="color:#767676;padding:16px;border:1px solid #E5E7EB">'+(m.note||'해당 매체 데이터가 아직 없습니다(네이버/카카오 수집 대기).')+'</div>'; return; }
     var html=head;
     html+='<div class="aimsub" style="margin-bottom:14px">권역 '+m.markets+'개 · '+(m.date_from||'').slice(0,7)+'~'+(m.date_to||'').slice(0,7)+' · 통화 '+(m.currency||'KRW')+' · 데이터 ~99% 현대·기아 자동차</div>';
-    html+='<div style="display:flex;gap:14px;margin-bottom:18px;flex-wrap:wrap">';
-    [['총 노출',tot.imp],['총 지출',tot.spend],['평균 CPM',tot.cpm],['평균 CTR',tot.ctr]].forEach(function(c){ html+='<div style="flex:1;min-width:120px;border:1px solid #E5E7EB;padding:14px"><div style="font-size:11px;color:#767676;margin-bottom:6px">'+c[0]+'</div><div style="font-size:19px;font-weight:800">'+(c[1]||'-')+'</div></div>'; });
+    // KPI 카드 6종
+    html+='<div style="display:flex;gap:12px;margin-bottom:18px;flex-wrap:wrap">';
+    [['총 노출',tot.imp],['총 지출',tot.spend],['캠페인 수',(tot.n||0).toLocaleString()],['평균 CPM',tot.cpm],['평균 CPC',tot.cpc],['평균 CTR',tot.ctr]].forEach(function(c){ html+='<div style="flex:1;min-width:110px;border:1px solid #E5E7EB;padding:13px"><div style="font-size:11px;color:#767676;margin-bottom:6px">'+c[0]+'</div><div style="font-size:18px;font-weight:800">'+(c[1]||'-')+'</div></div>'; });
     html+='</div>';
-    html+='<div style="border:1px solid #E5E7EB;padding:16px;margin-bottom:16px"><div style="font-size:13px;font-weight:700;margin-bottom:10px">권역별 CPM 중앙값 (벤치마크 분포)</div><div style="height:230px"><canvas id="aiOvChart"></canvas></div></div>';
-    html+='<div style="border:1px solid #E5E7EB;padding:16px;background:#FAFAFA"><div style="font-size:13px;font-weight:700;margin-bottom:8px">이렇게 물어보세요</div><div style="font-size:13px;color:#555;line-height:1.9">· "브라질 CPM 알려줘" · "한국 vs 인도 CTR 비교"<br>· "권역별 CPC 상위 알려줘" · "전체 요약"<br><span style="color:#9CA3AF">좌측 채팅에 입력하면 답변이 채팅창에 표시됩니다.</span></div></div>';
+    // 차트 KPI 토글
+    html+='<div id="aiKpiTgl" style="display:flex;gap:8px;margin-bottom:10px;align-items:center"><span style="font-size:12px;color:#767676;font-weight:600">차트 지표:</span>'+['cpm','cpc','ctr'].map(function(k){return '<button class="dbtn'+(k===aiKpi?' pri':'')+'" data-k="'+k+'" onclick="window.aiSetKpi(\''+k+'\')">'+KUU[k]+'</button>';}).join('')+'</div>';
+    // 차트 2개 (권역 비교 + 월별 추세)
+    html+='<div style="display:flex;gap:14px;margin-bottom:18px;flex-wrap:wrap">';
+    html+='<div style="flex:1;min-width:300px;border:1px solid #E5E7EB;padding:14px"><div id="aiBarTit" style="font-size:13px;font-weight:700;margin-bottom:8px">권역별 CPM 중앙값</div><div style="height:210px"><canvas id="aiBar"></canvas></div></div>';
+    html+='<div style="flex:1;min-width:300px;border:1px solid #E5E7EB;padding:14px"><div id="aiLineTit" style="font-size:13px;font-weight:700;margin-bottom:8px">월별 CPM 추세</div><div style="height:210px"><canvas id="aiLine"></canvas></div></div>';
+    html+='</div>';
+    // 권역별 전체 표 (중앙값) — 모든 권역·지표 노출
+    html+='<div style="border:1px solid #E5E7EB;margin-bottom:16px"><div style="padding:11px 16px;font-size:13px;font-weight:700;border-bottom:1px solid #E5E7EB">권역별 벤치마크 (캠페인 중앙값)</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>';
+    ['권역','캠페인수','CPM','CPC','CTR','지출'].forEach(function(t){ html+='<th style="background:#EEF2FF;border:1px solid #E5E7EB;padding:8px 10px;text-align:left;color:#767676;font-weight:700">'+t+'</th>'; });
+    html+='</tr></thead><tbody>';
+    mk.forEach(function(rw){ html+='<tr>'+['<td>'+rw.name+'</td>','<td>'+rw.n+'</td>','<td>'+(rw.cpm_q?rw.cpm_q.median:'-')+'</td>','<td>'+(rw.cpc_q?rw.cpc_q.median:'-')+'</td>','<td>'+(rw.ctr_q?rw.ctr_q.median:'-')+'</td>','<td>'+rw.spend+'</td>'].map(function(td){return td.replace('<td>','<td style="border:1px solid #E5E7EB;padding:8px 10px">');}).join('')+'</tr>'; });
+    html+='</tbody></table></div></div>';
+    // 가이드
+    html+='<div style="border:1px solid #E5E7EB;padding:16px;background:#FAFAFA"><div style="font-size:13px;font-weight:700;margin-bottom:8px">이렇게 물어보세요</div><div style="font-size:13px;color:#555;line-height:1.9">· "브라질 CPM 알려줘" · "한국 vs 인도 CTR 비교"<br>· "권역별 CPC 상위 알려줘" · "전체 요약" · "사우디는 왜 비싸?"<br><span style="color:#9CA3AF">좌측 채팅에 입력하면 답변이 채팅창에 표시됩니다.</span></div></div>';
     main.innerHTML=html;
-    var ch=d.charts; if(ch&&ch.compare&&typeof Chart!=='undefined'){ var ctx=document.getElementById('aiOvChart'); if(ctx) new Chart(ctx,{type:'bar',data:{labels:ch.compare.labels,datasets:[{data:ch.compare.cpm,backgroundColor:'#4F46E5',borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{grid:{color:'#F3F4F6'}}}}}); }
+    drawAICharts();
   }
   window.aiSetMedia=function(m){ if(typeof STATE!=='undefined')STATE.media=m; renderAIOverview(); };
 
