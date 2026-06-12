@@ -39,7 +39,7 @@ SYSTEM = (
 )
 
 
-def answer(message: str, context: str) -> str:
+def answer(message: str, context: str, history=None) -> str:
     key = _api_key()
     if not key:
         return _fallback(message, context)
@@ -47,13 +47,22 @@ def answer(message: str, context: str) -> str:
         from google import genai
         from google.genai import types
         client = genai.Client(api_key=key)
-        resp = client.models.generate_content(
-            model=_MODEL,
-            contents=f"데이터:\n{context}\n\n질문: {message}",
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM, temperature=0.3, max_output_tokens=800,
-            ),
+        # 대화 기록(최근 6턴) + 현재 데이터·질문
+        contents = []
+        for h in (history or [])[-6:]:
+            txt = (h.get("text") or "").strip()
+            if not txt:
+                continue
+            role = "model" if h.get("role") == "ai" else "user"
+            contents.append(types.Content(role=role, parts=[types.Part(text=txt)]))
+        contents.append(types.Content(role="user",
+                        parts=[types.Part(text=f"[현재 화면 데이터]\n{context}\n\n질문: {message}")]))
+        cfg = types.GenerateContentConfig(
+            system_instruction=SYSTEM, temperature=0.3, max_output_tokens=1600,
+            # gemini-2.5-flash의 thinking이 출력토큰을 소진해 답변이 잘리는 것 방지
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
+        resp = client.models.generate_content(model=_MODEL, contents=contents, config=cfg)
         return (resp.text or "").strip() or _fallback(message, context)
     except Exception as e:  # noqa: BLE001
         return _fallback(message, context, err=str(e))

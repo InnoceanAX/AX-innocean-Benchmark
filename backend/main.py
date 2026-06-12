@@ -66,6 +66,7 @@ class ChatReq(BaseModel):
     objective: str = ""
     brand: str = ""
     industry: str = ""
+    history: list = []   # [{role:'user'|'ai', text:str}, ...] 최근 대화
 
 
 @app.post("/api/v1/ai/chat")
@@ -75,7 +76,7 @@ def ai_chat(req: ChatReq):
         context = bq.get_summary_context(
             req.media, req.dim, req.date_from, req.date_to, req.currency,
             market=req.market, objective=req.objective, brand=req.brand, industry=req.industry)
-        reply = ai.answer(req.message, context)
+        reply = ai.answer(req.message, context, history=req.history)
         return {"reply": reply}
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"reply": f"(오류) {e}"}, status_code=500)
