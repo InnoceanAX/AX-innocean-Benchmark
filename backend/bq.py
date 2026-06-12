@@ -52,6 +52,19 @@ def dim_name(dim, code):
     return code
 
 
+# 인메모리 결과 캐시 — 마트는 일 단위 갱신이라 동일 조회는 재계산 불필요.
+# 키에 날짜(UTC)를 포함해 매일 자동 무효화. 프로세스 재시작/재배포 시 초기화.
+import datetime as _dt
+_BENCH_CACHE = {}
+
+
+def _cache_key(media, dim, date_from, date_to, currency, filters):
+    fk = tuple(sorted((k, v) for k, v in filters.items()
+                      if v not in (None, "", "all", "전체")))
+    day = _dt.datetime.utcnow().strftime("%Y-%m-%d")
+    return (day, media, dim, date_from, date_to, (currency or "KRW").upper(), fk)
+
+
 for _k in [os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", ""),
            os.path.join(os.path.dirname(__file__), "sa_key.json"),
            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..",
@@ -106,6 +119,9 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             "media": media, "media_name": MEDIA_NAME.get(media, media), "available": False,
             "dim": dim, "note": "디바이스 데이터 준비 중입니다 (통합뷰 추가 대기, P1)."}}
     src = DEVICE_TBL if dim == "device" else TBL
+    ckey = _cache_key(media, dim, date_from, date_to, currency, filters)
+    if ckey in _BENCH_CACHE:
+        return _BENCH_CACHE[ckey]
     p0, p1 = date_from[:7], date_to[:7]
     rate, sym = CURRENCY.get((currency or "KRW").upper(), CURRENCY["KRW"])
 
@@ -209,7 +225,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         else:
             compare[k] = [round((next((r[f"{k}_median"] for r in rows if r["dim"] == b["dim"]), 0) or 0) / rate, 1) for b in top]
 
-    return {
+    result = {
         "benchmark": [total] + benchmark,
         "detail": detail,
         "charts": {"trend": trend, "compare": compare},
@@ -217,10 +233,14 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             "media": media, "media_name": MEDIA_NAME.get(media, media), "available": True,
             "dim": dim, "dim_label": DIMS[dim], "n_dim": len(benchmark), "rows": len(detail),
             "date_from": date_from, "date_to": date_to,
-            "currency": (currency or "KRW").upper(), "symbol": sym,
+            "currency": (currency or "KRW").upper(), "symbol": sym, "cached": True,
             "note": "다차원 벤치마크. 데이터 ~99% 현대·기아 자동차.",
         },
     }
+    if len(_BENCH_CACHE) > 300:
+        _BENCH_CACHE.clear()
+    _BENCH_CACHE[ckey] = result
+    return result
 
 
 @lru_cache(maxsize=8)
