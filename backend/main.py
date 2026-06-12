@@ -31,33 +31,50 @@ def index():
 # baseUrl:'/api/v1', endpoints:{ benchmark:'/benchmark', chat:'/ai/chat' }
 
 @app.get("/api/v1/benchmark")
-def benchmark(media: str = "G",
-              date_from: str = "2025-06-01",
-              date_to: str = "2026-06-08",
-              brand: str = "",
-              currency: str = "KRW"):
-    """매체별 권역 벤치마크 (4분위 benchmark + detail + charts)."""
+def benchmark(media: str = "G", dim: str = "market",
+              date_from: str = "2025-06-01", date_to: str = "2026-06-08",
+              currency: str = "KRW",
+              market: str = "", objective: str = "", brand: str = "",
+              industry: str = "", agency: str = ""):
+    """다차원 벤치마크 — 기준차원(dim) × 필터 조합 4분위."""
     try:
-        data = bq.get_benchmark(media=media, date_from=date_from, date_to=date_to,
-                                brand=brand, currency=currency)
+        data = bq.get_benchmark(media=media, dim=dim, date_from=date_from, date_to=date_to,
+                                currency=currency, market=market, objective=objective,
+                                brand=brand, industry=industry, agency=agency)
         return JSONResponse(data)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e), "benchmark": [], "detail": []}, status_code=500)
 
 
+@app.get("/api/v1/meta/options")
+def filter_options(media: str = "G"):
+    """필터 드롭다운용 차원별 distinct 값."""
+    try:
+        return JSONResponse(bq.get_filter_options(media))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 class ChatReq(BaseModel):
     message: str
     media: str = "G"
+    dim: str = "market"
     date_from: str = "2025-06-01"
     date_to: str = "2026-06-08"
+    currency: str = "KRW"
+    market: str = ""
+    objective: str = ""
     brand: str = ""
+    industry: str = ""
 
 
 @app.post("/api/v1/ai/chat")
 def ai_chat(req: ChatReq):
     """벤치마크 데이터 기반 AI 분석 답변."""
     try:
-        context = bq.get_summary_context(req.media, req.date_from, req.date_to, req.brand)
+        context = bq.get_summary_context(
+            req.media, req.dim, req.date_from, req.date_to, req.currency,
+            market=req.market, objective=req.objective, brand=req.brand, industry=req.industry)
         reply = ai.answer(req.message, context)
         return {"reply": reply}
     except Exception as e:  # noqa: BLE001

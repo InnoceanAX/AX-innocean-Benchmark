@@ -1057,17 +1057,33 @@ function sugClick(btn,q){
    데이터 ~99%가 현대·기아 자동차 → 벤치마크 축 = 권역(market). 4분위 = 분포 대비 내 위치. */
 (function(){
   var API=(window.API_CONFIG&&API_CONFIG.baseUrl)||'/api/v1';
-  var curKpi='cpm';
-  var KU={cpm:'CPM',cpc:'CPC',ctr:'CTR'};
-  window.BM_DATA=null;
+  var curKpi='cpm', curDim='market', curFilters={market:'',objective:'',brand:'',industry:''};
+  var KU={cpm:'CPM',cpc:'CPC',ctr:'CTR',cvr:'CVR'};
+  var DIMS=[['market','권역'],['objective','캠페인목표'],['brand','브랜드'],['industry','업종']];
+  window.BM_DATA=null; window._bmOptions=null;
   if(typeof window.showSuggestions!=='function'){ window.showSuggestions=function(){}; }
 
   function range(){
     var f=document.getElementById('frmDate'), t=document.getElementById('toDate');
     return { df:(f&&f.value?f.value:'2025-06')+'-01', dt:(t&&t.value?t.value:'2026-06')+'-28' };
   }
-  function curBrand(){ var s=document.getElementById('bmBrand'); return s?s.value:''; }
   function curCur(){ var r=document.querySelector('#pgBM input[name="bm_cur"]:checked'); return r?r.value:'KRW'; }
+  function filterQS(){ var s='&dim='+curDim; ['market','objective','brand','industry'].forEach(function(k){ if(curFilters[k]) s+='&'+k+'='+encodeURIComponent(curFilters[k]); }); return s; }
+  function dimLabel(){ return (window.BM_DATA&&BM_DATA.meta&&BM_DATA.meta.dim_label)||'권역'; }
+  // 기준차원/필터 컨트롤바
+  function buildControlBar(){
+    var old=document.getElementById('bmCtl'); if(old)old.remove();
+    var anchor=document.querySelector('#pgBM .fp')||document.querySelector('#pgBM .bmwrap'); if(!anchor)return;
+    var o=window._bmOptions||{};
+    var dimRow='<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap"><span style="font-size:12px;color:#767676;font-weight:700;min-width:64px">기준 차원</span>'+DIMS.map(function(d){return '<button class="dbtn'+(d[0]===curDim?' pri':'')+'" data-dim="'+d[0]+'" onclick="window.bmSetDim(\''+d[0]+'\')">'+d[1]+'</button>';}).join('')+'</div>';
+    function sel(key,label){ var opts='<option value="">전체</option>'+((o[key]||[]).map(function(x){return '<option value="'+x.v+'"'+(curFilters[key]===x.v?' selected':'')+'>'+x.name+'</option>';}).join('')); return '<div style="display:flex;flex-direction:column;gap:4px"><span style="font-size:11px;color:#767676;font-weight:600">'+label+'</span><select class="fsel" data-fk="'+key+'" style="height:34px;min-width:130px;border:1px solid #E5E7EB;padding:0 8px">'+opts+'</select></div>'; }
+    var fRow='<div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap"><span style="font-size:12px;color:#767676;font-weight:700;min-width:64px;padding-bottom:8px">필터</span>'+sel('market','국가')+sel('objective','캠페인목표')+sel('brand','브랜드')+'</div>';
+    var box=document.createElement('div'); box.id='bmCtl'; box.style.cssText='border:1px solid #E5E7EB;padding:14px 16px;margin-bottom:16px;background:#FAFAFA'; box.innerHTML=dimRow+fRow;
+    anchor.parentNode.insertBefore(box, anchor);
+    box.querySelectorAll('select[data-fk]').forEach(function(s){ s.onchange=function(){ curFilters[s.dataset.fk]=s.value; if(STATE.pg==='B')reloadAll(); }; });
+  }
+  window.bmSetDim=function(d){ curDim=d; document.querySelectorAll('#bmCtl button[data-dim]').forEach(function(x){x.className='dbtn';}); var b=document.querySelector('#bmCtl button[data-dim="'+d+'"]'); if(b)b.className='dbtn pri'; if(STATE.pg==='B')reloadAll(); };
+  function refreshControls(){ var media=(typeof STATE!=='undefined'&&STATE.media)||'G'; return fetch(API+'/meta/options?media='+media).then(function(r){return r.json();}).then(function(o){ window._bmOptions=o; buildControlBar(); }).catch(function(){ buildControlBar(); }); }
   function setLoading(on){
     var el=document.getElementById('bmLoading');
     if(!el){ el=document.createElement('div'); el.id='bmLoading'; el.style.cssText='display:none;position:fixed;inset:0;background:rgba(255,255,255,.55);z-index:5000;align-items:center;justify-content:center';
@@ -1087,15 +1103,10 @@ function sugClick(btn,q){
         b.setAttribute('onclick',"swM('"+x[0]+"')"); tabs.appendChild(b);
       });
     }
-    // 작동 안 하는 필터 숨김 (실연동 불가 차원)
+    // 기존 정적 필터(기간 제외) 전부 숨김 → 새 컨트롤바(기준차원+필터)로 대체
     document.querySelectorAll('#pgBM .fg').forEach(function(fg){
-      var l=fg.querySelector('.flbl'); if(!l)return; var t=l.textContent.trim();
-      if(['국가','광고 상품','라인아이템 유형','디바이스','영상 길이','캠페인 목표','노출 위치','광고 형태','구매 유형','캠페인 유형','소재 유형','소재 형태','입찰 방식'].indexOf(t)>=0) fg.style.display='none';
-      // 업종 → 브랜드 필터로 전환
-      if(t==='업종'){
-        l.textContent='브랜드';
-        var sel=fg.querySelector('select'); if(sel){ sel.id='bmBrand'; sel.innerHTML='<option value="">전체</option><option value="hyundai">현대(Hyundai)</option><option value="kia">기아(Kia)</option>'; sel.onchange=function(){ if(STATE.pg==='B') reloadAll(); }; }
-      }
+      var l=fg.querySelector('.flbl'); var t=l?l.textContent.trim():'';
+      if(t.indexOf('기간')<0) fg.style.display='none';
     });
     // 통화: 선택 시 환산 재조회 (마트 KRW → 선택 통화)
     document.querySelectorAll('#pgBM input[name="bm_cur"]').forEach(function(r){
@@ -1106,9 +1117,7 @@ function sugClick(btn,q){
     var ksl=document.getElementById('kpiSelL');
     if(ksl){ var row=ksl.parentNode; while(row && row.id!=='pgBM' && !row.querySelector('input[name="ng"]')) row=row.parentNode; if(row && row.id!=='pgBM') row.style.display='none'; }
     // 섹션 라벨 변경
-    var s1=findByText('#pgBM *','업종별 Summary'); if(s1) s1.textContent='권역별 벤치마크 (캠페인 분포 4분위)';
-    // 단가/Rate 지표 셀렉터 행 숨김(목업 KPI) → 대신 CPM/CPC/CTR 토글
-    document.querySelectorAll('#pgBM .flbl, #pgBM span').forEach(function(el){ var t=(el.textContent||'').trim(); if(t==='Rate 지표'||t==='단가 지표'){ var row=el.closest('div'); } });
+    var s1=findByText('#pgBM *','업종별 Summary'); if(s1) s1.textContent='벤치마크 (캠페인 분포 4분위)';
     // '지표 추가' 버튼 숨김 (마트에 확장지표 없음 → 가짜 방지)
     document.querySelectorAll('#pgBM button').forEach(function(b){ if((b.textContent||'').indexOf('지표 추가')>=0) b.style.display='none'; });
     // KPI 토글 주입 (요약표 위)
@@ -1116,7 +1125,7 @@ function sugClick(btn,q){
     if(sumTwrap && !document.getElementById('bmKpiTgl')){
       var bar=document.createElement('div'); bar.id='bmKpiTgl'; bar.style.cssText='display:flex;gap:8px;margin-bottom:12px;align-items:center';
       var lab=document.createElement('span'); lab.textContent='벤치마크 지표:'; lab.style.cssText='font-size:12px;color:#767676;font-weight:600;margin-right:4px'; bar.appendChild(lab);
-      ['cpm','cpc','ctr'].forEach(function(k){
+      ['cpm','cpc','ctr','cvr'].forEach(function(k){
         var b=document.createElement('button'); b.className='dbtn'+(k==='cpm'?' pri':''); b.textContent=KU[k]; b.dataset.k=k;
         b.onclick=function(){ curKpi=k; document.querySelectorAll('#bmKpiTgl button').forEach(function(x){x.className='dbtn';}); b.className='dbtn pri'; renderBench(); renderCharts(); };
         bar.appendChild(b);
@@ -1129,9 +1138,9 @@ function sugClick(btn,q){
     var r=range(), media=(typeof STATE!=='undefined'&&STATE.media)||'G';
     setLoading(true);
     try{
-      var res=await fetch(API+'/benchmark?media='+encodeURIComponent(media)+'&date_from='+r.df+'&date_to='+r.dt+'&brand='+encodeURIComponent(curBrand())+'&currency='+curCur());
+      var res=await fetch(API+'/benchmark?media='+encodeURIComponent(media)+'&date_from='+r.df+'&date_to='+r.dt+'&currency='+curCur()+filterQS());
       window.BM_DATA=await res.json();
-      if(BM_DATA.meta&&BM_DATA.meta.available===false&&window.toast) toast(BM_DATA.meta.note||'해당 매체 데이터가 아직 없습니다.','ℹ');
+      if(BM_DATA.meta&&BM_DATA.meta.available===false&&window.toast) toast(BM_DATA.meta.note||'해당 조건의 데이터가 없습니다.','ℹ');
     }catch(e){ window.BM_DATA={benchmark:[],detail:[],charts:null,meta:{available:false}}; if(window.toast) toast('데이터 조회 실패','⚠'); }
     finally{ setLoading(false); }
   }
@@ -1142,7 +1151,7 @@ function sugClick(btn,q){
     var tbl=document.querySelector('#pgBM .twrap table'); if(!tbl||!window.BM_DATA) return;
     var thead=tbl.querySelector('thead tr'), tbody=tbl.querySelector('tbody'); if(!thead||!tbody) return;
     var u=KU[curKpi];
-    var cols=['권역','캠페인수',u+' 평균',u+' 중앙값',u+' 상위25%',u+' 상위10%','지출'];
+    var cols=[dimLabel(),'캠페인수',u+' 평균',u+' 중앙값',u+' 상위25%',u+' 상위10%','지출'];
     thead.innerHTML=''; cols.forEach(function(c){ var th=document.createElement('th'); th.textContent=c; thead.appendChild(th); });
     tbody.innerHTML='';
     (BM_DATA.benchmark||[]).forEach(function(r){
@@ -1158,7 +1167,7 @@ function sugClick(btn,q){
   function renderDet(){
     if(!window.BM_DATA) return;
     var thead=document.getElementById('detHead'), tbody=document.getElementById('detBody'); if(!thead||!tbody) return;
-    var cols=[['period','기간'],['name','권역'],['spend','지출예산'],['imps','노출수'],['clicks','클릭수'],['cpm','CPM'],['cpc','CPC'],['ctr','CTR']];
+    var cols=[['period','기간'],['name',dimLabel()],['spend','지출예산'],['imps','노출수'],['clicks','클릭수'],['cpm','CPM'],['cpc','CPC'],['ctr','CTR']];
     thead.innerHTML=''; cols.forEach(function(c){ var th=document.createElement('th'); th.textContent=c[1]; thead.appendChild(th); });
     var n=parseInt((document.getElementById('lsz')||{}).value)||20;
     var rows=(BM_DATA.detail||[]).slice(0,n);
@@ -1169,7 +1178,8 @@ function sugClick(btn,q){
   // 실데이터 차트: 좌 월별추세 / 우 권역비교(중앙값)
   function renderCharts(){
     if(!window.BM_DATA||!BM_DATA.charts||typeof Chart==='undefined') return;
-    var ch=BM_DATA.charts, lbl=KU[curKpi]+(curKpi==='ctr'?' (%)':' (₩)');
+    var isP=(curKpi==='ctr'||curKpi==='cvr'), lbl=KU[curKpi]+(isP?' (%)':' ('+((BM_DATA.meta&&BM_DATA.meta.symbol)||'₩')+')');
+    var ch=BM_DATA.charts;
     var pal=['#4F46E5','#7C3AED','#EC4899','#10B981','#F59E0B','#EF4444','#3B82F6','#06B6D4','#8B5CF6','#F97316'];
     var c1=document.getElementById('sumChart');
     if(c1){ if(STATE.charts.sum)STATE.charts.sum.destroy();
@@ -1178,11 +1188,13 @@ function sugClick(btn,q){
     var c2=document.getElementById('indChart');
     if(c2){ if(STATE.charts.ind)STATE.charts.ind.destroy();
       STATE.charts.ind=new Chart(c2,{type:'bar',data:{labels:ch.compare.labels,datasets:[{label:lbl,data:ch.compare[curKpi],backgroundColor:pal,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{grid:{color:'#F3F4F6'}}}}}); }
-    var lr=document.getElementById('kpiLblR'); if(lr)lr.textContent='권역별 '+KU[curKpi]+' 벤치마크(중앙값)';
+    var lr=document.getElementById('kpiLblR'); if(lr)lr.textContent=dimLabel()+'별 '+KU[curKpi]+' 벤치마크(중앙값)';
   }
   function renderAll(){ renderBench(); renderDet(); renderCharts(); }
   function reloadAll(){ bmLoad().then(renderAll); }
   window.reloadAll=reloadAll;
+  function enterBM(){ injectUI(); refreshControls(); reloadAll(); }
+  window.enterBM=enterBM;
 
   // 원본 함수 오버라이드 → 실데이터 렌더로 연결
   window.renderSumTbl=renderBench; window.renderDetTbl=renderDet;
@@ -1257,17 +1269,17 @@ function sugClick(btn,q){
   }
 
   var _goPg=window.goPg;
-  window.goPg=function(p){ _goPg(p); if(p==='B'){ injectUI(); reloadAll(); } if(p==='A'){ injectAI(); } };
+  window.goPg=function(p){ _goPg(p); if(p==='B'){ enterBM(); } if(p==='A'){ injectAI(); } };
   window.runSearch=function(){ if(window.toast)toast('데이터를 검색하고 있습니다...'); reloadAll(); setTimeout(function(){ if(window.toast)toast('검색이 완료되었습니다.'); },300); };
   var _swM=window.swM;
-  if(_swM){ window.swM=function(m){ _swM(m); if(typeof STATE!=='undefined'&&STATE.pg==='B') reloadAll(); }; }
+  if(_swM){ window.swM=function(m){ _swM(m); if(typeof STATE!=='undefined'&&STATE.pg==='B'){ refreshControls(); reloadAll(); } }; }
 
   // AI 채팅
   async function aiAsk(q){
     addMsg('chatbox','user',q); showTyping('chatbox');
     var media=(typeof STATE!=='undefined'&&STATE.media)||'G', r=range();
     try{
-      var res=await fetch(API+'/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q,media:media,date_from:r.df,date_to:r.dt,brand:curBrand()})});
+      var res=await fetch(API+'/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q,media:media,dim:curDim,date_from:r.df,date_to:r.dt,currency:curCur(),market:curFilters.market,objective:curFilters.objective,brand:curFilters.brand,industry:curFilters.industry})});
       var d=await res.json(); hideTyping('chatbox'); addMsg('chatbox','ai',d.reply||'(응답 없음)');
     }catch(e){ hideTyping('chatbox'); addMsg('chatbox','ai','(오류) 분석 서버에 연결하지 못했습니다.'); }
     if(window.showSuggestions) showSuggestions('chatbox',q);

@@ -1,33 +1,34 @@
 """
-BigQuery 데이터 계층 — 벤치마크 전용 마트만 읽어 프론트 계약 모양으로 반환.
+BigQuery 데이터 계층 — 벤치마크 전용 마트만 읽어 다차원 4분위 벤치마크 반환.
 
-⚠️ 로우데이터·통합층 직접 접근 금지. 오직 `apac_kr_benchmark.*` 만 소비.
+⚠️ 로우데이터·통합층 직접 접근 금지. 오직 `apac_kr_benchmark.bm_campaign_monthly` 만 소비.
 
-데이터 현실상 1차 축 = 권역(market). 핵심 산출:
-  benchmark : 권역별 4분위(CPM/CPC/CTR 평균·중앙·상위25%·상위10% + 캠페인수)  ← FEATURES 의도
-  detail    : 월×권역 집계 (₩·콤마·% 표시문자열)
-  charts    : trend(월별 추세) + compare(권역 비교)  ← 실데이터
+기준차원(dim) × 필터(media·market·objective·brand·industry·기간) 조합으로
+캠페인 KPI 분포(평균·중앙·상위25%·상위10%)를 동적 계산. KPI: CPM/CPC/CTR/CVR.
 """
 import os
 from functools import lru_cache
 from google.cloud import bigquery
 
 PROJECT = "innocean-perf-apac-kr"
-FACT = f"`{PROJECT}.apac_kr_benchmark.bm_fact_monthly`"
-BENCH = f"`{PROJECT}.apac_kr_benchmark.bm_benchmark`"
+TBL = f"`{PROJECT}.apac_kr_benchmark.bm_campaign_monthly`"
 LOCATION = "asia-northeast3"
 
 MEDIA_NAME = {"G": "Google", "M": "Meta", "N": "Naver", "K": "Kakao", "D": "DV360", "T": "TikTok"}
-KPIS = ("cpm", "cpc", "ctr")
-KPI_LOWER_BETTER = {"cpm": True, "cpc": True, "ctr": False}
+KPIS = ("cpm", "cpc", "ctr", "cvr")
+KPI_LOWER_BETTER = {"cpm": True, "cpc": True, "ctr": False, "cvr": False}
 
-# 통화: (1단위 = N KRW, 표시기호). 마트는 KRW 기준 → 선택 통화로 환산.
+# 기준차원 화이트리스트 (SQL 컬럼명 안전)
+DIMS = {"market": "권역", "objective": "캠페인목표", "brand": "브랜드",
+        "industry": "업종", "agency": "대행사"}
+# 필터 화이트리스트
+FILTERS = {"market", "objective", "brand", "industry", "agency"}
+
 CURRENCY = {
     "KRW": (1.0, "₩"), "USD": (1384.72, "$"), "EUR": (1498.35, "€"),
     "JPY": (9.52, "¥"), "CNY": (191.25, "¥"), "INR": (16.63, "₹"),
 }
 
-# 권역 코드 → 한글명
 MARKET_NAME = {
     "KR": "한국", "IN": "인도", "BR": "브라질", "ES": "스페인", "SA": "사우디",
     "NL": "네덜란드", "JP": "일본", "PH": "필리핀", "ID": "인도네시아", "AU": "호주",
@@ -35,13 +36,19 @@ MARKET_NAME = {
     "IT": "이탈리아", "US": "미국", "FR": "프랑스", "IQ": "이라크", "QA": "카타르",
     "MY": "말레이시아", "VN": "베트남", "SG": "싱가포르", "MX": "멕시코", "CL": "칠레",
     "PE": "페루", "CO": "콜롬비아", "ZA": "남아공", "EG": "이집트", "TR": "튀르키예",
-    "RU": "러시아", "PL": "폴란드", "CA": "캐나다", "KW": "쿠웨이트", "OM": "오만",
-    "MA": "모로코", "KZ": "카자흐스탄", "UA": "우크라이나",
+    "PL": "폴란드", "CA": "캐나다", "KW": "쿠웨이트", "OM": "오만", "MA": "모로코",
+    "KZ": "카자흐스탄", "UA": "우크라이나", "NO": "노르웨이", "TUN": "튀니지",
 }
+BRAND_NAME = {"hyundai": "현대", "kia": "기아", "genesis": "제네시스",
+              "other": "기타", "innocean_internal": "이노션내부"}
 
 
-def mkt_name(code):
-    return MARKET_NAME.get(code, code)
+def dim_name(dim, code):
+    if dim == "market":
+        return MARKET_NAME.get(code, code)
+    if dim == "brand":
+        return BRAND_NAME.get(code, code)
+    return code
 
 
 for _k in [os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", ""),
@@ -58,10 +65,6 @@ def _client():
     return bigquery.Client(project=PROJECT, location=LOCATION)
 
 
-def _won(v):
-    return "₩" + format(int(round(v or 0)), ",")
-
-
 def _num(v):
     return format(int(round(v or 0)), ",")
 
@@ -70,125 +73,126 @@ def _pct(v):
     return f"{(v or 0):.2f}%"
 
 
-def _kpi_fmt(kpi, v):
-    return _pct(v) if kpi == "ctr" else _won(v)
-
-
-def get_benchmark(media="G", date_from="2025-01-01", date_to="2026-12-31", brand=None, currency="KRW"):
-    p0, p1 = date_from[:7], date_to[:7]
-    cl = _client()
-    rate, sym = CURRENCY.get((currency or "KRW").upper(), CURRENCY["KRW"])
-    def money(v):
-        return sym + format(int(round((v or 0) / rate)), ",")
-    def kfmt(kpi, v):
-        return _pct(v) if kpi == "ctr" else money(v)
+def _filter_clauses(media, p0, p1, filters):
+    clauses = ["media=@media", "period BETWEEN @p0 AND @p1"]
     params = [
         bigquery.ScalarQueryParameter("media", "STRING", media),
         bigquery.ScalarQueryParameter("p0", "STRING", p0),
         bigquery.ScalarQueryParameter("p1", "STRING", p1),
     ]
-    brand_f = ""
-    if brand and brand not in ("", "all", "전체"):
-        brand_f = "AND brand = @brand"
-        params.append(bigquery.ScalarQueryParameter("brand", "STRING", brand))
+    for k, v in (filters or {}).items():
+        if k in FILTERS and v not in (None, "", "all", "전체"):
+            clauses.append(f"{k}=@f_{k}")
+            params.append(bigquery.ScalarQueryParameter(f"f_{k}", "STRING", v))
+    return " AND ".join(clauses), params
+
+
+def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026-12-31",
+                  currency="KRW", **filters):
+    if dim not in DIMS:
+        dim = "market"
+    p0, p1 = date_from[:7], date_to[:7]
+    rate, sym = CURRENCY.get((currency or "KRW").upper(), CURRENCY["KRW"])
+
+    def money(v):
+        return sym + format(int(round((v or 0) / rate)), ",")
+
+    def qf(kpi, v):   # KPI 표시포맷 (통화 환산)
+        if kpi in ("ctr", "cvr"):
+            return _pct(v)
+        return money(v)
+
+    cl = _client()
+    where, params = _filter_clauses(media, p0, p1, filters)
     qcfg = bigquery.QueryJobConfig(query_parameters=params)
 
-    # 1) 권역별 집계 (fact) — 규모/평균
-    agg = {r["market"]: r for r in cl.query(f"""
-        SELECT market, SUM(impressions) imp, SUM(clicks) clk, SUM(cost) cost
-        FROM {FACT}
-        WHERE media=@media AND period BETWEEN @p0 AND @p1 {brand_f}
-        GROUP BY market HAVING imp > 0
-    """, job_config=qcfg).result()}
-
-    if not agg:
+    # 1) 기준차원별 4분위 + 합계 (캠페인 단위 분포)
+    bench_sql = f"""
+    WITH camp AS (
+      SELECT {dim} AS dim, campaign_id,
+        SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv
+      FROM {TBL} WHERE {where}
+      GROUP BY dim, campaign_id HAVING imp >= 1000 AND clk > 0
+    ),
+    ck AS (
+      SELECT dim, imp, clk, cost,
+        SAFE_DIVIDE(cost,imp)*1000 cpm, SAFE_DIVIDE(cost,clk) cpc,
+        SAFE_DIVIDE(clk,imp)*100 ctr, SAFE_DIVIDE(conv,clk)*100 cvr
+      FROM camp
+    )
+    SELECT dim, COUNT(*) n, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost,
+      AVG(cpm) cpm_avg, APPROX_QUANTILES(cpm,100)[OFFSET(50)] cpm_median,
+      APPROX_QUANTILES(cpm,100)[OFFSET(25)] cpm_top25, APPROX_QUANTILES(cpm,100)[OFFSET(10)] cpm_top10,
+      AVG(cpc) cpc_avg, APPROX_QUANTILES(cpc,100)[OFFSET(50)] cpc_median,
+      APPROX_QUANTILES(cpc,100)[OFFSET(25)] cpc_top25, APPROX_QUANTILES(cpc,100)[OFFSET(10)] cpc_top10,
+      AVG(ctr) ctr_avg, APPROX_QUANTILES(ctr,100)[OFFSET(50)] ctr_median,
+      APPROX_QUANTILES(ctr,100)[OFFSET(75)] ctr_top25, APPROX_QUANTILES(ctr,100)[OFFSET(90)] ctr_top10,
+      AVG(cvr) cvr_avg, APPROX_QUANTILES(cvr,100)[OFFSET(50)] cvr_median,
+      APPROX_QUANTILES(cvr,100)[OFFSET(75)] cvr_top25, APPROX_QUANTILES(cvr,100)[OFFSET(90)] cvr_top10
+    FROM ck WHERE dim IS NOT NULL GROUP BY dim HAVING n >= 3
+    ORDER BY cost DESC
+    """
+    rows = [dict(r) for r in cl.query(bench_sql, job_config=qcfg).result()]
+    if not rows:
         return {"benchmark": [], "detail": [], "charts": None, "meta": {
             "media": media, "media_name": MEDIA_NAME.get(media, media), "available": False,
-            "note": f"{MEDIA_NAME.get(media, media)} 데이터가 아직 없습니다 (네이버/카카오 수집 대기 중).",
+            "dim": dim, "note": f"{MEDIA_NAME.get(media, media)}·해당 조건의 데이터가 없습니다.",
         }}
 
-    # 2) 4분위 벤치마크 (bench, 기간 무관 전체 분포)
-    bench_rows = {r["market"]: dict(r) for r in cl.query(
-        f"SELECT * FROM {BENCH} WHERE media=@media",
-        job_config=bigquery.QueryJobConfig(query_parameters=[
-            bigquery.ScalarQueryParameter("media", "STRING", media)])).result()}
-
     benchmark = []
-    for mk in sorted(agg, key=lambda k: -(agg[k]["cost"] or 0)):
-        a = agg[mk]
-        imp, clk, cost = a["imp"] or 0, a["clk"] or 0, a["cost"] or 0.0
-        b = bench_rows.get(mk, {})
-        row = {
-            "market": mk, "name": mkt_name(mk),
-            "n": b.get("n_campaigns", 0),
-            "imp": _num(imp), "spend": money(cost),
-            "cpm": money(cost / imp * 1000 if imp else 0),
-            "cpc": money(cost / clk if clk else 0),
-            "ctr": _pct(clk / imp * 100 if imp else 0),
-        }
-        # 4분위 (각 KPI: 평균/중앙/상위25/상위10) — 표시문자열
-        for k in KPIS:
-            row[k + "_q"] = {
-                "avg": kfmt(k, b.get(f"{k}_avg")),
-                "median": kfmt(k, b.get(f"{k}_median")),
-                "top25": kfmt(k, b.get(f"{k}_top25")),
-                "top10": kfmt(k, b.get(f"{k}_top10")),
-            }
-        benchmark.append(row)
-
-    # Total 행
-    timp = sum(a["imp"] or 0 for a in agg.values())
-    tclk = sum(a["clk"] or 0 for a in agg.values())
-    tcost = sum(a["cost"] or 0.0 for a in agg.values())
-    total = {"market": "TOTAL", "name": "전체", "n": sum(b.get("n_campaigns", 0) for b in bench_rows.values()),
-             "imp": _num(timp), "spend": money(tcost),
-             "cpm": money(tcost / timp * 1000 if timp else 0),
-             "cpc": money(tcost / tclk if tclk else 0),
-             "ctr": _pct(tclk / timp * 100 if timp else 0), "cls": "ttl"}
-
-    # 3) detail (월×권역)
-    detail = []
-    for r in cl.query(f"""
-        SELECT period, market, SUM(impressions) imp, SUM(clicks) clk, SUM(cost) cost
-        FROM {FACT}
-        WHERE media=@media AND period BETWEEN @p0 AND @p1 {brand_f}
-        GROUP BY period, market HAVING imp > 0
-        ORDER BY period DESC, cost DESC
-    """, job_config=qcfg).result():
+    tot = [0, 0, 0.0, 0]
+    for r in rows:
         imp, clk, cost = r["imp"] or 0, r["clk"] or 0, r["cost"] or 0.0
-        detail.append({
-            "period": r["period"], "market": r["market"], "name": mkt_name(r["market"]),
-            "spend": money(cost), "imps": _num(imp), "clicks": _num(clk),
-            "cpm": money(cost / imp * 1000 if imp else 0),
-            "cpc": money(cost / clk if clk else 0),
-            "ctr": _pct(clk / imp * 100 if imp else 0),
-        })
+        tot[0] += imp; tot[1] += clk; tot[2] += cost; tot[3] += r["n"]
+        row = {"dim": r["dim"], "name": dim_name(dim, r["dim"]), "n": r["n"],
+               "imp": _num(imp), "spend": money(cost),
+               "cpm": money(cost / imp * 1000 if imp else 0),
+               "cpc": money(cost / clk if clk else 0),
+               "ctr": _pct(clk / imp * 100 if imp else 0),
+               "cvr": _pct(0)}
+        for k in KPIS:
+            row[k + "_q"] = {q: qf(k, r.get(f"{k}_{q}")) for q in ("avg", "median", "top25", "top10")}
+        benchmark.append(row)
+    total = {"dim": "TOTAL", "name": "전체", "n": tot[3], "imp": _num(tot[0]), "spend": money(tot[2]),
+             "cpm": money(tot[2] / tot[0] * 1000 if tot[0] else 0),
+             "cpc": money(tot[2] / tot[1] if tot[1] else 0),
+             "ctr": _pct(tot[1] / tot[0] * 100 if tot[0] else 0), "cvr": _pct(0), "cls": "ttl"}
 
-    # 4) charts — trend(월별, 전체 CPM/CPC/CTR) + compare(권역별 median CPM)
+    # 2) detail (월 × 기준차원)
+    detail = []
+    det_sql = f"""
+      SELECT period, {dim} AS dim, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost
+      FROM {TBL} WHERE {where} GROUP BY period, dim HAVING imp > 0
+      ORDER BY period DESC, cost DESC
+    """
+    for r in cl.query(det_sql, job_config=qcfg).result():
+        imp, clk, cost = r["imp"] or 0, r["clk"] or 0, r["cost"] or 0.0
+        detail.append({"period": r["period"], "name": dim_name(dim, r["dim"]),
+                       "spend": money(cost), "imps": _num(imp), "clicks": _num(clk),
+                       "cpm": money(cost / imp * 1000 if imp else 0),
+                       "cpc": money(cost / clk if clk else 0),
+                       "ctr": _pct(clk / imp * 100 if imp else 0)})
+
+    # 3) charts: trend(월별, 조건 전체) + compare(기준차원별 중앙값)
     months = sorted({d["period"] for d in detail})
-    trend = {"labels": months, "cpm": [], "cpc": [], "ctr": []}
-    mtot = {m: [0, 0, 0.0] for m in months}
-    for r in cl.query(f"""
-        SELECT period, SUM(impressions) imp, SUM(clicks) clk, SUM(cost) cost
-        FROM {FACT} WHERE media=@media AND period BETWEEN @p0 AND @p1 {brand_f}
-        GROUP BY period
-    """, job_config=qcfg).result():
-        mtot[r["period"]] = [r["imp"] or 0, r["clk"] or 0, r["cost"] or 0.0]
+    trend = {"labels": months, "cpm": [], "cpc": [], "ctr": [], "cvr": []}
+    mt = {m: [0, 0, 0.0, 0.0] for m in months}
+    for r in cl.query(f"SELECT period, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv "
+                      f"FROM {TBL} WHERE {where} GROUP BY period", job_config=qcfg).result():
+        mt[r["period"]] = [r["imp"] or 0, r["clk"] or 0, r["cost"] or 0.0, r["conv"] or 0.0]
     for m in months:
-        imp, clk, cost = mtot[m]
+        imp, clk, cost, conv = mt[m]
         trend["cpm"].append(round(cost / imp * 1000 / rate, 1) if imp else 0)
         trend["cpc"].append(round(cost / clk / rate, 1) if clk else 0)
         trend["ctr"].append(round(clk / imp * 100, 2) if imp else 0)
-    # compare: 상위 10개 권역의 median CPM/CPC/CTR (벤치마크 분포)
+        trend["cvr"].append(round(conv / clk * 100, 2) if clk else 0)
     top = benchmark[:10]
-    def cv(v):
-        return round((v or 0) / rate, 1)
-    compare = {
-        "labels": [b["name"] for b in top],
-        "cpm": [cv(bench_rows.get(b["market"], {}).get("cpm_median")) for b in top],
-        "cpc": [cv(bench_rows.get(b["market"], {}).get("cpc_median")) for b in top],
-        "ctr": [bench_rows.get(b["market"], {}).get("ctr_median", 0) for b in top],
-    }
+    compare = {"labels": [b["name"] for b in top]}
+    for k in KPIS:
+        if k in ("ctr", "cvr"):
+            compare[k] = [next((r[f"{k}_median"] for r in rows if r["dim"] == b["dim"]), 0) for b in top]
+        else:
+            compare[k] = [round((next((r[f"{k}_median"] for r in rows if r["dim"] == b["dim"]), 0) or 0) / rate, 1) for b in top]
 
     return {
         "benchmark": [total] + benchmark,
@@ -196,26 +200,42 @@ def get_benchmark(media="G", date_from="2025-01-01", date_to="2026-12-31", brand
         "charts": {"trend": trend, "compare": compare},
         "meta": {
             "media": media, "media_name": MEDIA_NAME.get(media, media), "available": True,
-            "markets": len(benchmark), "rows": len(detail),
+            "dim": dim, "dim_label": DIMS[dim], "n_dim": len(benchmark), "rows": len(detail),
             "date_from": date_from, "date_to": date_to,
             "currency": (currency or "KRW").upper(), "symbol": sym,
-            "dimension": "market", "note": "권역(market)별 벤치마크. 데이터 ~99% 현대·기아 자동차.",
+            "note": "다차원 벤치마크. 데이터 ~99% 현대·기아 자동차.",
         },
     }
 
 
-def get_summary_context(media="G", date_from="2025-01-01", date_to="2026-12-31", brand=None):
-    """AI 채팅이 인용할 실데이터 요약."""
-    d = get_benchmark(media, date_from, date_to, brand)
+@lru_cache(maxsize=8)
+def get_filter_options(media="G"):
+    """필터 드롭다운용 — 매체별 차원 distinct 값."""
+    cl = _client()
+    out = {}
+    for col in ("market", "objective", "brand", "industry", "agency"):
+        rows = cl.query(
+            f"SELECT {col} v, SUM(cost) s FROM {TBL} WHERE media=@m AND {col} IS NOT NULL "
+            f"GROUP BY 1 ORDER BY s DESC LIMIT 50",
+            job_config=bigquery.QueryJobConfig(query_parameters=[
+                bigquery.ScalarQueryParameter("m", "STRING", media)])).result()
+        out[col] = [{"v": r["v"], "name": dim_name(col, r["v"])} for r in rows if r["v"]]
+    return out
+
+
+def get_summary_context(media="G", dim="market", date_from="2025-01-01", date_to="2026-12-31",
+                        currency="KRW", **filters):
+    d = get_benchmark(media, dim, date_from, date_to, currency, **filters)
     if not d["meta"]["available"]:
         return d["meta"]["note"]
-    lines = [f"[{d['meta']['media_name']} 권역별 벤치마크 {date_from[:7]}~{date_to[:7]} "
-             f"(CPM/CPC/CTR 중앙값·상위10%, 캠페인수)]"]
-    for r in d["benchmark"][:12]:
+    lbl = d["meta"]["dim_label"]
+    lines = [f"[{d['meta']['media_name']} {lbl}별 벤치마크 {date_from[:7]}~{date_to[:7]} "
+             f"(CPM/CPC/CTR/CVR 중앙값·상위10%, 캠페인수)]"]
+    for r in d["benchmark"][:14]:
         if r.get("cls") == "ttl":
             lines.append(f"- 전체: 노출 {r['imp']}, CPM {r['cpm']}, CTR {r['ctr']}, 지출 {r['spend']}")
             continue
-        cpm = r["cpm_q"]; ctr = r["ctr_q"]
+        cpm, ctr = r["cpm_q"], r["ctr_q"]
         lines.append(f"- {r['name']}(캠페인 {r['n']}): CPM 중앙 {cpm['median']}/상위10% {cpm['top10']}, "
-                     f"CTR 중앙 {ctr['median']}/상위10% {ctr['top10']}, 지출 {r['spend']}")
+                     f"CTR 중앙 {ctr['median']}, 지출 {r['spend']}")
     return "\n".join(lines)

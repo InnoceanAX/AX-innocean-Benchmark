@@ -60,6 +60,39 @@ def industry_of(*texts: str) -> str:
     return "기타"
 
 
+# ── 캠페인 목표/유형 (campaign_name 파싱) ──────────────────────────
+# 실무자 친화 버킷. 순서=우선매칭(채널성격 먼저, 목표 다음). 대소문자 무시.
+OBJECTIVES = ["영상조회", "검색", "퍼포먼스", "트래픽", "앱", "브랜딩", "기타"]
+_OBJECTIVE_RULES = [
+    ("영상조회", ["vvc", "trueview", "_video", "video_", "youtube", "_yt_", "vtr", "_view", "조회"]),
+    ("검색", ["search", "_sem", "_rsa", "keyword", "pmax", "검색"]),
+    ("퍼포먼스", ["lead", "conv", "_cov", "sales", "purchase", "perf", "conquer",
+               "demand_gen", "demandgen", "전환", "리드"]),
+    ("트래픽", ["trf", "traffic", "_lpv", "click", "트래픽"]),
+    ("앱", ["_app_", "install", "앱설치"]),
+    ("브랜딩", ["brand", "awareness", "reach", "_anc", "nsn", "브랜드", "인지"]),
+]
+
+
+def objective_of(campaign_name: str) -> str:
+    blob = (campaign_name or "").lower()
+    if not blob.strip():
+        return "기타"
+    for obj, kws in _OBJECTIVE_RULES:
+        for kw in kws:
+            if kw in blob:
+                return obj
+    return "기타"
+
+
+def objective_case_sql(text_expr: str) -> str:
+    whens = []
+    for obj, kws in _OBJECTIVE_RULES:
+        likes = " OR ".join([f"LOWER({text_expr}) LIKE '%{kw}%'" for kw in kws])
+        whens.append(f"WHEN {likes} THEN '{obj}'")
+    return "CASE\n      " + "\n      ".join(whens) + "\n      ELSE '기타'\n    END"
+
+
 # BigQuery SQL 안에서 업종을 만들기 위한 CASE 식 생성기.
 # (raw 텍스트 컬럼 표현식을 받아 업종 STRING 을 반환하는 SQL 조각)
 def industry_case_sql(text_expr: str) -> str:
