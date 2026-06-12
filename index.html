@@ -1058,7 +1058,7 @@ function sugClick(btn,q){
 (function(){
   var API=(window.API_CONFIG&&API_CONFIG.baseUrl)||'/api/v1';
   var curKpi='cpm', curDim='market', curFilters={market:'',objective:'',brand:'',industry:''};
-  var KU={cpm:'CPM',cpc:'CPC',ctr:'CTR',cvr:'CVR'};
+  var KU={cpm:'CPM',cpc:'CPC',ctr:'CTR',cvr:'CVR',roas:'ROAS'};
   var DIMS=[['market','권역'],['objective','캠페인목표'],['brand','브랜드'],['industry','업종']];
   window.BM_DATA=null; window._bmOptions=null;
   if(typeof window.showSuggestions!=='function'){ window.showSuggestions=function(){}; }
@@ -1136,12 +1136,7 @@ function sugClick(btn,q){
     if(sumTwrap && !document.getElementById('bmKpiTgl')){
       var bar=document.createElement('div'); bar.id='bmKpiTgl'; bar.style.cssText='display:flex;gap:8px;margin-bottom:12px;align-items:center';
       var lab=document.createElement('span'); lab.textContent='벤치마크 지표:'; lab.style.cssText='font-size:12px;color:#767676;font-weight:600;margin-right:4px'; bar.appendChild(lab);
-      ['cpm','cpc','ctr','cvr'].forEach(function(k){
-        var b=document.createElement('button'); b.className='dbtn'+(k==='cpm'?' pri':''); b.textContent=KU[k]; b.dataset.k=k;
-        b.onclick=function(){ curKpi=k; document.querySelectorAll('#bmKpiTgl button').forEach(function(x){x.className='dbtn';}); b.className='dbtn pri'; renderBench(); renderCharts(); };
-        bar.appendChild(b);
-      });
-      sumTwrap.parentNode.insertBefore(bar, sumTwrap);
+      sumTwrap.parentNode.insertBefore(bar, sumTwrap);   // 버튼은 buildKpiToggle()이 데이터 기준으로 채움(ROAS 가용시 추가)
     }
   }
 
@@ -1188,7 +1183,7 @@ function sugClick(btn,q){
   // 실데이터 차트: 좌 월별추세 / 우 권역비교(중앙값)
   function renderCharts(){
     if(!window.BM_DATA||!BM_DATA.charts||typeof Chart==='undefined') return;
-    var isP=(curKpi==='ctr'||curKpi==='cvr'), lbl=KU[curKpi]+(isP?' (%)':' ('+((BM_DATA.meta&&BM_DATA.meta.symbol)||'₩')+')');
+    var lbl=(curKpi==='ctr'||curKpi==='cvr')?KU[curKpi]+' (%)':(curKpi==='roas'?KU[curKpi]+' (배)':KU[curKpi]+' ('+((BM_DATA.meta&&BM_DATA.meta.symbol)||'₩')+')');
     var ch=BM_DATA.charts;
     var pal=['#4F46E5','#7C3AED','#EC4899','#10B981','#F59E0B','#EF4444','#3B82F6','#06B6D4','#8B5CF6','#F97316'];
     var c1=document.getElementById('sumChart');
@@ -1200,7 +1195,18 @@ function sugClick(btn,q){
       STATE.charts.ind=new Chart(c2,{type:'bar',data:{labels:ch.compare.labels,datasets:[{label:lbl,data:ch.compare[curKpi],backgroundColor:pal,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{grid:{color:'#F3F4F6'}}}}}); }
     var lr=document.getElementById('kpiLblR'); if(lr)lr.textContent=dimLabel()+'별 '+KU[curKpi]+' 벤치마크(중앙값)';
   }
-  function renderAll(){ renderBench(); renderDet(); renderCharts(); }
+  function buildKpiToggle(){
+    var bar=document.getElementById('bmKpiTgl'); if(!bar) return;
+    var kpis=(window.BM_DATA&&BM_DATA.meta&&BM_DATA.meta.kpis)||['cpm','cpc','ctr','cvr'];  // ROAS는 데이터 있을 때만
+    if(kpis.indexOf(curKpi)<0) curKpi=kpis[0];
+    bar.querySelectorAll('button').forEach(function(b){ b.remove(); });
+    kpis.forEach(function(k){
+      var b=document.createElement('button'); b.className='dbtn'+(k===curKpi?' pri':''); b.textContent=KU[k]||k.toUpperCase(); b.dataset.k=k;
+      b.onclick=function(){ curKpi=k; document.querySelectorAll('#bmKpiTgl button').forEach(function(x){x.className='dbtn';}); b.className='dbtn pri'; renderBench(); renderCharts(); };
+      bar.appendChild(b);
+    });
+  }
+  function renderAll(){ buildKpiToggle(); renderBench(); renderDet(); renderCharts(); }
   function reloadAll(){ bmLoad().then(renderAll); }
   window.reloadAll=reloadAll;
   function enterBM(){ injectUI(); refreshControls(); reloadAll(); }
