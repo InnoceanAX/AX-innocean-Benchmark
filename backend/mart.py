@@ -108,10 +108,48 @@ def build_campaign(c):
     print("bm_campaign_monthly: rebuilt (google 캠페인명 raw 보강 포함)")
 
 
+def _table_exists(c, dataset, table):
+    try:
+        c.get_table(f"{PROJECT}.{dataset}.{table}")
+        return True
+    except Exception:
+        return False
+
+
+def build_device(c):
+    """디바이스 차원 — DB가 v_perf_unified_device 를 추가하면 자동 빌드(없으면 skip).
+    grain = 캠페인 × 월 × device. 차원/지표는 bm_campaign_monthly 와 동일 + device."""
+    if not _table_exists(c, "apac_kr_unified", "v_perf_unified_device"):
+        print("· v_perf_unified_device 없음 → device 차원 skip (DB 추가 대기, P1 요청)")
+        return False
+    dsrc = f"`{PROJECT}.apac_kr_unified.v_perf_unified_device`"
+    name_expr = "COALESCE(NULLIF(u.campaign_name,''),'')"
+    ind = industry_case_sql(f"CONCAT(IFNULL(u.advertiser_name,''),' ',{name_expr})")
+    obj = objective_case_sql(name_expr)
+    tbl = f"`{PROJECT}.{MART_DS}.bm_device_monthly`"
+    c.query(f"DROP TABLE IF EXISTS {tbl}").result()
+    c.query(f"""
+    CREATE OR REPLACE TABLE {tbl} CLUSTER BY media, device AS
+    SELECT FORMAT_DATE('%Y-%m', u.date) AS period, {_media_case()} AS media,
+      u.market AS market, {ind} AS industry, {obj} AS objective, u.brand AS brand,
+      UPPER(u.device) AS device, u.campaign_id AS campaign_id,
+      SUM(u.impressions) imp, SUM(u.clicks) clk, SUM(u.spend_krw) cost, SUM(u.conversions) conv,
+      CURRENT_TIMESTAMP() AS _built_at
+    FROM {dsrc} u
+    WHERE u.date IS NOT NULL AND NOT IFNULL(u.is_excluded,FALSE)
+      AND u.platform IN ({_plats()}) AND u.market IS NOT NULL AND u.market!='' AND u.device IS NOT NULL
+    GROUP BY period, media, market, industry, objective, brand, device, campaign_id
+    HAVING imp > 0
+    """).result()
+    print("· bm_device_monthly: built (device 차원 활성)")
+    return True
+
+
 def build():
     c = _client()
     ensure_dataset(c)
     build_campaign(c)
+    build_device(c)   # DB가 device 뷰 추가 시 자동 활성
     n = list(c.query(
         f"SELECT COUNT(*) n, COUNT(DISTINCT campaign_id) camps, COUNT(DISTINCT media) media, "
         f"COUNT(DISTINCT market) markets, COUNT(DISTINCT objective) objs "

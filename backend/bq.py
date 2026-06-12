@@ -12,15 +12,16 @@ from google.cloud import bigquery
 
 PROJECT = "innocean-perf-apac-kr"
 TBL = f"`{PROJECT}.apac_kr_benchmark.bm_campaign_monthly`"
+DEVICE_TBL = f"`{PROJECT}.apac_kr_benchmark.bm_device_monthly`"
 LOCATION = "asia-northeast3"
 
 MEDIA_NAME = {"G": "Google", "M": "Meta", "N": "Naver", "K": "Kakao", "D": "DV360", "T": "TikTok"}
 KPIS = ("cpm", "cpc", "ctr", "cvr")
 KPI_LOWER_BETTER = {"cpm": True, "cpc": True, "ctr": False, "cvr": False}
 
-# 기준차원 화이트리스트 (SQL 컬럼명 안전)
+# 기준차원 화이트리스트 (SQL 컬럼명 안전). device는 v_perf_unified_device 추가 시 자동 활성.
 DIMS = {"market": "권역", "objective": "캠페인목표", "brand": "브랜드",
-        "industry": "업종", "agency": "대행사"}
+        "industry": "업종", "agency": "대행사", "device": "디바이스"}
 # 필터 화이트리스트
 FILTERS = {"market", "objective", "brand", "industry", "agency"}
 
@@ -65,6 +66,15 @@ def _client():
     return bigquery.Client(project=PROJECT, location=LOCATION)
 
 
+@lru_cache(maxsize=1)
+def _device_available():
+    try:
+        _client().get_table(f"{PROJECT}.apac_kr_benchmark.bm_device_monthly")
+        return True
+    except Exception:
+        return False
+
+
 def _num(v):
     return format(int(round(v or 0)), ",")
 
@@ -91,6 +101,11 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
                   currency="KRW", **filters):
     if dim not in DIMS:
         dim = "market"
+    if dim == "device" and not _device_available():
+        return {"benchmark": [], "detail": [], "charts": None, "meta": {
+            "media": media, "media_name": MEDIA_NAME.get(media, media), "available": False,
+            "dim": dim, "note": "디바이스 데이터 준비 중입니다 (통합뷰 추가 대기, P1)."}}
+    src = DEVICE_TBL if dim == "device" else TBL
     p0, p1 = date_from[:7], date_to[:7]
     rate, sym = CURRENCY.get((currency or "KRW").upper(), CURRENCY["KRW"])
 
@@ -111,7 +126,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     WITH camp AS (
       SELECT {dim} AS dim, campaign_id,
         SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv
-      FROM {TBL} WHERE {where}
+      FROM {src} WHERE {where}
       GROUP BY dim, campaign_id HAVING imp >= 1000 AND clk > 0
     ),
     ck AS (
@@ -162,7 +177,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     detail = []
     det_sql = f"""
       SELECT period, {dim} AS dim, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost
-      FROM {TBL} WHERE {where} GROUP BY period, dim HAVING imp > 0
+      FROM {src} WHERE {where} GROUP BY period, dim HAVING imp > 0
       ORDER BY period DESC, cost DESC
     """
     for r in cl.query(det_sql, job_config=qcfg).result():
@@ -178,7 +193,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     trend = {"labels": months, "cpm": [], "cpc": [], "ctr": [], "cvr": []}
     mt = {m: [0, 0, 0.0, 0.0] for m in months}
     for r in cl.query(f"SELECT period, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv "
-                      f"FROM {TBL} WHERE {where} GROUP BY period", job_config=qcfg).result():
+                      f"FROM {src} WHERE {where} GROUP BY period", job_config=qcfg).result():
         mt[r["period"]] = [r["imp"] or 0, r["clk"] or 0, r["cost"] or 0.0, r["conv"] or 0.0]
     for m in months:
         imp, clk, cost, conv = mt[m]
@@ -220,6 +235,7 @@ def get_filter_options(media="G"):
             job_config=bigquery.QueryJobConfig(query_parameters=[
                 bigquery.ScalarQueryParameter("m", "STRING", media)])).result()
         out[col] = [{"v": r["v"], "name": dim_name(col, r["v"])} for r in rows if r["v"]]
+    out["device_available"] = _device_available()
     return out
 
 
