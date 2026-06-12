@@ -71,6 +71,18 @@ def _gname_union(c):
     return f"SELECT cid, MAX(nm) nm FROM ({union}) WHERE nm IS NOT NULL GROUP BY cid"
 
 
+def _has_col(c, view, col):
+    try:
+        return col in [f.name for f in c.get_table(f"{PROJECT}.apac_kr_unified.{view}").schema]
+    except Exception:
+        return False
+
+
+def _rev_expr(c, view, alias="u"):
+    # revenue_krw(ROAS용)가 통합뷰에 추가되면 자동 집계, 없으면 0 (P3 대비 사전배선)
+    return f"SUM({alias}.revenue_krw)" if _has_col(c, view, "revenue_krw") else "0"
+
+
 def build_campaign(c):
     """캠페인 × 월 grain 다차원 테이블. google 캠페인명은 raw에서 보강(P0 자동수정)."""
     # 보강된 캠페인명 텍스트 (google: raw, 그 외: v_perf_unified)
@@ -96,6 +108,7 @@ def build_campaign(c):
       SUM(u.clicks) AS clk,
       SUM(u.spend_krw) AS cost,
       SUM(u.conversions) AS conv,
+      {_rev_expr(c, 'v_perf_unified')} AS rev,
       CURRENT_TIMESTAMP() AS _built_at
     FROM {SOURCE} u
     {join}
@@ -146,6 +159,7 @@ def build_segment(c, dim, view, col):
       u.market AS market, {ind} AS industry, {obj} AS objective, u.brand AS brand,
       UPPER(CAST(u.{col} AS STRING)) AS {dim}, u.campaign_id AS campaign_id,
       SUM(u.impressions) imp, SUM(u.clicks) clk, SUM(u.spend_krw) cost, SUM(u.conversions) conv,
+      {_rev_expr(c, view)} AS rev,
       CURRENT_TIMESTAMP() AS _built_at
     FROM {dsrc} u
     {join}
