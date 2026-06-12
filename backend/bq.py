@@ -265,13 +265,18 @@ def get_summary_context(media="G", dim="market", date_from="2025-01-01", date_to
     if not d["meta"]["available"]:
         return d["meta"]["note"]
     lbl = d["meta"]["dim_label"]
-    lines = [f"[{d['meta']['media_name']} {lbl}별 벤치마크 {date_from[:7]}~{date_to[:7]} "
-             f"(CPM/CPC/CTR/CVR 중앙값·상위10%, 캠페인수)]"]
-    for r in d["benchmark"][:14]:
+    cur = d["meta"].get("currency", "KRW")
+    lines = [f"[{d['meta']['media_name']} · {lbl}별 벤치마크 · {date_from[:7]}~{date_to[:7]} · 통화 {cur}]",
+             f"(각 {lbl}의 캠페인 분포 중앙값. CPM/CPC=낮을수록 좋음, CTR/CVR=높을수록 좋음)"]
+    for r in d["benchmark"][:16]:
         if r.get("cls") == "ttl":
-            lines.append(f"- 전체: 노출 {r['imp']}, CPM {r['cpm']}, CTR {r['ctr']}, 지출 {r['spend']}")
+            lines.append(f"- 전체평균: CPM {r['cpm']}, CPC {r['cpc']}, CTR {r['ctr']}, 노출 {r['imp']}, 지출 {r['spend']}")
             continue
-        cpm, ctr = r["cpm_q"], r["ctr_q"]
-        lines.append(f"- {r['name']}(캠페인 {r['n']}): CPM 중앙 {cpm['median']}/상위10% {cpm['top10']}, "
-                     f"CTR 중앙 {ctr['median']}, 지출 {r['spend']}")
+        cpm, cpc, ctr, cvr = r["cpm_q"], r["cpc_q"], r["ctr_q"], r["cvr_q"]
+        lines.append(
+            f"- {r['name']} (캠페인 {r['n']}개): "
+            f"CPM 중앙 {cpm['median']}(상위10% {cpm['top10']}), "
+            f"CPC 중앙 {cpc['median']}(상위10% {cpc['top10']}), "
+            f"CTR 중앙 {ctr['median']}(상위10% {ctr['top10']}), "
+            f"CVR 중앙 {cvr['median']}, 지출 {r['spend']}")
     return "\n".join(lines)
