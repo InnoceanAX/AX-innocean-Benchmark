@@ -12,16 +12,22 @@ from google.cloud import bigquery
 
 PROJECT = "innocean-perf-apac-kr"
 TBL = f"`{PROJECT}.apac_kr_benchmark.bm_campaign_monthly`"
-DEVICE_TBL = f"`{PROJECT}.apac_kr_benchmark.bm_device_monthly`"
+# 세그먼트 차원 테이블 (DB 세그먼트 뷰 → 마트). 전부 Google 전용.
+SEGMENT_TBL = {
+    "device": f"`{PROJECT}.apac_kr_benchmark.bm_device_monthly`",
+    "age": f"`{PROJECT}.apac_kr_benchmark.bm_age_monthly`",
+    "gender": f"`{PROJECT}.apac_kr_benchmark.bm_gender_monthly`",
+}
 LOCATION = "asia-northeast3"
 
 MEDIA_NAME = {"G": "Google", "M": "Meta", "N": "Naver", "K": "Kakao", "D": "DV360", "T": "TikTok"}
 KPIS = ("cpm", "cpc", "ctr", "cvr")
 KPI_LOWER_BETTER = {"cpm": True, "cpc": True, "ctr": False, "cvr": False}
 
-# 기준차원 화이트리스트 (SQL 컬럼명 안전). device는 v_perf_unified_device 추가 시 자동 활성.
+# 기준차원 화이트리스트 (SQL 컬럼명 안전). device/age/gender는 DB 세그먼트 뷰 추가 시 자동 활성.
 DIMS = {"market": "권역", "objective": "캠페인목표", "brand": "브랜드",
-        "industry": "업종", "agency": "대행사", "device": "디바이스"}
+        "industry": "업종", "agency": "대행사",
+        "device": "디바이스", "age": "연령", "gender": "성별"}
 # 필터 화이트리스트
 FILTERS = {"market", "objective", "brand", "industry", "agency"}
 
@@ -42,6 +48,9 @@ MARKET_NAME = {
 }
 BRAND_NAME = {"hyundai": "현대", "kia": "기아", "genesis": "제네시스",
               "other": "기타", "innocean_internal": "이노션내부"}
+GENDER_NAME = {"MALE": "남성", "FEMALE": "여성", "UNDETERMINED": "미상"}
+DEVICE_NAME = {"MOBILE": "모바일", "DESKTOP": "데스크톱", "TABLET": "태블릿",
+               "CONNECTED_TV": "커넥티드TV", "OTHER": "기타"}
 
 
 def dim_name(dim, code):
@@ -49,6 +58,12 @@ def dim_name(dim, code):
         return MARKET_NAME.get(code, code)
     if dim == "brand":
         return BRAND_NAME.get(code, code)
+    if dim == "gender":
+        return GENDER_NAME.get(code, code)
+    if dim == "device":
+        return DEVICE_NAME.get(code, code)
+    if dim == "age":
+        return "미상" if code == "UNDETERMINED" else code
     return code
 
 
@@ -79,10 +94,13 @@ def _client():
     return bigquery.Client(project=PROJECT, location=LOCATION)
 
 
-@lru_cache(maxsize=1)
-def _device_available():
+@lru_cache(maxsize=8)
+def _segment_available(dim):
+    t = SEGMENT_TBL.get(dim)
+    if not t:
+        return False
     try:
-        _client().get_table(f"{PROJECT}.apac_kr_benchmark.bm_device_monthly")
+        _client().get_table(t.strip("`"))
         return True
     except Exception:
         return False
@@ -114,11 +132,11 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
                   currency="KRW", **filters):
     if dim not in DIMS:
         dim = "market"
-    if dim == "device" and not _device_available():
+    if dim in SEGMENT_TBL and not _segment_available(dim):
         return {"benchmark": [], "detail": [], "charts": None, "meta": {
             "media": media, "media_name": MEDIA_NAME.get(media, media), "available": False,
-            "dim": dim, "note": "디바이스 데이터 준비 중입니다 (통합뷰 추가 대기, P1)."}}
-    src = DEVICE_TBL if dim == "device" else TBL
+            "dim": dim, "note": f"{DIMS.get(dim, dim)} 데이터 준비 중입니다 (통합뷰 추가 대기)."}}
+    src = SEGMENT_TBL.get(dim, TBL)
     ckey = _cache_key(media, dim, date_from, date_to, currency, filters)
     if ckey in _BENCH_CACHE:
         return _BENCH_CACHE[ckey]
@@ -255,17 +273,18 @@ def get_filter_options(media="G"):
             job_config=bigquery.QueryJobConfig(query_parameters=[
                 bigquery.ScalarQueryParameter("m", "STRING", media)])).result()
         out[col] = [{"v": r["v"], "name": dim_name(col, r["v"])} for r in rows if r["v"]]
-    # device 가용성 = 해당 매체에 device 데이터가 있을 때만(현재 Google 전용)
-    out["device_available"] = False
-    if _device_available():
-        try:
-            n = list(cl.query(
-                f"SELECT COUNT(*) n FROM {DEVICE_TBL} WHERE media=@m",
-                job_config=bigquery.QueryJobConfig(query_parameters=[
-                    bigquery.ScalarQueryParameter("m", "STRING", media)])).result())[0]["n"]
-            out["device_available"] = n > 0
-        except Exception:
-            pass
+    # 세그먼트 차원 가용성 = 해당 매체에 데이터가 있을 때만(현재 전부 Google 전용)
+    for seg, tbl in SEGMENT_TBL.items():
+        out[seg + "_available"] = False
+        if _segment_available(seg):
+            try:
+                n = list(cl.query(
+                    f"SELECT COUNT(*) n FROM {tbl} WHERE media=@m",
+                    job_config=bigquery.QueryJobConfig(query_parameters=[
+                        bigquery.ScalarQueryParameter("m", "STRING", media)])).result())[0]["n"]
+                out[seg + "_available"] = n > 0
+            except Exception:
+                pass
     return out
 
 
