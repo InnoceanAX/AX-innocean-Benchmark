@@ -57,36 +57,55 @@ def _plats():
     return ",".join([f"'{p}'" for p in PLATFORM_TO_MEDIA])
 
 
+def _gname_union(c):
+    """google_ads 캠페인명 보강 — v_perf_unified엔 google campaign_name이 NULL이라
+    raw ads_Campaign_<계정>(100% 커버)에서 campaign_id→name 매핑을 만든다."""
+    import re
+    tabs = [t.table_id for t in c.list_tables("apac_kr_raw")
+            if re.match(r"ads_Campaign_\d+$", t.table_id)]
+    if not tabs:
+        return None
+    union = " UNION ALL ".join(
+        [f"SELECT CAST(campaign_id AS STRING) cid, campaign_name nm FROM `{PROJECT}.apac_kr_raw.{t}`"
+         for t in tabs])
+    return f"SELECT cid, MAX(nm) nm FROM ({union}) WHERE nm IS NOT NULL GROUP BY cid"
+
+
 def build_campaign(c):
-    """캠페인 × 월 grain 다차원 테이블."""
-    ind = industry_case_sql("CONCAT(IFNULL(advertiser_name,''),' ',IFNULL(campaign_name,''))")
-    obj = objective_case_sql("campaign_name")
+    """캠페인 × 월 grain 다차원 테이블. google 캠페인명은 raw에서 보강(P0 자동수정)."""
+    # 보강된 캠페인명 텍스트 (google: raw, 그 외: v_perf_unified)
+    name_expr = "COALESCE(NULLIF(u.campaign_name,''), g.nm, '')"
+    ind = industry_case_sql(f"CONCAT(IFNULL(u.advertiser_name,''),' ',{name_expr})")
+    obj = objective_case_sql(name_expr)
+    gmap = _gname_union(c)
+    join = f"LEFT JOIN ({gmap}) g ON CAST(u.campaign_id AS STRING)=g.cid" if gmap else "LEFT JOIN (SELECT '' cid, '' nm) g ON FALSE"
     tbl = f"`{PROJECT}.{MART_DS}.bm_campaign_monthly`"
     c.query(f"DROP TABLE IF EXISTS {tbl}").result()
     sql = f"""
     CREATE OR REPLACE TABLE {tbl} CLUSTER BY media, market AS
     SELECT
-      FORMAT_DATE('%Y-%m', date) AS period,
+      FORMAT_DATE('%Y-%m', u.date) AS period,
       {_media_case()} AS media,
-      market,
+      u.market AS market,
       {ind} AS industry,
       {obj} AS objective,
-      brand,
-      IFNULL(NULLIF(agency,''),'(미상)') AS agency,
-      campaign_id,
-      SUM(impressions) AS imp,
-      SUM(clicks) AS clk,
-      SUM(spend_krw) AS cost,
-      SUM(conversions) AS conv,
+      u.brand AS brand,
+      IFNULL(NULLIF(u.agency,''),'(미상)') AS agency,
+      u.campaign_id AS campaign_id,
+      SUM(u.impressions) AS imp,
+      SUM(u.clicks) AS clk,
+      SUM(u.spend_krw) AS cost,
+      SUM(u.conversions) AS conv,
       CURRENT_TIMESTAMP() AS _built_at
-    FROM {SOURCE}
-    WHERE date IS NOT NULL AND NOT IFNULL(is_excluded, FALSE)
-      AND platform IN ({_plats()}) AND market IS NOT NULL AND market != ''
+    FROM {SOURCE} u
+    {join}
+    WHERE u.date IS NOT NULL AND NOT IFNULL(u.is_excluded, FALSE)
+      AND u.platform IN ({_plats()}) AND u.market IS NOT NULL AND u.market != ''
     GROUP BY period, media, market, industry, objective, brand, agency, campaign_id
     HAVING imp > 0
     """
     c.query(sql).result()
-    print("bm_campaign_monthly: rebuilt")
+    print("bm_campaign_monthly: rebuilt (google 캠페인명 raw 보강 포함)")
 
 
 def build():
