@@ -255,7 +255,17 @@ def get_filter_options(media="G"):
             job_config=bigquery.QueryJobConfig(query_parameters=[
                 bigquery.ScalarQueryParameter("m", "STRING", media)])).result()
         out[col] = [{"v": r["v"], "name": dim_name(col, r["v"])} for r in rows if r["v"]]
-    out["device_available"] = _device_available()
+    # device 가용성 = 해당 매체에 device 데이터가 있을 때만(현재 Google 전용)
+    out["device_available"] = False
+    if _device_available():
+        try:
+            n = list(cl.query(
+                f"SELECT COUNT(*) n FROM {DEVICE_TBL} WHERE media=@m",
+                job_config=bigquery.QueryJobConfig(query_parameters=[
+                    bigquery.ScalarQueryParameter("m", "STRING", media)])).result())[0]["n"]
+            out["device_available"] = n > 0
+        except Exception:
+            pass
     return out
 
 

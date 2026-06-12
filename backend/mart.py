@@ -123,9 +123,12 @@ def build_device(c):
         print("· v_perf_unified_device 없음 → device 차원 skip (DB 추가 대기, P1 요청)")
         return False
     dsrc = f"`{PROJECT}.apac_kr_unified.v_perf_unified_device`"
-    name_expr = "COALESCE(NULLIF(u.campaign_name,''),'')"
-    ind = industry_case_sql(f"CONCAT(IFNULL(u.advertiser_name,''),' ',{name_expr})")
+    # device 뷰엔 advertiser_name/campaign_name 없음 → raw 캠페인명(gmap)으로 보강해 목표/업종 파생
+    name_expr = "COALESCE(g.nm,'')"
+    ind = industry_case_sql(name_expr)
     obj = objective_case_sql(name_expr)
+    gmap = _gname_union(c)
+    join = f"LEFT JOIN ({gmap}) g ON CAST(u.campaign_id AS STRING)=g.cid" if gmap else "LEFT JOIN (SELECT '' cid,'' nm) g ON FALSE"
     tbl = f"`{PROJECT}.{MART_DS}.bm_device_monthly`"
     c.query(f"DROP TABLE IF EXISTS {tbl}").result()
     c.query(f"""
@@ -136,6 +139,7 @@ def build_device(c):
       SUM(u.impressions) imp, SUM(u.clicks) clk, SUM(u.spend_krw) cost, SUM(u.conversions) conv,
       CURRENT_TIMESTAMP() AS _built_at
     FROM {dsrc} u
+    {join}
     WHERE u.date IS NOT NULL AND NOT IFNULL(u.is_excluded,FALSE)
       AND u.platform IN ({_plats()}) AND u.market IS NOT NULL AND u.market!='' AND u.device IS NOT NULL
     GROUP BY period, media, market, industry, objective, brand, device, campaign_id
