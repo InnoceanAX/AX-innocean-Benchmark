@@ -219,7 +219,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
       SELECT dim, imp, clk, cost, conv, rev{vid_pass}, {ck_exprs}
       FROM camp
     )
-    SELECT dim, COUNT(*) n, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv, SUM(rev) rev{vid_sum},
+    SELECT dim, COUNT(*) n, COUNTIF(rev>0) nrev, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv, SUM(rev) rev{vid_sum},
       {qcols}
     FROM ck WHERE dim IS NOT NULL GROUP BY dim HAVING n >= 3
     ORDER BY cost DESC
@@ -237,10 +237,11 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
 
     benchmark = []
     tot = [0, 0, 0.0, 0, 0.0, 0, 0]   # imp, clk, cost, n, rev, vviews, vp100
+    tot_nrev = 0                       # 전환가치(rev>0) 캠페인 수 → ROAS 커버리지 게이트용
     for r in rows:
         imp, clk, cost, conv, rev, vv, vp = _vals(r)
         tot[0] += imp; tot[1] += clk; tot[2] += cost; tot[3] += r["n"]
-        tot[4] += rev; tot[5] += vv; tot[6] += vp
+        tot[4] += rev; tot[5] += vv; tot[6] += vp; tot_nrev += (r.get("nrev") or 0)
         row = {"dim": r["dim"], "name": dim_name(dim, r["dim"]), "n": r["n"],
                "imp": _num(imp), "spend": money(cost)}
         for k in calc_kpis:
@@ -251,7 +252,10 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
              "spend": money(tot[2]), "cls": "ttl"}
     for k in calc_kpis:
         total[k] = qf(k, _agg_kpi(k, tot[0], tot[1], tot[2], 0, tot[4], tot[5], tot[6]))
-    roas_avail = (not is_video) and tot[4] > 0
+    # ROAS는 전환가치 추적 캠페인이 일정 비율(≥10%) 이상일 때만 노출 — 추적 미흡 매체(예: Meta)의
+    # 오해성 0배 ROAS 방지. (Google 58%/DV360 100% 통과, Meta 0.6%/TikTok 0% 제외)
+    roas_cover = (tot_nrev / tot[3]) if tot[3] else 0
+    roas_avail = (not is_video) and roas_cover >= 0.10
 
     # 2) detail (월 × 기준차원)
     detail = []
@@ -309,7 +313,8 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             "dim": dim, "dim_label": DIMS[dim], "n_dim": len(benchmark), "rows": len(detail),
             "date_from": date_from, "date_to": date_to,
             "currency": (currency or "KRW").upper(), "symbol": sym, "cached": True,
-            "kpis": meta_kpis, "roas_available": roas_avail, "is_video": is_video,
+            "kpis": meta_kpis, "roas_available": roas_avail,
+            "roas_coverage": round(roas_cover, 3), "is_video": is_video,
             "note": ("영상 벤치마크 — Google 영상(YouTube) 캠페인. VTR=조회율, CPV=조회당비용, 완전조회율=끝까지 본 비율."
                      if is_video else "다차원 벤치마크. 데이터 ~99% 현대·기아 자동차."),
         },
