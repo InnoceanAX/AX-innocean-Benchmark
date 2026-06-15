@@ -172,12 +172,50 @@ def build_segment(c, dim, view, col):
     return True
 
 
+def build_video(c):
+    """영상 벤치마크 마트 bm_video_monthly (media='V'). 소스 v_perf_unified_video(Google 영상 캠페인).
+    VTR(조회율)=video_views/imp, CPV=cost/video_views, 완전조회율=video_p100/video_views.
+    뷰엔 advertiser/campaign_name 없음 → raw 캠페인명(gmap)으로 목표/업종 보강. 뷰 없으면 skip."""
+    view = "v_perf_unified_video"
+    if not _table_exists(c, "apac_kr_unified", view):
+        print(f"· {view} 없음 → 영상(V) 차원 skip (DB 추가 대기)")
+        return False
+    dsrc = f"`{PROJECT}.apac_kr_unified.{view}`"
+    name_expr = "COALESCE(g.nm,'')"
+    ind = industry_case_sql(name_expr)
+    obj = objective_case_sql(name_expr)
+    gmap = _gname_union(c)
+    join = (f"LEFT JOIN ({gmap}) g ON CAST(u.campaign_id AS STRING)=g.cid"
+            if gmap else "LEFT JOIN (SELECT '' cid,'' nm) g ON FALSE")
+    tbl = f"`{PROJECT}.{MART_DS}.bm_video_monthly`"
+    c.query(f"DROP TABLE IF EXISTS {tbl}").result()
+    c.query(f"""
+    CREATE OR REPLACE TABLE {tbl} CLUSTER BY media, market AS
+    SELECT FORMAT_DATE('%Y-%m', u.date) AS period, 'V' AS media,
+      u.market AS market, {ind} AS industry, {obj} AS objective, u.brand AS brand,
+      u.campaign_id AS campaign_id,
+      SUM(u.impressions) imp, SUM(u.clicks) clk, SUM(u.spend_krw) cost, SUM(u.conversions) conv,
+      {_rev_expr(c, view)} AS rev,
+      SUM(u.video_views) vviews, SUM(u.video_p100) vp100, SUM(u.engagements) eng,
+      CURRENT_TIMESTAMP() AS _built_at
+    FROM {dsrc} u
+    {join}
+    WHERE u.date IS NOT NULL AND NOT IFNULL(u.is_excluded,FALSE)
+      AND u.market IS NOT NULL AND u.market!='' AND IFNULL(u.video_views,0) > 0
+    GROUP BY period, media, market, industry, objective, brand, campaign_id
+    HAVING imp > 0
+    """).result()
+    print("· bm_video_monthly: built (영상 VTR/CPV/완전조회율 활성)")
+    return True
+
+
 def build():
     c = _client()
     ensure_dataset(c)
     build_campaign(c)
     for _dim, (_view, _col) in SEGMENTS.items():   # device/age/gender — 뷰 있으면 자동 빌드
         build_segment(c, _dim, _view, _col)
+    build_video(c)                                 # 영상(V) — 뷰 있으면 자동 빌드
     n = list(c.query(
         f"SELECT COUNT(*) n, COUNT(DISTINCT campaign_id) camps, COUNT(DISTINCT media) media, "
         f"COUNT(DISTINCT market) markets, COUNT(DISTINCT objective) objs "
