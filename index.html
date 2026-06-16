@@ -1246,6 +1246,10 @@ function sugClick(btn,q){
     body.innerHTML='<div class="mgrp"><div class="mgrpt">상세표에 추가할 지표</div><div class="cbg">'+addable.map(function(k){ return '<label class="cblbl"><input type="checkbox" data-dc="'+k+'"'+(curDetCols.indexOf(k)>=0?' checked':'')+'>'+(DET_LABELS[k]||k)+'</label>'; }).join('')+'</div></div>';
   }
   window.applyKpi=function(){ var mdl=document.getElementById('kpiMdl'); curDetCols=[]; if(mdl)mdl.querySelectorAll('input[data-dc]:checked').forEach(function(c){ curDetCols.push(c.getAttribute('data-dc')); }); if(window.closeMdl)closeMdl('kpiMdl'); renderDet(); };
+  window.applySumKpi=window.applyKpi;   // Summary 지표추가도 동일 처리
+  // 두 '지표 추가' 버튼(Summary/Detail) 모두 실데이터 모달(kpiMdl)을 열도록 — mock sumKpiMdl 대체
+  var _openMdl0=window.openMdl;
+  window.openMdl=function(id){ if(id==='sumKpiMdl')id='kpiMdl'; if(id==='kpiMdl')buildKpiMdl(); return _openMdl0?_openMdl0(id):null; };
   // CSV 다운로드 — 현재 상세표(추가지표 포함) 전체 행
   window.bmCSV=function(){
     if(!window.BM_DATA||!(BM_DATA.detail||[]).length){ if(window.toast)toast('내보낼 데이터가 없습니다.','ℹ'); return; }
