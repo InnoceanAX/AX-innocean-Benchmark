@@ -1181,22 +1181,22 @@ function sugClick(btn,q){
     rows.forEach(function(r){ var tr=document.createElement('tr'); tr.innerHTML=cols.map(function(k){ return '<td>'+(r[k]!=null?r[k]:'—')+'</td>'; }).join(''); tbody.appendChild(tr); });
     var rc=document.getElementById('rowCnt'); if(rc) rc.textContent=rows.length+' / '+(BM_DATA.detail||[]).length+'건';
   }
-  // 지표 추가(Additional Index) 모달 — 원안처럼 전체 지표를 그룹으로 노출.
-  // 실데이터 있는 지표는 활성(체크 가능), 없는 지표는 비활성(데이터없음) 표기.
+  // 지표 추가 모달 — 원안 항목(조회/클릭 기준별, 데이터없음 비활성) + 전환 그룹(실데이터 활성).
+  // CVR/ROAS는 전환(가치) 추적 커버리지 충분한 매체에서만 활성(오해성 0값 방지).
   var KPIMDL_CATALOG=[
     ['전환', [['전환수','conv'],['CVR','cvr'],['ROAS','roas'],['전환비용',null]]],
-    ['조회 / 영상', [['조회수','views'],['VTR(조회율)','vtr'],['CPV','cpv'],['완전조회율','cr'],
-      ['VTR(3초)',null],['VTR(ThruPlay)',null],['VTR(TrueView)',null],['VTR(100%조회)',null],['CPV(3초)',null],['CPV(ThruPlay)',null]]],
-    ['클릭', [['CTR(링크클릭)',null],['CPC(링크클릭)',null],['링크클릭수',null]]],
-    ['참여', [['게시물참여',null],['게시물댓글',null],['게시물공감',null],['게시물공유',null],['사진조회',null],['잠재고객',null]]]
+    ['조회 기준별 지표', [['VTR(3초)',null],['VTR(6초)',null],['VTR(ThruPlay)',null],['CPV(3초)',null],['CPV(6초)',null],['CPV(ThruPlay)',null],['VTR(TrueView)',null],['VTR(100%조회)',null],['CPV(TrueView)',null],['CPV(100%조회)',null]]],
+    ['클릭 기준별 지표', [['CTR(전체클릭)',null],['CTR(링크클릭)',null],['CPC(전체클릭)',null],['CPC(링크클릭)',null]]]
   ];
   function buildKpiMdl(){
     var mdl=document.getElementById('kpiMdl'); if(!mdl)return; var body=mdl.querySelector('.mbdy'); if(!body)return;
-    var base=detBase(), present=Object.keys((BM_DATA&&BM_DATA.detail&&BM_DATA.detail[0])||{});
+    var base=detBase(), present=Object.keys((BM_DATA&&BM_DATA.detail&&BM_DATA.detail[0])||{}), meta=(BM_DATA&&BM_DATA.meta)||{};
     var html='';
     KPIMDL_CATALOG.forEach(function(g){
       var items=g[1].map(function(it){
         var key=it[1], on=key&&present.indexOf(key)>=0&&base.indexOf(key)<0;
+        if(on&&key==='cvr'&&!meta.cvr_available)on=false;       // 전환 추적 충분할 때만
+        if(on&&key==='roas'&&!meta.roas_available)on=false;     // 전환가치 추적 충분할 때만
         if(on) return '<label class="cblbl"><input type="checkbox" data-dc="'+key+'"'+(curDetCols.indexOf(key)>=0?' checked':'')+'>'+it[0]+'</label>';
         return '<label class="cblbl" style="opacity:.4;cursor:not-allowed" title="현재 데이터 없음 — 수집/연동 시 활성화"><input type="checkbox" disabled>'+it[0]+' <span style="font-size:9px;color:#9CA3AF">(데이터없음)</span></label>';
       }).join('');

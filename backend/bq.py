@@ -315,8 +315,8 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         benchmark.append(row)
     total = {"dim": "TOTAL", "name": "전체", "n": tot[3], "imp": _num(tot[0]),
              "spend": money(tot[2]), "conv": _num(tot_conv), "cls": "ttl"}
-    for k in calc_kpis:
-        total[k] = qf(k, _agg_kpi(k, tot[0], tot[1], tot[2], 0, tot[4], tot[5], tot[6]))
+    for k in calc_kpis:   # 전체 행도 전환수(tot_conv) 반영 — CVR이 0으로 고정되던 버그 수정
+        total[k] = qf(k, _agg_kpi(k, tot[0], tot[1], tot[2], tot_conv, tot[4], tot[5], tot[6]))
     # ROAS·CVR는 전환(가치) 추적 캠페인이 일정 비율(≥10%) 이상일 때만 노출 — 추적 미흡 매체의
     # 오해성 0값 방지. ROAS: Google 50%/DV360 100% 통과, Meta 0.7%/TikTok·Kakao 0% 제외.
     # CVR: Google 48%/DV360 34%/TikTok 26% 통과, Meta·Kakao 0%(conversions 미수집) 제외.
