@@ -1295,7 +1295,8 @@ function sugClick(btn,q){
   window.initCPV=function(){};
   window.initChat=function(){ if(window._chatSeeded)return; window._chatSeeded=true; addMsg('chatbox','ai','안녕하세요. 우측 대시보드에서 현재 데이터를 확인하고, 아래 추천 질문이나 직접 입력으로 분석을 요청하세요.'); };
 
-  function aiMedia(){ return (typeof STATE!=='undefined'&&STATE.media)||'G'; }
+  var aiMed='ALL';   // AI 대시보드 분석 매체(전체 기본) — 벤치마크 페이지와 독립
+  function aiMedia(){ return aiMed; }
   var aiKpi='cpm', aiDim='market', aiHighlight=null; window._aiData=null; window._aiCharts={};
   var AI_DIM_LABEL={market:'국가',industry:'업종',objective:'캠페인목표',brand:'브랜드',channel:'광고상품',device:'디바이스',age:'연령',gender:'성별'};
   // 채팅 질문 파싱 → 관련 KPI·차원 추출(오른쪽 그래프에 반영)
@@ -1320,20 +1321,42 @@ function sugClick(btn,q){
     var cols=labels.map(function(_x,i){ return i===hi?'#EC4899':'#4F46E5'; });
     var bar=document.getElementById('aiBar'), line=document.getElementById('aiLine');
     if(bar){ if(_aiCharts.bar)_aiCharts.bar.destroy(); _aiCharts.bar=new Chart(bar,{type:'bar',data:{labels:labels,datasets:[{data:d.charts.compare[aiKpi]||[],backgroundColor:cols,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{font:{size:10}}},y:{grid:{color:'#F3F4F6'}}}}}); }
-    if(line){ if(_aiCharts.line)_aiCharts.line.destroy(); _aiCharts.line=new Chart(line,{type:'line',data:{labels:d.charts.trend.labels,datasets:[{data:d.charts.trend[aiKpi]||[],borderColor:'#4F46E5',backgroundColor:'rgba(79,70,229,.08)',borderWidth:2,pointRadius:2,tension:.3,fill:true}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#F3F4F6'},ticks:{font:{size:10}}},y:{grid:{color:'#F3F4F6'}}}}}); }
+    if(line){ if(_aiCharts.line)_aiCharts.line.destroy();
+      var tr=(d.charts.trend[aiKpi]||[]); var nums=tr.filter(function(v){return typeof v==='number';});
+      var avg=nums.length?nums.reduce(function(a,b){return a+b;},0)/nums.length:0; avg=Math.round(avg*100)/100;
+      var avgArr=tr.map(function(){return avg;});
+      _aiCharts.line=new Chart(line,{type:'line',data:{labels:d.charts.trend.labels,datasets:[
+        {label:ku,data:tr,borderColor:'#4F46E5',backgroundColor:'rgba(79,70,229,.08)',borderWidth:2.5,pointRadius:2,tension:.3,fill:true},
+        {label:'전체 평균',data:avgArr,borderColor:'#EF4444',borderDash:[6,4],borderWidth:1.5,pointRadius:0,fill:false}
+      ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'top',labels:{font:{size:10},boxWidth:18}}},scales:{x:{grid:{color:'#F3F4F6'},ticks:{font:{size:10}}},y:{grid:{color:'#F3F4F6'}}}}}); }
     var bt=document.getElementById('aiBarTit'); if(bt)bt.textContent=dimLbl+'별 '+ku+(hi>=0?' — '+labels[hi]+' 강조':'')+' (중앙값)';
-    var lt=document.getElementById('aiLineTit'); if(lt)lt.textContent='월별 '+ku+' 추세';
+    var lt=document.getElementById('aiLineTit'); if(lt)lt.textContent='월별 '+ku+' 추세 (점선=전체 평균)';
+  }
+  // 그래프·데이터 기반 주요 인사이트 자동 산출
+  function aiInsights(d){
+    var m=d.meta||{}, kpi=aiKpi, ku=KU[kpi]||kpi, lbl=m.dim_label||'국가';
+    var mk=(d.benchmark||[]).filter(function(x){return !x.cls;}), tot=(d.benchmark||[])[0]||{}, out=[];
+    var lower=(!PCT_KPI[kpi] && kpi!=='roas');   // CPM/CPC/CPV=낮을수록 좋음
+    var tr=(d.charts&&d.charts.trend[kpi]||[]).filter(function(v){return typeof v==='number';});
+    if(tr.length>=2){ var f=tr[0],l=tr[tr.length-1]; var pct=f?Math.round((l-f)/Math.abs(f)*100):0;
+      out.push(ku+' 월별 추세는 '+(pct>5?'상승':(pct<-5?'하락':'대체로 안정'))+' 흐름입니다 ('+tr.length+'개월, 처음 '+f+' → 최근 '+l+(pct?', '+(pct>0?'+':'')+pct+'%':'')+').'); }
+    var vals=mk.map(function(r){var q=r[kpi+'_q'];return {n:r.name,v:detNum(q?q.median:r[kpi])};}).filter(function(x){return isFinite(x.v);});
+    if(vals.length>=2){ vals.sort(function(a,b){return a.v-b.v;}); var best=lower?vals[0]:vals[vals.length-1], worst=lower?vals[vals.length-1]:vals[0];
+      out.push(lbl+'별로는 '+best.n+'가 '+ku+' 기준 가장 '+(lower?'효율적':'우수')+'(중앙값 기준), '+worst.n+'가 가장 낮습니다.'); }
+    if(mk.length){ var topS=mk.slice().sort(function(a,b){return detNum(b.spend)-detNum(a.spend);})[0]; if(topS)out.push('지출은 '+topS.name+'에 가장 집중('+topS.spend+')되어 전체 '+ku+' 벤치마크에 큰 영향을 줍니다.'); }
+    if(tot[kpi])out.push('전체 평균 '+ku+'는 '+tot[kpi]+'로, 위 추세 그래프의 빨간 점선(기준선)입니다.');
+    return out.slice(0,4);
   }
   window.aiSetKpi=function(k){ aiKpi=k; document.querySelectorAll('#aiKpiTgl button').forEach(function(x){x.className='dbtn';}); var b=document.querySelector('#aiKpiTgl button[data-k="'+k+'"]'); if(b)b.className='dbtn pri'; drawAICharts(); };
 
   async function renderAIOverview(){
     var main=document.querySelector('#pgAI .aimain'); if(!main) return;
     var r=range(), med=aiMedia();
-    var MN={G:'Google',M:'Meta',D:'DV360',T:'TikTok',K:'카카오'};
-    var medbtns=['G','M','D','T','K'].map(function(x){ return '<button class="dbtn'+(x===med?' pri':'')+'" onclick="window.aiSetMedia(\''+x+'\')">'+MN[x]+'</button>'; }).join('');
+    var MN={ALL:'전체',G:'Google',M:'Meta',D:'DV360',T:'TikTok',K:'카카오'};
+    var medbtns=['ALL','G','M','D','T','K'].map(function(x){ return '<button class="dbtn'+(x===med?' pri':'')+'" onclick="window.aiSetMedia(\''+x+'\')">'+MN[x]+'</button>'; }).join('');
     var dimLbl=AI_DIM_LABEL[aiDim]||'국가';
-    var banner='<div style="background:linear-gradient(135deg,#EEF2FF,#F5F3FF);border:1px solid rgba(79,70,229,.15);padding:13px 16px;margin-bottom:14px"><div style="font-size:13px;font-weight:700;color:#4338CA;margin-bottom:3px">좌측 채팅의 질문·답변이 이 그래프에 반영됩니다</div><div style="font-size:12px;color:#555;line-height:1.6">예) "한국 CPM 왜 높아?"→국가별 CPM·한국 강조 / "업종별 CTR"→업종별 CTR. 매체 버튼·차트지표로도 바꿀 수 있습니다.</div></div>';
-    var head='<div class="aimtit">데이터 분석 대시보드</div>'+banner+'<div style="display:flex;gap:8px;margin:0 0 14px;align-items:center"><span style="font-size:12px;color:#767676;font-weight:600">분석 매체:</span>'+medbtns+'</div>';
+    var head='<div class="aimtit">AI 분석 대시보드</div><div class="aimsub" style="margin-bottom:14px">좌측 채팅에서 질문하시면 분석 결과가 여기에 표시됩니다.</div>'
+      +'<div style="display:flex;gap:8px;margin:0 0 14px;align-items:center;flex-wrap:wrap"><span style="font-size:12px;color:#767676;font-weight:600">분석 매체:</span>'+medbtns+'</div>';
     main.innerHTML=head+'<div class="aimsub">데이터 불러오는 중...</div>';
     var d; try{ d=await cachedJSON(API+'/benchmark?media='+med+'&dim='+aiDim+'&date_from='+r.df+'&date_to='+r.dt+'&currency='+curCur()); }catch(e){ main.innerHTML=head+'<div style="color:#767676;padding:16px">데이터 조회 실패</div>'; return; }
     window._aiData=d;
@@ -1358,11 +1381,13 @@ function sugClick(btn,q){
     html+='</tr></thead><tbody>';
     mk.forEach(function(rw){ var hl=(aiHighlight&&aiHighlight.indexOf(rw.name)>=0)?' style="background:#FCE7F3"':''; html+='<tr'+hl+'>'+['<td>'+rw.name+'</td>','<td>'+rw.n+'</td>','<td>'+(rw.cpm_q?rw.cpm_q.median:'-')+'</td>','<td>'+(rw.cpc_q?rw.cpc_q.median:'-')+'</td>','<td>'+(rw.ctr_q?rw.ctr_q.median:'-')+'</td>','<td>'+rw.spend+'</td>'].map(function(td){return td.replace('<td>','<td style="border:1px solid #E5E7EB;padding:8px 10px">');}).join('')+'</tr>'; });
     html+='</tbody></table></div></div>';
-    html+='<div style="border:1px solid #E5E7EB;padding:16px;background:#FAFAFA"><div style="font-size:13px;font-weight:700;margin-bottom:8px">이렇게 물어보세요</div><div style="font-size:13px;color:#555;line-height:1.9">· "한국 CPM 왜 높아?" · "업종별 CTR 비교" · "캠페인목표별 CPC"<br>· "브라질 vs 인도" · "전체 요약"<br><span style="color:#9CA3AF">질문하면 오른쪽 그래프가 질문에 맞춰 바뀝니다.</span></div></div>';
+    // 주요 인사이트 (상단 그래프·데이터 분석)
+    var ins=aiInsights(d);
+    html+='<div style="border:1px solid #E5E7EB;padding:16px"><div style="font-size:13px;font-weight:700;margin-bottom:10px">💡 주요 인사이트</div><div style="font-size:13px;color:#444;line-height:1.5">'+ins.map(function(t){return '<div style="display:flex;gap:8px;margin-bottom:8px"><span style="color:#4F46E5">•</span><span>'+t+'</span></div>';}).join('')+'</div></div>';
     main.innerHTML=html;
     drawAICharts();
   }
-  window.aiSetMedia=function(m){ if(typeof STATE!=='undefined')STATE.media=m; renderAIOverview(); };
+  window.aiSetMedia=function(m){ aiMed=m; renderAIOverview(); };   // AI 전용 매체(벤치마크 페이지와 독립)
 
   function injectAI(){
     if(typeof STATE!=='undefined'&&STATE.media==='V') STATE.media='G';  // AI 대시보드는 영상(V) 미지원 → 기본 매체로
@@ -1382,7 +1407,7 @@ function sugClick(btn,q){
   window._chatHist=window._chatHist||[];
   async function aiAsk(q){
     addMsg('chatbox','user',q); showTyping('chatbox');
-    var media=(typeof STATE!=='undefined'&&STATE.media)||'G', r=range();
+    var media=(typeof aiMed!=='undefined'?aiMed:((typeof STATE!=='undefined'&&STATE.media)||'G')), r=range();
     var hist=window._chatHist.slice(-6);   // 직전 대화 맥락(후속질문 이해)
     // 질문의 차원으로 컨텍스트를 받아 답변 근거를 질문에 맞춤(AI 페이지)
     var pq=(typeof parseAIQuery==='function')?parseAIQuery(q):{}; var dimQ=pq.dim||((typeof aiDim!=='undefined')?aiDim:curDim);

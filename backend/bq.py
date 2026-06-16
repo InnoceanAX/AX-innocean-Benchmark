@@ -22,7 +22,7 @@ VIDEO_TBL = f"`{PROJECT}.apac_kr_benchmark.bm_video_monthly`"   # 영상(media='
 LOCATION = "asia-northeast3"
 
 MEDIA_NAME = {"G": "Google", "M": "Meta", "N": "Naver", "K": "Kakao",
-              "D": "DV360", "T": "TikTok", "V": "영상(YouTube)"}
+              "D": "DV360", "T": "TikTok", "V": "영상(YouTube)", "ALL": "전체(매체통합)"}
 # KPI 정의: alias → (캠페인단위 SQL식, 낮을수록좋음, 표시포맷)
 KPI_EXPR = {
     "cpm": "SAFE_DIVIDE(cost,imp)*1000", "cpc": "SAFE_DIVIDE(cost,clk)",
@@ -192,12 +192,14 @@ def _pct(v):
 
 
 def _filter_clauses(media, p0, p1, filters):
-    clauses = ["media=@media", "period BETWEEN @p0 AND @p1"]
+    clauses = ["period BETWEEN @p0 AND @p1"]
     params = [
-        bigquery.ScalarQueryParameter("media", "STRING", media),
         bigquery.ScalarQueryParameter("p0", "STRING", p0),
         bigquery.ScalarQueryParameter("p1", "STRING", p1),
     ]
+    if media and str(media).upper() != "ALL":   # ALL=전체 매체 통합(매체 필터 생략)
+        clauses.insert(0, "media=@media")
+        params.append(bigquery.ScalarQueryParameter("media", "STRING", media))
     for k, v in (filters or {}).items():
         if k in FILTERS and v not in (None, "", "all", "전체"):
             clauses.append(f"{k}=@f_{k}")
@@ -426,37 +428,37 @@ def get_filter_options(media="G"):
     cl = _client()
     out = {}
     is_video = (media == "V")
+    is_all = str(media).upper() == "ALL"
     osrc = VIDEO_TBL if is_video else TBL
+    mw = "" if is_all else "media=@m AND "
+    mp = [] if is_all else [bigquery.ScalarQueryParameter("m", "STRING", media)]
     cols = ("market", "objective", "brand", "industry") if is_video \
         else ("market", "objective", "brand", "industry", "agency", "channel")
     for col in cols:
         rows = cl.query(
-            f"SELECT {col} v, SUM(cost) s FROM {osrc} WHERE media=@m AND {col} IS NOT NULL "
+            f"SELECT {col} v, SUM(cost) s FROM {osrc} WHERE {mw}{col} IS NOT NULL "
             f"GROUP BY 1 ORDER BY s DESC LIMIT 50",
-            job_config=bigquery.QueryJobConfig(query_parameters=[
-                bigquery.ScalarQueryParameter("m", "STRING", media)])).result()
+            job_config=bigquery.QueryJobConfig(query_parameters=list(mp))).result()
         out[col] = [{"v": r["v"], "name": dim_name(col, r["v"])} for r in rows if r["v"]]
-    # 세그먼트 차원 가용성 = 해당 매체에 데이터가 있을 때만 (영상엔 세그먼트 없음)
+    # 세그먼트 차원 가용성 (영상엔 세그먼트 없음)
     for seg, tbl in SEGMENT_TBL.items():
         out[seg + "_available"] = False
         if not is_video and _segment_available(seg):
             try:
                 n = list(cl.query(
-                    f"SELECT COUNT(*) n FROM {tbl} WHERE media=@m",
-                    job_config=bigquery.QueryJobConfig(query_parameters=[
-                        bigquery.ScalarQueryParameter("m", "STRING", media)])).result())[0]["n"]
+                    f"SELECT COUNT(*) n FROM {tbl} WHERE {mw}1=1",
+                    job_config=bigquery.QueryJobConfig(query_parameters=list(mp))).result())[0]["n"]
                 out[seg + "_available"] = n > 0
             except Exception:
                 pass
     out["video_media_available"] = _video_media_available()   # 영상(V) 매체 탭 노출 여부
-    # 광고상품(channel) 가용성 — '(기타)' 외 실제 채널유형이 있는 매체만(현재 Google)
+    # 광고상품(channel) 가용성 — '(기타)' 외 실제 채널유형이 있을 때
     out["channel_available"] = False
     if not is_video:
         try:
             n = list(cl.query(
-                f"SELECT COUNT(DISTINCT channel) n FROM {TBL} WHERE media=@m AND channel!='(기타)'",
-                job_config=bigquery.QueryJobConfig(query_parameters=[
-                    bigquery.ScalarQueryParameter("m", "STRING", media)])).result())[0]["n"]
+                f"SELECT COUNT(DISTINCT channel) n FROM {TBL} WHERE {mw}channel!='(기타)'",
+                job_config=bigquery.QueryJobConfig(query_parameters=list(mp))).result())[0]["n"]
             out["channel_available"] = n > 0
         except Exception:
             pass
