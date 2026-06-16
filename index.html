@@ -1057,8 +1057,8 @@ function sugClick(btn,q){
    데이터 ~99%가 현대·기아 자동차 → 벤치마크 축 = 권역(market). 4분위 = 분포 대비 내 위치. */
 (function(){
   var API=(window.API_CONFIG&&API_CONFIG.baseUrl)||'/api/v1';
-  var curKpi='cpm', curDim='market', curFilters={market:'',objective:'',brand:'',industry:'',channel:''};
-  var curKpiL='cpm', curKpiR='ctr';   // Summary 차트 선택지표 (좌=추세, 우=비교)
+  var curKpi='cpm', curDim='industry', curFilters={market:'',objective:'',brand:'',industry:'',channel:''};   // 원안=업종별 Summary
+  var curKpiL='ctr', curKpiR='cpm';   // Summary 차트: 좌=Rate지표(%), 우=단가지표(₩)
   var curGross=0;   // Net/Gross 수수료율(%) — 0=Net
   var curDetCols=[];   // 지표추가(Additional Index)로 켠 상세표 추가 컬럼
   var detSort={k:null,asc:false};   // 상세표 정렬 상태
@@ -1085,50 +1085,20 @@ function sugClick(btn,q){
     return fetch(url).then(function(r){return r.json();}).then(function(j){ try{ sessionStorage.setItem(k, JSON.stringify(j)); }catch(e){} return j; });
   }
   window.bmClearCache=function(){ try{ for(var i=sessionStorage.length-1;i>=0;i--){ var key=sessionStorage.key(i); if(key&&key.indexOf('bmc:')===0) sessionStorage.removeItem(key); } }catch(e){} };
-  // 원본 필터 패널(.fp .fpg) 데이터 구동 재구성 — 기간/통화/환율은 보존, 원본 클래스 사용.
-  // 지원 필터(업종·국가·브랜드·캠페인목표)는 실데이터 연결, 미지원 2차 필터는 비활성(연동예정).
-  var DIM_LABELS={market:'국가',objective:'캠페인목표',brand:'브랜드',industry:'업종',device:'디바이스',age:'연령',gender:'성별'};
-  // [라벨, 예시옵션, 활성화 조건] — 비활성 필터에 조건을 앱에서 표시(툴팁+클릭).
-  var COND_RAW='✅ 원천 데이터 보유 — 통합뷰/마트 차원 추가 시 활성화(단기 가능)';
-  var COND_DB='⏳ DB 수집·통합뷰 노출 필요 — 수집되면 자동 활성화';
-  var COND_SEG='⏳ 교차 세그먼트 데이터 필요 — DB가 해당 분해를 통합뷰에 추가 시 활성화';
-  var PH_BY_MEDIA={
-    G:[['광고 상품','Search / Display(배너) / YouTube',COND_RAW],['영상 길이','6s / 15s / 30s / 60s+',COND_DB]],
-    D:[['광고 상품','Display(배너) / YouTube',COND_RAW],['라인아이템 유형','Display / Video',COND_SEG]],
-    V:[['영상 길이','6s / 15s / 30s / 60s+',COND_DB],['스킵 유형','Skippable / Bumper',COND_DB]],
-    M:[['구매 유형','AUCTION / RESERVED',COND_SEG],['노출 위치','피드 / 스토리 / 릴스',COND_SEG]],
-    K:[['캠페인 유형','도달 / 동영상조회 / 전환',COND_SEG],['노출 위치','카카오톡 / 다음',COND_SEG]],
-    T:[['노출 위치','In-Feed',COND_SEG]],N:[['노출 위치','메인 / 서브',COND_DB]]};
-  function buildControlBar(){
-    var box=document.getElementById('bmCtl'); if(box)box.remove();   // 이전 임시 컨트롤바 제거
-    var fpg=document.querySelector('#pgBM .fpg'); if(!fpg)return;
-    var o=window._bmOptions||{}, media=(typeof STATE!=='undefined'&&STATE.media)||'G';
-    var dims=[['market','국가'],['objective','캠페인목표'],['brand','브랜드'],['industry','업종']];
-    if(o.channel_available)dims.push(['channel','광고상품']);
-    if(o.device_available)dims.push(['device','디바이스']); if(o.age_available)dims.push(['age','연령']); if(o.gender_available)dims.push(['gender','성별']);
-    if(dims.map(function(d){return d[0];}).indexOf(curDim)<0)curDim='market';
-    function selOpts(key){ return '<option value="">전체</option>'+((o[key]||[]).map(function(x){return '<option value="'+x.v+'"'+(curFilters[key]===x.v?' selected':'')+'>'+x.name+'</option>';}).join('')); }
-    function fgSel(label,fk){ return '<div class="fg"><span class="flbl">'+label+'</span><select class="fsel" data-fk="'+fk+'">'+selOpts(fk)+'</select></div>'; }
-    var dimOpts=dims.map(function(d){return '<option value="'+d[0]+'"'+(d[0]===curDim?' selected':'')+'>'+d[1]+'</option>';}).join('');
-    var geo=(['K','N'].indexOf(media)<0)?'<div class="fg"><span class="flbl">국가</span><select class="fsel" data-fk="market">'+selOpts('market')+'</select></div>'
-      :'<div class="fg" title="카카오·네이버는 국내(KR) 기준"><span class="flbl">국가</span><select class="fsel" disabled><option>South Korea</option></select></div>';
-    var phl=(PH_BY_MEDIA[media]||[]).filter(function(p){ return !(o.channel_available && p[0]==='광고 상품'); });   // 광고상품 활성화 시 플레이스홀더 제외
-    var ph=phl.map(function(p){var cond=(p[2]||'추후 연동');return '<div class="fg phfg" title="활성화 조건: '+cond+'" style="opacity:.5;cursor:help" data-cond="'+cond+'" data-nm="'+p[0]+'"><span class="flbl">'+p[0]+' <span style="font-size:9px;color:#9CA3AF">ⓘ 연동예정</span></span><select class="fsel" disabled><option>'+p[1]+'</option></select></div>';}).join('');
-    var html='<div class="fg"><span class="flbl">기준 차원</span><select class="fsel" id="bmDimSel">'+dimOpts+'</select></div>'
-      +fgSel('업종','industry')+geo+fgSel('브랜드','brand')+fgSel('캠페인 목표','objective')
-      +(o.channel_available?fgSel('광고 상품','channel'):'')+ph;
-    // 기간(frmDate) .fg는 보존하고 나머지 .fg/검색버튼 제거 후 재구성
-    var dateFg=null; fpg.querySelectorAll('.fg').forEach(function(el){ if(el.querySelector('#frmDate'))dateFg=el; });
-    fpg.querySelectorAll('.fg').forEach(function(el){ if(el!==dateFg)el.remove(); });
-    var ob=fpg.querySelector('.srcbtn'); if(ob)ob.remove();
-    if(dateFg)dateFg.insertAdjacentHTML('afterend',html); else fpg.insertAdjacentHTML('afterbegin',html);
-    var btn=document.createElement('button'); btn.className='srcbtn'; btn.textContent='데이터 검색'; btn.setAttribute('onclick','runSearch()'); fpg.appendChild(btn);
-    fpg.querySelectorAll('select[data-fk]').forEach(function(s){ s.onchange=function(){ curFilters[s.dataset.fk]=s.value; if(STATE.pg==='B')reloadAll(); }; });
-    var ds=document.getElementById('bmDimSel'); if(ds)ds.onchange=function(){ curDim=ds.value; if(STATE.pg==='B')reloadAll(); };
-    fpg.querySelectorAll('.phfg').forEach(function(el){ el.onclick=function(){ window.bmShowCond(el.getAttribute('data-nm'), el.getAttribute('data-cond')); }; });
+  // 원안 필터 패널(.fp) 레이아웃은 그대로 두고, 지원 필터(업종·국가·광고상품)에 실데이터 옵션만 주입.
+  function _fillSel(labelPrefix, key){
+    var o=window._bmOptions||{}, fgs=document.querySelectorAll('#pgBM .fp .fg'), i;
+    for(i=0;i<fgs.length;i++){ var l=fgs[i].querySelector('.flbl'); if(!l)continue;
+      if(l.textContent.trim().indexOf(labelPrefix)===0){ var s=fgs[i].querySelector('select'); if(!s)return;
+        s.innerHTML='<option value="">전체</option>'+((o[key]||[]).map(function(x){return '<option value="'+x.v+'"'+(curFilters[key]===x.v?' selected':'')+'>'+x.name+'</option>';}).join(''));
+        s.disabled=false; (function(sel,k){ sel.onchange=function(){ curFilters[k]=sel.value; if(typeof STATE!=='undefined'&&STATE.pg==='B')reloadAll(); }; })(s,key);
+        return; } }
   }
-  window.bmSetDim=function(d){ curDim=d; var ds=document.getElementById('bmDimSel'); if(ds)ds.value=d; if(typeof STATE!=='undefined'&&STATE.pg==='B')reloadAll(); };
-  window.bmShowCond=function(name,cond){ if(window.toast){ toast(name+' — '+cond, 'ⓘ'); } else { alert(name+'\n활성화 조건: '+cond); } };
+  function buildControlBar(){   // 원안 레이아웃 유지 — 실데이터 옵션만 주입(업종별 Summary 고정)
+    _fillSel('업종','industry'); _fillSel('국가','market');
+    if((window._bmOptions||{}).channel_available) _fillSel('광고 상품','channel');
+  }
+  window.bmSetDim=function(){};   // 원안엔 기준차원 없음 (no-op)
   function ensureVideoTab(o){   // 영상(V) 매체 탭 — 영상 마트에 데이터가 있을 때만 노출
     var tabs=document.querySelector('#pgBM .mtabs'); if(!tabs) return;
     var has=document.getElementById('mtV');
@@ -1139,7 +1109,7 @@ function sugClick(btn,q){
     ['G','D','V','M','T','K','N'].forEach(function(m){ var b=document.getElementById('mt'+m); if(b)tabs.appendChild(b); });
     var nv=document.getElementById('mtN'); if(nv){ nv.style.opacity='.4'; nv.style.pointerEvents='none'; nv.title='네이버 수집 예정'; }
   }
-  function refreshControls(){ var media=(typeof STATE!=='undefined'&&STATE.media)||'G'; return cachedJSON(API+'/meta/options?media='+media).then(function(o){ window._bmOptions=o; ensureVideoTab(o); tidyMediaTabs(); buildControlBar(); }).catch(function(){ buildControlBar(); }); }
+  function refreshControls(){ var media=(typeof STATE!=='undefined'&&STATE.media)||'G'; return cachedJSON(API+'/meta/options?media='+media).then(function(o){ window._bmOptions=o; buildControlBar(); }).catch(function(){ buildControlBar(); }); }
   function setLoading(on){
     var el=document.getElementById('bmLoading');
     if(!el){ el=document.createElement('div'); el.id='bmLoading'; el.style.cssText='display:none;position:fixed;inset:0;background:rgba(255,255,255,.55);z-index:5000;align-items:center;justify-content:center';
@@ -1149,42 +1119,16 @@ function sugClick(btn,q){
   }
   function findByText(sel,txt){ var els=document.querySelectorAll(sel),i; for(i=0;i<els.length;i++){ if((els[i].textContent||'').trim()===txt) return els[i]; } return null; }
 
-  // ── 1회 UI 보정: 탭 추가 / 라벨 변경 / 죽은 필터 숨김 / 브랜드 필터 / KPI 토글 ──
+  // ── 원안 레이아웃 보존: 구조/라벨/탭 변경 없이 실데이터만 연결 ──
   function injectUI(){
-    // DV360·TikTok 탭
-    var tabs=document.querySelector('#pgBM .mtabs');
-    if(tabs && !document.getElementById('mtD')){
-      [['D','DV360'],['T','TikTok']].forEach(function(x){
-        var b=document.createElement('button'); b.className='mtab'; b.id='mt'+x[0]; b.textContent=x[1];
-        b.setAttribute('onclick',"swM('"+x[0]+"')"); tabs.appendChild(b);
-      });
-    }
-    // 원본 필터 패널은 buildControlBar()가 데이터 구동으로 재구성(숨기지 않음).
     // 통화: 선택 시 환산 재조회 (마트 KRW → 선택 통화)
     document.querySelectorAll('#pgBM input[name="bm_cur"]').forEach(function(r){
       r.disabled=false; if(r.parentNode)r.parentNode.style.opacity='';
       r.onchange=function(){ if(typeof STATE!=='undefined'&&STATE.pg==='B') reloadAll(); };
     });
-    // Net/Gross(수수료) 복원·연결: Gross 선택 시 수수료율 입력, 비용계 지표에 반영 재조회
+    // Net/Gross: Gross 선택 시 수수료율 입력칸 표시(원안 동작)
     var gw=document.getElementById('grossWrap'); if(gw)gw.style.display='none';
-    buildChartSelectors();   // kpiSelL=추세지표, kpiSelR=비교지표 (전체 지표, 미가용은 비활성)
-    // 섹션 라벨 변경
-    var s1=findByText('#pgBM *','업종별 Summary'); if(s1) s1.textContent='벤치마크 (캠페인 분포 4분위)';
-    // 영상(YouTube)·DV360(배너) 매체 라벨 정리
-    var mtV=document.getElementById('mtV'); if(mtV) mtV.textContent='YouTube(영상)';
-    var mtDb=document.getElementById('mtD'); if(mtDb) mtDb.textContent='DV360(배너)';
-    // '지표 추가'(Additional Index) 버튼 복원 — kpiMdl 모달로 상세표 지표 추가(원안 기능)
-    document.querySelectorAll('#pgBM button').forEach(function(b){ if((b.textContent||'').indexOf('지표 추가')>=0) b.style.display=''; });
-    // List Size에 200건 옵션 추가(2차 설계: 20/50/100/200)
-    var lsz=document.getElementById('lsz');
-    if(lsz && !lsz.querySelector('option[value="200"]')){ var o=document.createElement('option'); o.value='200'; o.textContent='200건'; var full=lsz.querySelector('option[value="9999"]'); lsz.insertBefore(o, full||null); }
-    // KPI 토글 주입 (요약표 위)
-    var sumTwrap=document.querySelector('#pgBM .twrap');
-    if(sumTwrap && !document.getElementById('bmKpiTgl')){
-      var bar=document.createElement('div'); bar.id='bmKpiTgl'; bar.style.cssText='display:flex;gap:8px;margin-bottom:12px;align-items:center';
-      var lab=document.createElement('span'); lab.textContent='벤치마크 지표:'; lab.style.cssText='font-size:12px;color:#767676;font-weight:600;margin-right:4px'; bar.appendChild(lab);
-      sumTwrap.parentNode.insertBefore(bar, sumTwrap);   // 버튼은 buildKpiToggle()이 데이터 기준으로 채움(ROAS 가용시 추가)
-    }
+    buildChartSelectors();   // 원안 Rate/단가 드롭다운 → 실데이터 차트 연결
   }
 
   async function bmLoad(){
@@ -1198,20 +1142,20 @@ function sugClick(btn,q){
   }
   window.bmLoad=bmLoad;
 
-  // 권역별 4분위 벤치마크 표 (선택 KPI)
+  // 원안 업종별 Summary 표 — 다지표(노출/CPM/CPC/CTR/지출), 실데이터 주입
   function renderBench(){
     var tbl=document.querySelector('#pgBM .twrap table'); if(!tbl||!window.BM_DATA) return;
     var thead=tbl.querySelector('thead tr'), tbody=tbl.querySelector('tbody'); if(!thead||!tbody) return;
-    var u=KU[curKpi];
-    var cols=[dimLabel(),'캠페인수',u+' 평균',u+' 중앙값',u+' 상위25%',u+' 상위10%','지출'];
+    var isV=!!(BM_DATA.meta&&BM_DATA.meta.is_video);
+    var cols=isV?[dimLabel(),'노출수','CPM','VTR','CPV','완전조회율','지출']
+                :[dimLabel(),'노출수','CPM','CPC','CTR','지출'];
     thead.innerHTML=''; cols.forEach(function(c){ var th=document.createElement('th'); th.textContent=c; thead.appendChild(th); });
     tbody.innerHTML='';
     (BM_DATA.benchmark||[]).forEach(function(r){
       var tr=document.createElement('tr'); if(r.cls)tr.className=r.cls;
-      var q=r[curKpi+'_q'], cells;
-      if(r.cls){ cells=[r.name,'—',r[curKpi]||'—','—','—','—',r.spend]; }   // Total: 전체 평균만
-      else { cells=[r.name, r.n, q?q.avg:'—', q?q.median:'—', q?q.top25:'—', q?q.top10:'—', r.spend]; }
-      tr.innerHTML=cells.map(function(c){ return '<td>'+c+'</td>'; }).join('');
+      var cells=isV?[r.name,r.imp,r.cpm,r.vtr,r.cpv,r.cr,r.spend]
+                   :[r.name,r.imp,r.cpm,r.cpc,r.ctr,r.spend];
+      tr.innerHTML=cells.map(function(c){ return '<td>'+(c!=null?c:'—')+'</td>'; }).join('');
       tbody.appendChild(tr);
     });
   }
@@ -1264,22 +1208,21 @@ function sugClick(btn,q){
   // 통화 기본값: 글로벌(Meta/Google/DV360/TikTok/영상)=USD, 국내(카카오/네이버)=KRW
   function applyDefaultCurrency(m){ var def=(['K','N'].indexOf(m)>=0)?'KRW':'USD'; var rb=document.querySelector('#pgBM input[name="bm_cur"][value="'+def+'"]'); if(rb)rb.checked=true; }
   function kpiLbl(k){ var sym=(BM_DATA&&BM_DATA.meta&&BM_DATA.meta.symbol)||'₩'; return PCT_KPI[k]?KU[k]+' (%)':(k==='roas'?KU[k]+' (배)':KU[k]+' ('+sym+')'); }
-  // 차트 지표 드롭다운 (원안 복원): kpiSelL=추세지표, kpiSelR=비교지표. 전체 지표 노출, 미가용은 비활성.
+  // 원안 차트 드롭다운: kpiSelL=Rate 지표(CTR/CVR/VTR…), kpiSelR=단가 지표(CPM/CPC/CPV). 미가용은 비활성.
   function buildChartSelectors(){
     var meta=(window.BM_DATA&&BM_DATA.meta)||{}, all=meta.all_kpis||['cpm','cpc','ctr','cvr','roas'], avail=meta.kpis||['cpm','cpc','ctr'];
-    if(avail.indexOf(curKpiL)<0) curKpiL=avail[0]||all[0];
-    if(avail.indexOf(curKpiR)<0) curKpiR=(avail.indexOf('ctr')>=0?'ctr':(avail[0]||all[0]));
-    function fill(sel,cur,cb){ var s=document.getElementById(sel); if(!s)return;
-      s.innerHTML=all.map(function(k){ var on=avail.indexOf(k)>=0; return '<option value="'+k+'"'+(k===cur?' selected':'')+(on?'':' disabled')+'>'+(KU[k]||k.toUpperCase())+(on?'':' (데이터없음)')+'</option>'; }).join('');
+    var rate=all.filter(function(k){return PCT_KPI[k];});                 // Rate 지표(%)
+    var cost=all.filter(function(k){return !PCT_KPI[k] && k!=='roas';});  // 단가 지표(₩): cpm/cpc/cpv
+    function pick(list){ var a=list.filter(function(k){return avail.indexOf(k)>=0;}); return a[0]||list[0]; }
+    if(rate.indexOf(curKpiL)<0) curKpiL=pick(rate);
+    if(cost.indexOf(curKpiR)<0) curKpiR=pick(cost);
+    function fill(id,list,cur,cb){ var s=document.getElementById(id); if(!s)return;
+      s.innerHTML=list.map(function(k){ var on=avail.indexOf(k)>=0; return '<option value="'+k+'"'+(k===cur?' selected':'')+(on?'':' disabled')+'>'+(KU[k]||k.toUpperCase())+(on?'':' (데이터없음)')+'</option>'; }).join('');
       s.onchange=cb; }
-    fill('kpiSelL',curKpiL,function(){ curKpiL=this.value; renderCharts(); });
-    fill('kpiSelR',curKpiR,function(){ curKpiR=this.value; renderCharts(); });
-    // 라벨/보조선택 정리
-    var ll=document.querySelector('label[for]'); // no-op guard
+    fill('kpiSelL',rate,curKpiL,function(){ curKpiL=this.value; renderCharts(); });
+    fill('kpiSelR',cost,curKpiR,function(){ curKpiR=this.value; renderCharts(); });
     var subL=document.getElementById('kpiSubL'); if(subL)subL.style.display='none';
     var subR=document.getElementById('kpiSubR'); if(subR)subR.style.display='none';
-    // giw 라벨 텍스트 변경 (Rate지표→추세지표 / 단가지표→비교지표)
-    var gtxt=document.querySelectorAll('#pgBM .ngrow .giw span'); gtxt.forEach(function(sp){ var t=(sp.textContent||'').trim(); if(t==='Rate 지표')sp.textContent='추세 지표'; if(t==='단가 지표')sp.textContent='비교 지표'; });
   }
   window.updateLeftChart=function(){ var s=document.getElementById('kpiSelL'); if(s){curKpiL=s.value;} renderCharts(); };
   window.updateRightChart=function(){ var s=document.getElementById('kpiSelR'); if(s){curKpiR=s.value;} renderCharts(); };
@@ -1318,7 +1261,7 @@ function sugClick(btn,q){
       bar.appendChild(b);
     });
   }
-  function renderAll(){ buildKpiToggle(); buildChartSelectors(); updateExrate(); renderBench(); renderDet(); buildKpiMdl(); renderCharts(); }
+  function renderAll(){ buildChartSelectors(); updateExrate(); renderBench(); renderDet(); buildKpiMdl(); renderCharts(); }
   function reloadAll(){ bmLoad().then(renderAll); }
   window.reloadAll=reloadAll;
   function enterBM(){ injectUI(); applyDefaultCurrency((typeof STATE!=='undefined'&&STATE.media)||'G'); refreshControls(); reloadAll(); }
