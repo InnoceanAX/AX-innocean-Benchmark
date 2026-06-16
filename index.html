@@ -1083,13 +1083,17 @@ function sugClick(btn,q){
   // 원본 필터 패널(.fp .fpg) 데이터 구동 재구성 — 기간/통화/환율은 보존, 원본 클래스 사용.
   // 지원 필터(업종·국가·브랜드·캠페인목표)는 실데이터 연결, 미지원 2차 필터는 비활성(연동예정).
   var DIM_LABELS={market:'국가',objective:'캠페인목표',brand:'브랜드',industry:'업종',device:'디바이스',age:'연령',gender:'성별'};
+  // [라벨, 예시옵션, 활성화 조건] — 비활성 필터에 조건을 앱에서 표시(툴팁+클릭).
+  var COND_RAW='✅ 원천 데이터 보유 — 통합뷰/마트 차원 추가 시 활성화(단기 가능)';
+  var COND_DB='⏳ DB 수집·통합뷰 노출 필요 — 수집되면 자동 활성화';
+  var COND_SEG='⏳ 교차 세그먼트 데이터 필요 — DB가 해당 분해를 통합뷰에 추가 시 활성화';
   var PH_BY_MEDIA={
-    G:[['광고 상품','Search / Display(배너) / YouTube'],['영상 길이','6s / 15s / 30s / 60s+']],
-    D:[['광고 상품','Display(배너) / YouTube'],['라인아이템 유형','Display / Video']],
-    V:[['영상 길이','6s / 15s / 30s / 60s+'],['스킵 유형','Skippable / Bumper']],
-    M:[['구매 유형','AUCTION / RESERVED'],['노출 위치','피드 / 스토리 / 릴스']],
-    K:[['캠페인 유형','도달 / 동영상조회 / 전환'],['노출 위치','카카오톡 / 다음']],
-    T:[['노출 위치','In-Feed']],N:[['노출 위치','메인 / 서브']]};
+    G:[['광고 상품','Search / Display(배너) / YouTube',COND_RAW],['영상 길이','6s / 15s / 30s / 60s+',COND_DB]],
+    D:[['광고 상품','Display(배너) / YouTube',COND_RAW],['라인아이템 유형','Display / Video',COND_SEG]],
+    V:[['영상 길이','6s / 15s / 30s / 60s+',COND_DB],['스킵 유형','Skippable / Bumper',COND_DB]],
+    M:[['구매 유형','AUCTION / RESERVED',COND_SEG],['노출 위치','피드 / 스토리 / 릴스',COND_SEG]],
+    K:[['캠페인 유형','도달 / 동영상조회 / 전환',COND_SEG],['노출 위치','카카오톡 / 다음',COND_SEG]],
+    T:[['노출 위치','In-Feed',COND_SEG]],N:[['노출 위치','메인 / 서브',COND_DB]]};
   function buildControlBar(){
     var box=document.getElementById('bmCtl'); if(box)box.remove();   // 이전 임시 컨트롤바 제거
     var fpg=document.querySelector('#pgBM .fpg'); if(!fpg)return;
@@ -1102,7 +1106,7 @@ function sugClick(btn,q){
     var dimOpts=dims.map(function(d){return '<option value="'+d[0]+'"'+(d[0]===curDim?' selected':'')+'>'+d[1]+'</option>';}).join('');
     var geo=(['K','N'].indexOf(media)<0)?'<div class="fg"><span class="flbl">국가</span><select class="fsel" data-fk="market">'+selOpts('market')+'</select></div>'
       :'<div class="fg" title="카카오·네이버는 국내(KR) 기준"><span class="flbl">국가</span><select class="fsel" disabled><option>South Korea</option></select></div>';
-    var ph=(PH_BY_MEDIA[media]||[]).map(function(p){return '<div class="fg" title="현재 데이터로 미지원 — 추후 연동" style="opacity:.45"><span class="flbl">'+p[0]+' <span style="font-size:9px;color:#9CA3AF">(연동예정)</span></span><select class="fsel" disabled><option>'+p[1]+'</option></select></div>';}).join('');
+    var ph=(PH_BY_MEDIA[media]||[]).map(function(p){var cond=(p[2]||'추후 연동');return '<div class="fg phfg" title="활성화 조건: '+cond+'" style="opacity:.5;cursor:help" data-cond="'+cond+'" data-nm="'+p[0]+'"><span class="flbl">'+p[0]+' <span style="font-size:9px;color:#9CA3AF">ⓘ 연동예정</span></span><select class="fsel" disabled><option>'+p[1]+'</option></select></div>';}).join('');
     var html='<div class="fg"><span class="flbl">기준 차원</span><select class="fsel" id="bmDimSel">'+dimOpts+'</select></div>'
       +fgSel('업종','industry')+geo+fgSel('브랜드','brand')+fgSel('캠페인 목표','objective')+ph;
     // 기간(frmDate) .fg는 보존하고 나머지 .fg/검색버튼 제거 후 재구성
@@ -1113,8 +1117,10 @@ function sugClick(btn,q){
     var btn=document.createElement('button'); btn.className='srcbtn'; btn.textContent='데이터 검색'; btn.setAttribute('onclick','runSearch()'); fpg.appendChild(btn);
     fpg.querySelectorAll('select[data-fk]').forEach(function(s){ s.onchange=function(){ curFilters[s.dataset.fk]=s.value; if(STATE.pg==='B')reloadAll(); }; });
     var ds=document.getElementById('bmDimSel'); if(ds)ds.onchange=function(){ curDim=ds.value; if(STATE.pg==='B')reloadAll(); };
+    fpg.querySelectorAll('.phfg').forEach(function(el){ el.onclick=function(){ window.bmShowCond(el.getAttribute('data-nm'), el.getAttribute('data-cond')); }; });
   }
   window.bmSetDim=function(d){ curDim=d; var ds=document.getElementById('bmDimSel'); if(ds)ds.value=d; if(typeof STATE!=='undefined'&&STATE.pg==='B')reloadAll(); };
+  window.bmShowCond=function(name,cond){ if(window.toast){ toast(name+' — '+cond, 'ⓘ'); } else { alert(name+'\n활성화 조건: '+cond); } };
   function ensureVideoTab(o){   // 영상(V) 매체 탭 — 영상 마트에 데이터가 있을 때만 노출
     var tabs=document.querySelector('#pgBM .mtabs'); if(!tabs) return;
     var has=document.getElementById('mtV');
