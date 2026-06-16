@@ -1372,14 +1372,15 @@ function sugClick(btn,q){
       +'</div>';
     // 차트 지표 토글 (소형, 레이아웃 미해침)
     html+='<div id="aiKpiTgl" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span style="font-size:11px;color:var(--tm);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-right:4px">차트 지표</span>'+av.map(function(k){return '<button class="dbtn'+(k===aiKpi?' pri':'')+'" data-k="'+k+'" onclick="window.aiSetKpi(\''+k+'\')">'+(KU[k]||k.toUpperCase())+'</button>';}).join('')+'</div>';
-    // 추세 차트 (원안 chcard, HTML 범례 lgrow)
-    html+='<div class="chcard"><div class="chhd"><div><div class="chtit">'+mName+' — 월별 '+ku+' 추이</div><div class="chsub">'+(m.date_from||'').slice(0,7)+' ~ '+(m.date_to||'').slice(0,7)+' | '+dimLbl+' 벤치마크 대비</div></div>'
-      +'<div class="lgrow"><div class="lgit"><span style="display:inline-block;width:24px;height:3px;background:#4F46E5;margin-right:4px;vertical-align:middle"></span>'+ku+'</div>'
-      +'<div class="lgit"><span style="display:inline-block;width:24px;height:0;border-top:2px dashed #EF4444;margin-right:4px;vertical-align:middle"></span>전체 평균</div></div></div>'
-      +'<div class="chwrap"><canvas id="aiLine"></canvas></div></div>';
-    // 차원 비교 차트 (원안 chcard 동일 스타일)
-    html+='<div class="chcard"><div class="chhd"><div><div class="chtit">'+dimLbl+'별 '+ku+' 비교</div><div class="chsub">캠페인 중앙값 기준'+(aiHighlight?' · 질문 관련 항목 강조':'')+'</div></div></div>'
-      +'<div class="chwrap"><canvas id="aiBar"></canvas></div></div>';
+    // 차트 2개 — 한 줄(좌:추세 / 우:차원비교), 스크롤 없이 한 화면에 들어오도록 컴팩트
+    html+='<div style="display:flex;gap:16px;flex-wrap:wrap">';
+    html+='<div class="chcard" style="flex:1;min-width:280px;padding:18px"><div class="chhd" style="margin-bottom:12px"><div><div class="chtit">'+mName+' — 월별 '+ku+' 추이</div><div class="chsub">'+(m.date_from||'').slice(0,7)+' ~ '+(m.date_to||'').slice(0,7)+' | '+dimLbl+' 벤치마크 대비</div></div>'
+      +'<div class="lgrow"><div class="lgit"><span style="display:inline-block;width:20px;height:3px;background:#4F46E5;margin-right:4px;vertical-align:middle"></span>'+ku+'</div>'
+      +'<div class="lgit"><span style="display:inline-block;width:20px;height:0;border-top:2px dashed #EF4444;margin-right:4px;vertical-align:middle"></span>전체 평균</div></div></div>'
+      +'<div class="chwrap" style="height:200px"><canvas id="aiLine"></canvas></div></div>';
+    html+='<div class="chcard" style="flex:1;min-width:280px;padding:18px"><div class="chhd" style="margin-bottom:12px"><div><div class="chtit">'+dimLbl+'별 '+ku+' 비교</div><div class="chsub">캠페인 중앙값 기준'+(aiHighlight?' · 질문 관련 항목 강조':'')+'</div></div></div>'
+      +'<div class="chwrap" style="height:200px"><canvas id="aiBar"></canvas></div></div>';
+    html+='</div>';
     // 주요 인사이트 (원안 inscard/instit/insit/indot)
     var ins=aiInsights(d);
     html+='<div class="inscard"><div class="instit">&#128161; 주요 인사이트</div>'+ins.map(function(t){return '<div class="insit"><div class="indot"></div><div>'+t+'</div></div>';}).join('')+'</div>';
