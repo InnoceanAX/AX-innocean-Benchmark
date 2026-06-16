@@ -1369,8 +1369,10 @@ function sugClick(btn,q){
     addMsg('chatbox','user',q); showTyping('chatbox');
     var media=(typeof STATE!=='undefined'&&STATE.media)||'G', r=range();
     var hist=window._chatHist.slice(-6);   // 직전 대화 맥락(후속질문 이해)
+    // 질문의 차원으로 컨텍스트를 받아 답변 근거를 질문에 맞춤(AI 페이지)
+    var pq=(typeof parseAIQuery==='function')?parseAIQuery(q):{}; var dimQ=pq.dim||((typeof aiDim!=='undefined')?aiDim:curDim);
     try{
-      var res=await fetch(API+'/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q,media:media,dim:curDim,date_from:r.df,date_to:r.dt,currency:curCur(),market:curFilters.market,objective:curFilters.objective,brand:curFilters.brand,industry:curFilters.industry,history:hist})});
+      var res=await fetch(API+'/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q,media:media,dim:dimQ,date_from:r.df,date_to:r.dt,currency:curCur(),market:curFilters.market,objective:curFilters.objective,brand:curFilters.brand,industry:curFilters.industry,history:hist})});
       var d=await res.json(); hideTyping('chatbox'); var ans=d.reply||'(응답 없음)'; addMsg('chatbox','ai',ans);
       window._chatHist.push({role:'user',text:q},{role:'ai',text:ans}); if(window._chatHist.length>12)window._chatHist=window._chatHist.slice(-12);
     }catch(e){ hideTyping('chatbox'); addMsg('chatbox','ai','(오류) 분석 서버에 연결하지 못했습니다.'); }

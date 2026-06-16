@@ -474,17 +474,19 @@ def get_summary_context(media="G", dim="market", date_from="2025-01-01", date_to
     KU = {"cpm": "CPM", "cpc": "CPC", "ctr": "CTR", "cvr": "CVR", "roas": "ROAS",
           "vtr": "VTR(조회율)", "cpv": "CPV(조회당비용)", "cr": "완전조회율"}
     better = ", ".join(f"{KU[k]}={'낮을수록' if KPI_LOWER_BETTER.get(k) else '높을수록'} 좋음" for k in kpis)
-    lines = [f"[{d['meta']['media_name']} · {lbl}별 벤치마크 · {date_from[:7]}~{date_to[:7]} · 통화 {cur}]",
-             f"(각 {lbl}의 캠페인 분포. {better})"]
-    for r in d["benchmark"][:16]:
+    cb = d["meta"].get("cost_basis", "Net")
+    lines = [f"[{d['meta']['media_name']} · {lbl}별 벤치마크 · {date_from[:7]}~{date_to[:7]} · 통화 {cur} · 비용기준 {cb}]",
+             f"(각 {lbl}의 캠페인 KPI 분포 = 평균/중앙값/상위25%/상위10%. {better}. "
+             f"중앙값=절반 기준, 상위10%=잘한 상위 캠페인 수준)"]
+    for r in d["benchmark"][:18]:
         if r.get("cls") == "ttl":
             agg = ", ".join(f"{KU[k]} {r.get(k)}" for k in kpis)
-            lines.append(f"- 전체평균: {agg}, 노출 {r['imp']}, 지출 {r['spend']}")
+            lines.append(f"- [전체평균] {agg} · 노출 {r['imp']} · 지출 {r['spend']}")
             continue
         parts = []
         for k in kpis:
             q = r.get(k + "_q")
             if q:
-                parts.append(f"{KU[k]} 중앙 {q['median']}(상위10% {q['top10']})")
-        lines.append(f"- {r['name']} (캠페인 {r['n']}개): " + ", ".join(parts) + f", 지출 {r['spend']}")
+                parts.append(f"{KU[k]}(평균 {q['avg']}/중앙 {q['median']}/상위25% {q['top25']}/상위10% {q['top10']})")
+        lines.append(f"- {r['name']} (캠페인 {r['n']}개, 지출 {r['spend']}): " + ", ".join(parts))
     return "\n".join(lines)
