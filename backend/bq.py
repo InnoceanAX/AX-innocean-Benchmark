@@ -301,19 +301,20 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     tot = [0, 0, 0.0, 0, 0.0, 0, 0]   # imp, clk, cost, n, rev, vviews, vp100
     tot_nrev = 0                       # 전환가치(rev>0) 캠페인 수 → ROAS 커버리지 게이트용
     tot_nconv = 0                      # 전환(conv>0) 캠페인 수 → CVR 커버리지 게이트용
+    tot_conv = 0.0                     # 전환수 합계(지표추가 Summary 표시용)
     for r in rows:
         imp, clk, cost, conv, rev, vv, vp = _vals(r)
         tot[0] += imp; tot[1] += clk; tot[2] += cost; tot[3] += r["n"]
-        tot[4] += rev; tot[5] += vv; tot[6] += vp
+        tot[4] += rev; tot[5] += vv; tot[6] += vp; tot_conv += conv
         tot_nrev += (r.get("nrev") or 0); tot_nconv += (r.get("nconv") or 0)
         row = {"dim": r["dim"], "name": dim_name(dim, r["dim"]), "n": r["n"],
-               "imp": _num(imp), "spend": money(cost)}
+               "imp": _num(imp), "spend": money(cost), "conv": _num(conv)}
         for k in calc_kpis:
             row[k] = qf(k, _agg_kpi(k, imp, clk, cost, conv, rev, vv, vp))
             row[k + "_q"] = {q: qf(k, r.get(f"{k}_{q}")) for q in ("avg", "median", "top25", "top10")}
         benchmark.append(row)
     total = {"dim": "TOTAL", "name": "전체", "n": tot[3], "imp": _num(tot[0]),
-             "spend": money(tot[2]), "cls": "ttl"}
+             "spend": money(tot[2]), "conv": _num(tot_conv), "cls": "ttl"}
     for k in calc_kpis:
         total[k] = qf(k, _agg_kpi(k, tot[0], tot[1], tot[2], 0, tot[4], tot[5], tot[6]))
     # ROAS·CVR는 전환(가치) 추적 캠페인이 일정 비율(≥10%) 이상일 때만 노출 — 추적 미흡 매체의
