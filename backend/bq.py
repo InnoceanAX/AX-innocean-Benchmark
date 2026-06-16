@@ -33,8 +33,8 @@ KPI_EXPR = {
 }
 KPI_LOWER_BETTER = {"cpm": True, "cpc": True, "ctr": False, "cvr": False, "roas": False,
                     "vtr": False, "cpv": True, "cr": False}
-KPI_FMT = {"cpm": "money", "cpc": "money", "ctr": "pct", "cvr": "pct", "roas": "x",
-           "vtr": "pct", "cpv": "money", "cr": "pct"}
+KPI_FMT = {"cpm": "money2", "cpc": "money2", "ctr": "pct", "cvr": "pct", "roas": "x",
+           "vtr": "pct", "cpv": "money2", "cr": "pct"}
 # 매체별 활성 KPI 집합. 영상(V)은 CPM/VTR/CPV/완전조회율, 그 외는 표준 5종.
 KPIS_BY_MEDIA = {"V": ("cpm", "vtr", "cpv", "cr")}
 KPIS_DEFAULT = ("cpm", "cpc", "ctr", "cvr", "roas")
@@ -54,16 +54,51 @@ def _agg_kpi(k, imp, clk, cost, conv, rev, vv, vp):
     return 0
 
 # 기준차원 화이트리스트 (SQL 컬럼명 안전). device/age/gender는 DB 세그먼트 뷰 추가 시 자동 활성.
-DIMS = {"market": "권역", "objective": "캠페인목표", "brand": "브랜드",
+# market = 국가(ISO2)로 통합 — 별도 '권역' 중복 제거.
+DIMS = {"market": "국가", "objective": "캠페인목표", "brand": "브랜드",
         "industry": "업종", "agency": "대행사",
         "device": "디바이스", "age": "연령", "gender": "성별"}
 # 필터 화이트리스트
 FILTERS = {"market", "objective", "brand", "industry", "agency"}
 
-CURRENCY = {
-    "KRW": (1.0, "₩"), "USD": (1384.72, "$"), "EUR": (1498.35, "€"),
-    "JPY": (9.52, "¥"), "CNY": (191.25, "¥"), "INR": (16.63, "₹"),
-}
+_FX_SYM = {"KRW": "₩", "USD": "$", "EUR": "€", "JPY": "¥", "CNY": "¥", "INR": "₹"}
+# fx_rates_daily 미수록/조회실패 대비 정적 폴백(to_krw)
+_FX_FALLBACK = {"KRW": 1.0, "USD": 1520.21, "EUR": 1758.42, "JPY": 9.49, "CNY": 211.5, "INR": 15.98}
+
+
+@lru_cache(maxsize=2)
+def _fx_load(day):   # day = UTC 날짜키 → 매일 자동 무효화
+    """최신 환율(to_krw)을 fx_rates_daily에서 로드. 실패 시 폴백."""
+    rates = dict(_FX_FALLBACK)
+    asof = None
+    try:
+        rows = list(_client().query(
+            "SELECT currency, to_krw, date FROM `innocean-perf-apac-kr.apac_kr_raw.fx_rates_daily` "
+            "WHERE date=(SELECT MAX(date) FROM `innocean-perf-apac-kr.apac_kr_raw.fx_rates_daily`)").result())
+        for r in rows:
+            if r["to_krw"]:
+                rates[r["currency"]] = float(r["to_krw"])
+        if rows:
+            asof = str(rows[0]["date"])
+    except Exception:
+        pass
+    rates["KRW"] = 1.0
+    return rates, asof
+
+
+def _fx():
+    return _fx_load(_dt.datetime.utcnow().strftime("%Y-%m-%d"))
+
+
+def _currency(cur):
+    """(to_krw rate, symbol) — 마트는 KRW 기준, 표시통화로 나눠 환산."""
+    cur = (cur or "KRW").upper()
+    rates, _ = _fx()
+    return rates.get(cur, _FX_FALLBACK.get(cur, 1.0)), _FX_SYM.get(cur, "")
+
+
+# 하위호환: 정적 참조용(동적 환산은 _currency 사용)
+CURRENCY = {c: (_FX_FALLBACK[c], _FX_SYM.get(c, "")) for c in _FX_FALLBACK}
 
 MARKET_NAME = {
     "KR": "한국", "IN": "인도", "BR": "브라질", "ES": "스페인", "SA": "사우디",
@@ -158,9 +193,13 @@ def _filter_clauses(media, p0, p1, filters):
 
 
 def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026-12-31",
-                  currency="KRW", **filters):
+                  currency="KRW", gross=0.0, **filters):
     if dim not in DIMS:
         dim = "market"
+    try:
+        gross = max(0.0, float(gross or 0))
+    except (TypeError, ValueError):
+        gross = 0.0
     is_video = (media == "V")
     if is_video and dim not in ("market", "objective", "brand", "industry"):
         dim = "market"   # 영상 마트는 권역/목표/브랜드/업종 차원만 보유
@@ -169,21 +208,27 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             "media": media, "media_name": MEDIA_NAME.get(media, media), "available": False,
             "dim": dim, "note": f"{DIMS.get(dim, dim)} 데이터 준비 중입니다 (통합뷰 추가 대기)."}}
     src = VIDEO_TBL if is_video else SEGMENT_TBL.get(dim, TBL)
-    ckey = _cache_key(media, dim, date_from, date_to, currency, filters)
+    ckey = _cache_key(media, dim, date_from, date_to, currency, dict(filters, _g=gross))
     if ckey in _BENCH_CACHE:
         return _BENCH_CACHE[ckey]
     p0, p1 = date_from[:7], date_to[:7]
-    rate, sym = CURRENCY.get((currency or "KRW").upper(), CURRENCY["KRW"])
+    rate, sym = _currency(currency)
+    gf = 1.0 + gross / 100.0   # Net→Gross 수수료 계수 (gross=수수료율%, 0=Net). 비용계 지표에 적용.
 
-    def money(v):
-        return sym + format(int(round((v or 0) / rate)), ",")
+    def money(v):     # 지출 등 큰 금액 — 정수 (Gross 반영)
+        return sym + format(int(round((v or 0) * gf / rate)), ",")
 
-    def qf(kpi, v):   # KPI 표시포맷 (통화 환산)
+    def money2(v):    # 단가(CPM/CPC/CPV) — 소수 2자리 (Gross 반영)
+        return sym + format((v or 0) * gf / rate, ",.2f")
+
+    def qf(kpi, v):   # KPI 표시포맷 (통화 환산·Gross)
         f = KPI_FMT.get(kpi, "money")
         if f == "pct":
             return _pct(v)
-        if f == "x":
-            return f"{(v or 0):.2f}배"
+        if f == "x":   # ROAS — 비용↑이면 ROAS↓
+            return f"{((v or 0) / gf):.2f}배"
+        if f == "money2":
+            return money2(v)
         return money(v)
 
     calc_kpis = list(KPIS_BY_MEDIA.get(media, KPIS_DEFAULT))
@@ -274,12 +319,12 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         vv, vp = (r.get("vviews") or 0), (r.get("vp100") or 0)
         d = {"period": r["period"], "name": dim_name(dim, r["dim"]),
              "spend": money(cost), "imps": _num(imp), "clicks": _num(clk),
-             "cpm": money(cost / imp * 1000 if imp else 0),
-             "cpc": money(cost / clk if clk else 0),
+             "cpm": money2(cost / imp * 1000 if imp else 0),
+             "cpc": money2(cost / clk if clk else 0),
              "ctr": _pct(clk / imp * 100 if imp else 0)}
         if is_video:
             d.update({"views": _num(vv), "vtr": _pct(vv / imp * 100 if imp else 0),
-                      "cpv": money(cost / vv if vv else 0),
+                      "cpv": money2(cost / vv if vv else 0),
                       "cr": _pct(vp / imp * 100 if imp else 0)})
         detail.append(d)
 
@@ -298,18 +343,28 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         imp, clk, cost, conv, rev, vv, vp = mt[m]
         for k in calc_kpis:
             v = _agg_kpi(k, imp, clk, cost, conv, rev, vv, vp)
-            trend[k].append(round(v / rate, 1) if KPI_FMT[k] == "money" else round(v, 2))
+            if KPI_FMT[k].startswith("money"):
+                trend[k].append(round(v * gf / rate, 2))
+            elif k == "roas":
+                trend[k].append(round(v / gf, 2))
+            else:
+                trend[k].append(round(v, 2))
     top = benchmark[:10]
     compare = {"labels": [b["name"] for b in top]}
     for k in calc_kpis:
         med = lambda b, _k=k: next((r[f"{_k}_median"] for r in rows if r["dim"] == b["dim"]), 0) or 0
-        if KPI_FMT[k] == "money":
-            compare[k] = [round(med(b) / rate, 1) for b in top]
+        if KPI_FMT[k].startswith("money"):
+            compare[k] = [round(med(b) * gf / rate, 2) for b in top]
+        elif k == "roas":
+            compare[k] = [round(med(b) / gf, 2) for b in top]
         else:
             compare[k] = [round(med(b), 2) for b in top]
 
     meta_kpis = calc_kpis if is_video else (
         ["cpm", "cpc", "ctr"] + (["cvr"] if cvr_avail else []) + (["roas"] if roas_avail else []))
+    # 원안대로 전체 지표를 노출하되, 데이터 없는 지표는 프론트에서 비활성(회색·0). all_kpis ⊇ kpis.
+    all_kpis = ["cpm", "vtr", "cpv", "cr"] if is_video else ["cpm", "cpc", "ctr", "cvr", "roas"]
+    fx_rates, fx_asof = _fx()
     result = {
         "benchmark": [total] + benchmark,
         "detail": detail,
@@ -319,9 +374,14 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             "dim": dim, "dim_label": DIMS[dim], "n_dim": len(benchmark), "rows": len(detail),
             "date_from": date_from, "date_to": date_to,
             "currency": (currency or "KRW").upper(), "symbol": sym, "cached": True,
-            "kpis": meta_kpis, "roas_available": roas_avail, "cvr_available": cvr_avail,
+            "gross": gross, "cost_basis": ("Gross" if gross > 0 else "Net"),
+            "kpis": meta_kpis, "all_kpis": all_kpis,
+            "roas_available": roas_avail, "cvr_available": cvr_avail,
             "roas_coverage": round(roas_cover, 3), "conv_coverage": round(conv_cover, 3),
             "is_video": is_video,
+            "fx": {"asof": fx_asof, "USD": round(fx_rates.get("USD", 0), 2),
+                   "EUR": round(fx_rates.get("EUR", 0), 2), "JPY": round(fx_rates.get("JPY", 0), 2),
+                   "CNY": round(fx_rates.get("CNY", 0), 2), "INR": round(fx_rates.get("INR", 0), 2)},
             "note": ("영상 벤치마크 — Google 영상(YouTube) 캠페인. VTR=조회율, CPV=조회당비용, 완전조회율=끝까지 본 비율."
                      if is_video else "다차원 벤치마크. 데이터 ~99% 현대·기아 자동차."),
         },

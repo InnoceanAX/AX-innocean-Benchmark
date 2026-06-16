@@ -33,13 +33,13 @@ def index():
 @app.get("/api/v1/benchmark")
 def benchmark(media: str = "G", dim: str = "market",
               date_from: str = "2025-06-01", date_to: str = "2026-06-08",
-              currency: str = "KRW",
+              currency: str = "KRW", gross: float = 0.0,
               market: str = "", objective: str = "", brand: str = "",
               industry: str = "", agency: str = ""):
     """다차원 벤치마크 — 기준차원(dim) × 필터 조합 4분위."""
     try:
         data = bq.get_benchmark(media=media, dim=dim, date_from=date_from, date_to=date_to,
-                                currency=currency, market=market, objective=objective,
+                                currency=currency, gross=gross, market=market, objective=objective,
                                 brand=brand, industry=industry, agency=agency)
         return JSONResponse(data)
     except Exception as e:  # noqa: BLE001
