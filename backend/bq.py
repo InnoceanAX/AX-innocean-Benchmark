@@ -56,10 +56,15 @@ def _agg_kpi(k, imp, clk, cost, conv, rev, vv, vp):
 # 기준차원 화이트리스트 (SQL 컬럼명 안전). device/age/gender는 DB 세그먼트 뷰 추가 시 자동 활성.
 # market = 국가(ISO2)로 통합 — 별도 '권역' 중복 제거.
 DIMS = {"market": "국가", "objective": "캠페인목표", "brand": "브랜드",
-        "industry": "업종", "agency": "대행사",
+        "industry": "업종", "agency": "대행사", "channel": "광고상품",
         "device": "디바이스", "age": "연령", "gender": "성별"}
-# 필터 화이트리스트
-FILTERS = {"market", "objective", "brand", "industry", "agency"}
+# 필터 화이트리스트 (channel/agency는 캠페인 마트에만 존재 — 세그먼트/영상 소스엔 미적용)
+FILTERS = {"market", "objective", "brand", "industry", "agency", "channel"}
+CAMPAIGN_ONLY_FILTERS = {"agency", "channel"}   # 세그먼트/영상 소스엔 없는 컬럼
+CHANNEL_NAME = {"SEARCH": "검색", "DISPLAY": "디스플레이(배너)", "VIDEO": "동영상(YouTube)",
+                "DEMAND_GEN": "디맨드젠", "PERFORMANCE_MAX": "실적최대화(PMax)",
+                "MULTI_CHANNEL": "멀티채널", "SHOPPING": "쇼핑", "SMART": "스마트",
+                "LOCAL": "로컬", "(기타)": "(기타)"}
 
 _FX_SYM = {"KRW": "₩", "USD": "$", "EUR": "€", "JPY": "¥", "CNY": "¥", "INR": "₹"}
 # fx_rates_daily 미수록/조회실패 대비 정적 폴백(to_krw)
@@ -134,6 +139,8 @@ def dim_name(dim, code):
         return DEVICE_NAME.get(code, code)
     if dim == "age":
         return "미상" if code == "UNDETERMINED" else code
+    if dim == "channel":
+        return CHANNEL_NAME.get(code, code)
     return code
 
 
@@ -214,6 +221,8 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             "media": media, "media_name": MEDIA_NAME.get(media, media), "available": False,
             "dim": dim, "note": f"{DIMS.get(dim, dim)} 데이터 준비 중입니다 (통합뷰 추가 대기)."}}
     src = VIDEO_TBL if is_video else SEGMENT_TBL.get(dim, TBL)
+    if src != TBL:   # 세그먼트/영상 소스엔 channel/agency 컬럼 없음 → 해당 필터 제거
+        filters = {k: v for k, v in filters.items() if k not in CAMPAIGN_ONLY_FILTERS}
     ckey = _cache_key(media, dim, date_from, date_to, currency, dict(filters, _g=gross))
     if ckey in _BENCH_CACHE:
         return _BENCH_CACHE[ckey]
@@ -419,7 +428,7 @@ def get_filter_options(media="G"):
     is_video = (media == "V")
     osrc = VIDEO_TBL if is_video else TBL
     cols = ("market", "objective", "brand", "industry") if is_video \
-        else ("market", "objective", "brand", "industry", "agency")
+        else ("market", "objective", "brand", "industry", "agency", "channel")
     for col in cols:
         rows = cl.query(
             f"SELECT {col} v, SUM(cost) s FROM {osrc} WHERE media=@m AND {col} IS NOT NULL "
@@ -440,6 +449,17 @@ def get_filter_options(media="G"):
             except Exception:
                 pass
     out["video_media_available"] = _video_media_available()   # 영상(V) 매체 탭 노출 여부
+    # 광고상품(channel) 가용성 — '(기타)' 외 실제 채널유형이 있는 매체만(현재 Google)
+    out["channel_available"] = False
+    if not is_video:
+        try:
+            n = list(cl.query(
+                f"SELECT COUNT(DISTINCT channel) n FROM {TBL} WHERE media=@m AND channel!='(기타)'",
+                job_config=bigquery.QueryJobConfig(query_parameters=[
+                    bigquery.ScalarQueryParameter("m", "STRING", media)])).result())[0]["n"]
+            out["channel_available"] = n > 0
+        except Exception:
+            pass
     return out
 
 

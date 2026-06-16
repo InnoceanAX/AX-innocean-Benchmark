@@ -1057,7 +1057,7 @@ function sugClick(btn,q){
    데이터 ~99%가 현대·기아 자동차 → 벤치마크 축 = 권역(market). 4분위 = 분포 대비 내 위치. */
 (function(){
   var API=(window.API_CONFIG&&API_CONFIG.baseUrl)||'/api/v1';
-  var curKpi='cpm', curDim='market', curFilters={market:'',objective:'',brand:'',industry:''};
+  var curKpi='cpm', curDim='market', curFilters={market:'',objective:'',brand:'',industry:'',channel:''};
   var curKpiL='cpm', curKpiR='ctr';   // Summary 차트 선택지표 (좌=추세, 우=비교)
   var curGross=0;   // Net/Gross 수수료율(%) — 0=Net
   var curDetCols=[];   // 지표추가(Additional Index)로 켠 상세표 추가 컬럼
@@ -1076,7 +1076,7 @@ function sugClick(btn,q){
     return { df:(f&&f.value?f.value:'2025-06')+'-01', dt:(t&&t.value?t.value:'2026-06')+'-28' };
   }
   function curCur(){ var r=document.querySelector('#pgBM input[name="bm_cur"]:checked'); return r?r.value:'KRW'; }
-  function filterQS(){ var s='&dim='+curDim; ['market','objective','brand','industry'].forEach(function(k){ if(curFilters[k]) s+='&'+k+'='+encodeURIComponent(curFilters[k]); }); return s; }
+  function filterQS(){ var s='&dim='+curDim; ['market','objective','brand','industry','channel'].forEach(function(k){ if(curFilters[k]) s+='&'+k+'='+encodeURIComponent(curFilters[k]); }); return s; }
   function dimLabel(){ return (window.BM_DATA&&BM_DATA.meta&&BM_DATA.meta.dim_label)||'권역'; }
   // 세션 캐시: 데이터가 일 단위 갱신이라 같은 조회는 재요청 없이 즉시 사용. 날짜 키 → 매일 자동 무효화.
   function cachedJSON(url){
@@ -1104,6 +1104,7 @@ function sugClick(btn,q){
     var fpg=document.querySelector('#pgBM .fpg'); if(!fpg)return;
     var o=window._bmOptions||{}, media=(typeof STATE!=='undefined'&&STATE.media)||'G';
     var dims=[['market','국가'],['objective','캠페인목표'],['brand','브랜드'],['industry','업종']];
+    if(o.channel_available)dims.push(['channel','광고상품']);
     if(o.device_available)dims.push(['device','디바이스']); if(o.age_available)dims.push(['age','연령']); if(o.gender_available)dims.push(['gender','성별']);
     if(dims.map(function(d){return d[0];}).indexOf(curDim)<0)curDim='market';
     function selOpts(key){ return '<option value="">전체</option>'+((o[key]||[]).map(function(x){return '<option value="'+x.v+'"'+(curFilters[key]===x.v?' selected':'')+'>'+x.name+'</option>';}).join('')); }
@@ -1111,9 +1112,11 @@ function sugClick(btn,q){
     var dimOpts=dims.map(function(d){return '<option value="'+d[0]+'"'+(d[0]===curDim?' selected':'')+'>'+d[1]+'</option>';}).join('');
     var geo=(['K','N'].indexOf(media)<0)?'<div class="fg"><span class="flbl">국가</span><select class="fsel" data-fk="market">'+selOpts('market')+'</select></div>'
       :'<div class="fg" title="카카오·네이버는 국내(KR) 기준"><span class="flbl">국가</span><select class="fsel" disabled><option>South Korea</option></select></div>';
-    var ph=(PH_BY_MEDIA[media]||[]).map(function(p){var cond=(p[2]||'추후 연동');return '<div class="fg phfg" title="활성화 조건: '+cond+'" style="opacity:.5;cursor:help" data-cond="'+cond+'" data-nm="'+p[0]+'"><span class="flbl">'+p[0]+' <span style="font-size:9px;color:#9CA3AF">ⓘ 연동예정</span></span><select class="fsel" disabled><option>'+p[1]+'</option></select></div>';}).join('');
+    var phl=(PH_BY_MEDIA[media]||[]).filter(function(p){ return !(o.channel_available && p[0]==='광고 상품'); });   // 광고상품 활성화 시 플레이스홀더 제외
+    var ph=phl.map(function(p){var cond=(p[2]||'추후 연동');return '<div class="fg phfg" title="활성화 조건: '+cond+'" style="opacity:.5;cursor:help" data-cond="'+cond+'" data-nm="'+p[0]+'"><span class="flbl">'+p[0]+' <span style="font-size:9px;color:#9CA3AF">ⓘ 연동예정</span></span><select class="fsel" disabled><option>'+p[1]+'</option></select></div>';}).join('');
     var html='<div class="fg"><span class="flbl">기준 차원</span><select class="fsel" id="bmDimSel">'+dimOpts+'</select></div>'
-      +fgSel('업종','industry')+geo+fgSel('브랜드','brand')+fgSel('캠페인 목표','objective')+ph;
+      +fgSel('업종','industry')+geo+fgSel('브랜드','brand')+fgSel('캠페인 목표','objective')
+      +(o.channel_available?fgSel('광고 상품','channel'):'')+ph;
     // 기간(frmDate) .fg는 보존하고 나머지 .fg/검색버튼 제거 후 재구성
     var dateFg=null; fpg.querySelectorAll('.fg').forEach(function(el){ if(el.querySelector('#frmDate'))dateFg=el; });
     fpg.querySelectorAll('.fg').forEach(function(el){ if(el!==dateFg)el.remove(); });

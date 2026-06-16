@@ -71,6 +71,20 @@ def _gname_union(c):
     return f"SELECT cid, MAX(nm) nm FROM ({union}) WHERE nm IS NOT NULL GROUP BY cid"
 
 
+def _channel_map(c):
+    """google_ads 광고상품(채널유형) 보강 — raw ads_Campaign_<계정>의
+    campaign_advertising_channel_type(SEARCH/DISPLAY/VIDEO/PERFORMANCE_MAX…)에서 campaign_id→channel 매핑."""
+    import re
+    tabs = [t.table_id for t in c.list_tables("apac_kr_raw")
+            if re.match(r"ads_Campaign_\d+$", t.table_id)]
+    if not tabs:
+        return None
+    union = " UNION ALL ".join(
+        [f"SELECT CAST(campaign_id AS STRING) cid, campaign_advertising_channel_type ct "
+         f"FROM `{PROJECT}.apac_kr_raw.{t}`" for t in tabs])
+    return f"SELECT cid, MAX(ct) ct FROM ({union}) WHERE ct IS NOT NULL GROUP BY cid"
+
+
 def _has_col(c, view, col):
     try:
         return col in [f.name for f in c.get_table(f"{PROJECT}.apac_kr_unified.{view}").schema]
@@ -91,6 +105,8 @@ def build_campaign(c):
     obj = objective_case_sql(name_expr)
     gmap = _gname_union(c)
     join = f"LEFT JOIN ({gmap}) g ON CAST(u.campaign_id AS STRING)=g.cid" if gmap else "LEFT JOIN (SELECT '' cid, '' nm) g ON FALSE"
+    cmap = _channel_map(c)
+    cjoin = f"LEFT JOIN ({cmap}) ch ON CAST(u.campaign_id AS STRING)=ch.cid" if cmap else "LEFT JOIN (SELECT '' cid, CAST(NULL AS STRING) ct) ch ON FALSE"
     tbl = f"`{PROJECT}.{MART_DS}.bm_campaign_monthly`"
     c.query(f"DROP TABLE IF EXISTS {tbl}").result()
     sql = f"""
@@ -103,6 +119,7 @@ def build_campaign(c):
       {obj} AS objective,
       u.brand AS brand,
       IFNULL(NULLIF(u.agency,''),'(미상)') AS agency,
+      IFNULL(ch.ct,'(기타)') AS channel,
       u.campaign_id AS campaign_id,
       SUM(u.impressions) AS imp,
       SUM(u.clicks) AS clk,
@@ -112,9 +129,10 @@ def build_campaign(c):
       CURRENT_TIMESTAMP() AS _built_at
     FROM {SOURCE} u
     {join}
+    {cjoin}
     WHERE u.date IS NOT NULL AND NOT IFNULL(u.is_excluded, FALSE)
       AND u.platform IN ({_plats()}) AND u.market IS NOT NULL AND u.market != ''
-    GROUP BY period, media, market, industry, objective, brand, agency, campaign_id
+    GROUP BY period, media, market, industry, objective, brand, agency, channel, campaign_id
     HAVING imp > 0
     """
     c.query(sql).result()
