@@ -1314,8 +1314,6 @@ function sugClick(btn,q){
   window.aiApply=function(q){ var p=parseAIQuery(q); if(p.kpi)aiKpi=p.kpi; if(p.dim)aiDim=p.dim; aiHighlight=q; renderAIOverview(); };
   function drawAICharts(){
     var d=window._aiData; if(!d||!d.charts||typeof Chart==='undefined') return;
-    var ku=KU[aiKpi]||aiKpi.toUpperCase();
-    var dimLbl=(d.meta&&d.meta.dim_label)||AI_DIM_LABEL[aiDim]||'국가';
     var labels=d.charts.compare.labels||[], hi=-1;
     if(aiHighlight){ for(var i=0;i<labels.length;i++){ if(labels[i]&&aiHighlight.indexOf(labels[i])>=0){hi=i;break;} } }
     var cols=labels.map(function(_x,i){ return i===hi?'#EC4899':'#4F46E5'; });
@@ -1326,11 +1324,9 @@ function sugClick(btn,q){
       var avg=nums.length?nums.reduce(function(a,b){return a+b;},0)/nums.length:0; avg=Math.round(avg*100)/100;
       var avgArr=tr.map(function(){return avg;});
       _aiCharts.line=new Chart(line,{type:'line',data:{labels:d.charts.trend.labels,datasets:[
-        {label:ku,data:tr,borderColor:'#4F46E5',backgroundColor:'rgba(79,70,229,.08)',borderWidth:2.5,pointRadius:2,tension:.3,fill:true},
+        {label:KU[aiKpi]||aiKpi,data:tr,borderColor:'#4F46E5',backgroundColor:'rgba(79,70,229,.08)',borderWidth:2.5,pointRadius:3,tension:.3,fill:true},
         {label:'전체 평균',data:avgArr,borderColor:'#EF4444',borderDash:[6,4],borderWidth:1.5,pointRadius:0,fill:false}
-      ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'top',align:'end',labels:{font:{size:10},boxWidth:14,boxHeight:2,usePointStyle:false}}},scales:{x:{grid:{color:'#F3F4F6'},ticks:{font:{size:10}}},y:{grid:{color:'#F3F4F6'}}}}}); }
-    var bt=document.getElementById('aiBarTit'); if(bt)bt.textContent=dimLbl+'별 '+ku+(hi>=0?' — '+labels[hi]+' 강조':'')+' (중앙값)';
-    var lt=document.getElementById('aiLineTit'); if(lt)lt.textContent='월별 '+ku+' 추세 (점선=전체 평균)';
+      ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#F3F4F6'},ticks:{font:{size:10}}},y:{grid:{color:'#F3F4F6'}}}}}); }
   }
   // 그래프·데이터 기반 주요 인사이트 자동 산출
   function aiInsights(d){
@@ -1347,7 +1343,7 @@ function sugClick(btn,q){
     if(tot[kpi])out.push('전체 평균 '+ku+'는 '+tot[kpi]+'로, 위 추세 그래프의 빨간 점선(기준선)입니다.');
     return out.slice(0,4);
   }
-  window.aiSetKpi=function(k){ aiKpi=k; document.querySelectorAll('#aiKpiTgl button').forEach(function(x){x.className='dbtn';}); var b=document.querySelector('#aiKpiTgl button[data-k="'+k+'"]'); if(b)b.className='dbtn pri'; drawAICharts(); };
+  window.aiSetKpi=function(k){ aiKpi=k; renderAIOverview(); };   // KPI 변경 → 제목·범례·카드·차트 일괄 갱신
 
   async function renderAIOverview(){
     var main=document.querySelector('#pgAI .aimain'); if(!main) return;
@@ -1355,38 +1351,38 @@ function sugClick(btn,q){
     var MN={ALL:'전체',G:'Google',M:'Meta',D:'DV360',T:'TikTok',K:'카카오'};
     var medbtns=['ALL','G','M','D','T','K'].map(function(x){ return '<button class="dbtn'+(x===med?' pri':'')+'" onclick="window.aiSetMedia(\''+x+'\')">'+MN[x]+'</button>'; }).join('');
     var dimLbl=AI_DIM_LABEL[aiDim]||'국가';
-    var head='<div style="font-size:18px;font-weight:800;letter-spacing:-.01em;margin-bottom:5px">AI 분석 대시보드</div>'
-      +'<div style="font-size:12.5px;color:#9CA3AF;margin-bottom:16px">좌측 채팅에서 질문하시면 분석 결과가 여기에 표시됩니다.</div>'
-      +'<div style="display:flex;gap:6px;margin:0 0 14px;align-items:center;flex-wrap:wrap"><span style="font-size:12px;color:#767676;font-weight:600;margin-right:6px">분석 매체</span>'+medbtns+'</div>';
-    main.innerHTML=head+'<div style="font-size:12.5px;color:#9CA3AF;padding:6px 2px">데이터 불러오는 중...</div>';
-    var d; try{ d=await cachedJSON(API+'/benchmark?media='+med+'&dim='+aiDim+'&date_from='+r.df+'&date_to='+r.dt+'&currency='+curCur()); }catch(e){ main.innerHTML=head+'<div style="color:#767676;padding:16px">데이터 조회 실패</div>'; return; }
+    // 원안 CSS 그대로: aimtit/aimsub + 분석매체(헤더 내 소형 배치, 레이아웃 미해침)
+    var ctrl='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:14px"><span style="font-size:11px;color:var(--tm);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-right:4px">분석 매체</span>'+medbtns+'</div>';
+    var head='<div><div class="aimtit">AI 분석 대시보드</div><div class="aimsub">좌측 채팅에서 질문하시면 분석 결과가 여기에 표시됩니다.</div>'+ctrl+'</div>';
+    main.innerHTML=head+'<div class="aimsub">데이터 불러오는 중...</div>';
+    var d; try{ d=await cachedJSON(API+'/benchmark?media='+med+'&dim='+aiDim+'&date_from='+r.df+'&date_to='+r.dt+'&currency='+curCur()); }catch(e){ main.innerHTML=head+'<div class="aimsub">데이터 조회 실패</div>'; return; }
     window._aiData=d;
     var m=d.meta||{}, b=d.benchmark||[], tot=b[0]||{}, mk=b.filter(function(x){return !x.cls;});
-    if(!m.available){ main.innerHTML=head+'<div style="color:#767676;padding:16px;border:1px solid #E5E7EB;border-radius:8px">'+(m.note||'해당 매체 데이터가 아직 없습니다.')+'</div>'; return; }
+    if(!m.available){ main.innerHTML=head+'<div class="inscard">'+(m.note||'해당 매체 데이터가 아직 없습니다.')+'</div>'; return; }
     var av=m.kpis||['cpm','cpc','ctr']; if(av.indexOf(aiKpi)<0)aiKpi=av[0]||'cpm';
+    var ku=KU[aiKpi]||aiKpi.toUpperCase(), mName=(MN[med]||m.media_name||'');
     var html=head;
-    // 요약줄 (카드 위)
-    html+='<div style="font-size:12px;color:#9CA3AF;margin:2px 0 14px">'+dimLbl+' '+(m.n_dim||mk.length)+'개 · '+(m.date_from||'').slice(0,7)+'~'+(m.date_to||'').slice(0,7)+' · 통화 '+(m.currency||'KRW')+' · '+(m.cost_basis||'Net')+'</div>';
-    // KPI 카드 — 흰 배경·회색 보더·라운드, 라벨 작게/숫자 크게
-    html+='<div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">';
-    [['총 노출',tot.imp],['총 지출',tot.spend],['캠페인 수',(tot.n||0).toLocaleString()],['평균 CPM',tot.cpm],['평균 CPC',tot.cpc],['평균 CTR',tot.ctr]].forEach(function(c){ html+='<div style="flex:1;min-width:140px;background:#fff;border:1px solid #E5E7EB;border-radius:8px;padding:15px 18px"><div style="font-size:12px;color:#767676;margin-bottom:8px">'+c[0]+'</div><div style="font-size:23px;font-weight:800;color:#111;letter-spacing:-.02em">'+(c[1]||'-')+'</div></div>'; });
-    html+='</div>';
-    // 차트 지표 토글 (분석 매체와 동일 톤)
-    html+='<div id="aiKpiTgl" style="display:flex;gap:6px;margin-bottom:12px;align-items:center;flex-wrap:wrap"><span style="font-size:12px;color:#767676;font-weight:600;margin-right:6px">차트 지표</span>'+av.map(function(k){return '<button class="dbtn'+(k===aiKpi?' pri':'')+'" data-k="'+k+'" onclick="window.aiSetKpi(\''+k+'\')">'+(KU[k]||k.toUpperCase())+'</button>';}).join('')+'</div>';
-    // 차트 2개 (흰 카드·라운드)
-    html+='<div style="display:flex;gap:14px;margin-bottom:18px;flex-wrap:wrap">';
-    html+='<div style="flex:1;min-width:300px;background:#fff;border:1px solid #E5E7EB;border-radius:8px;padding:16px"><div id="aiBarTit" style="font-size:13px;font-weight:700;margin-bottom:10px">'+dimLbl+'별 비교</div><div style="height:220px"><canvas id="aiBar"></canvas></div></div>';
-    html+='<div style="flex:1;min-width:300px;background:#fff;border:1px solid #E5E7EB;border-radius:8px;padding:16px"><div id="aiLineTit" style="font-size:13px;font-weight:700;margin-bottom:10px">월별 추세</div><div style="height:220px"><canvas id="aiLine"></canvas></div></div>';
-    html+='</div>';
-    // 주요 인사이트 — 그래프 바로 아래
+    // KPI 카드 4종 (원안 krow/kc/klbl/kval/kd)
+    var big='style="font-size:18px"';   // 큰 숫자(노출/지출)는 폰트 줄여 카드폭에 맞춤
+    html+='<div class="krow">'
+      +'<div class="kc"><div class="klbl">평균 '+ku+' ('+mName+')</div><div class="kval">'+(tot[aiKpi]||'-')+'</div><div class="kd n">'+dimLbl+' '+(m.n_dim||mk.length)+'개 분포</div></div>'
+      +'<div class="kc"><div class="klbl">총 노출</div><div class="kval" '+big+'>'+(tot.imp||'-')+'</div><div class="kd n">캠페인 '+(tot.n||0).toLocaleString()+'개</div></div>'
+      +'<div class="kc"><div class="klbl">총 지출</div><div class="kval" '+big+'>'+(tot.spend||'-')+'</div><div class="kd n">'+(m.cost_basis||'Net')+' 기준</div></div>'
+      +'<div class="kc"><div class="klbl">분석 기간 / 매체</div><div class="kval" style="font-size:14px;line-height:1.4">'+(m.date_from||'').slice(0,7)+'~'+(m.date_to||'').slice(0,7)+'</div><div class="kd n">'+mName+' · '+(m.currency||'KRW')+'</div></div>'
+      +'</div>';
+    // 차트 지표 토글 (소형, 레이아웃 미해침)
+    html+='<div id="aiKpiTgl" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span style="font-size:11px;color:var(--tm);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-right:4px">차트 지표</span>'+av.map(function(k){return '<button class="dbtn'+(k===aiKpi?' pri':'')+'" data-k="'+k+'" onclick="window.aiSetKpi(\''+k+'\')">'+(KU[k]||k.toUpperCase())+'</button>';}).join('')+'</div>';
+    // 추세 차트 (원안 chcard, HTML 범례 lgrow)
+    html+='<div class="chcard"><div class="chhd"><div><div class="chtit">'+mName+' — 월별 '+ku+' 추이</div><div class="chsub">'+(m.date_from||'').slice(0,7)+' ~ '+(m.date_to||'').slice(0,7)+' | '+dimLbl+' 벤치마크 대비</div></div>'
+      +'<div class="lgrow"><div class="lgit"><span style="display:inline-block;width:24px;height:3px;background:#4F46E5;margin-right:4px;vertical-align:middle"></span>'+ku+'</div>'
+      +'<div class="lgit"><span style="display:inline-block;width:24px;height:0;border-top:2px dashed #EF4444;margin-right:4px;vertical-align:middle"></span>전체 평균</div></div></div>'
+      +'<div class="chwrap"><canvas id="aiLine"></canvas></div></div>';
+    // 차원 비교 차트 (원안 chcard 동일 스타일)
+    html+='<div class="chcard"><div class="chhd"><div><div class="chtit">'+dimLbl+'별 '+ku+' 비교</div><div class="chsub">캠페인 중앙값 기준'+(aiHighlight?' · 질문 관련 항목 강조':'')+'</div></div></div>'
+      +'<div class="chwrap"><canvas id="aiBar"></canvas></div></div>';
+    // 주요 인사이트 (원안 inscard/instit/insit/indot)
     var ins=aiInsights(d);
-    html+='<div style="background:#fff;border:1px solid #E5E7EB;border-radius:8px;padding:16px 18px;margin-bottom:18px"><div style="font-size:14px;font-weight:800;margin-bottom:12px">💡 주요 인사이트</div><div style="font-size:13px;color:#444;line-height:1.5">'+ins.map(function(t){return '<div style="display:flex;gap:8px;margin-bottom:9px"><span style="color:#4F46E5">•</span><span>'+t+'</span></div>';}).join('')+'</div></div>';
-    // 차원별 표 — 인사이트 아래
-    html+='<div style="border:1px solid #E5E7EB;border-radius:8px;overflow:hidden;margin-bottom:16px"><div style="padding:12px 16px;font-size:13px;font-weight:700;border-bottom:1px solid #E5E7EB">'+dimLbl+'별 벤치마크 (캠페인 중앙값)</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>';
-    [dimLbl,'캠페인수','CPM','CPC','CTR','지출'].forEach(function(t){ html+='<th style="background:#F9FAFB;border-bottom:1px solid #E5E7EB;padding:9px 12px;text-align:left;color:#767676;font-weight:700">'+t+'</th>'; });
-    html+='</tr></thead><tbody>';
-    mk.forEach(function(rw){ var hl=(aiHighlight&&aiHighlight.indexOf(rw.name)>=0)?'background:#FCE7F3':''; html+='<tr style="'+hl+'">'+['<td>'+rw.name+'</td>','<td>'+rw.n+'</td>','<td>'+(rw.cpm_q?rw.cpm_q.median:'-')+'</td>','<td>'+(rw.cpc_q?rw.cpc_q.median:'-')+'</td>','<td>'+(rw.ctr_q?rw.ctr_q.median:'-')+'</td>','<td>'+rw.spend+'</td>'].map(function(td){return td.replace('<td>','<td style="border-bottom:1px solid #F3F4F6;padding:9px 12px">');}).join('')+'</tr>'; });
-    html+='</tbody></table></div></div>';
+    html+='<div class="inscard"><div class="instit">&#128161; 주요 인사이트</div>'+ins.map(function(t){return '<div class="insit"><div class="indot"></div><div>'+t+'</div></div>';}).join('')+'</div>';
     main.innerHTML=html;
     drawAICharts();
   }
