@@ -68,20 +68,26 @@ _FX_FALLBACK = {"KRW": 1.0, "USD": 1520.21, "EUR": 1758.42, "JPY": 9.49, "CNY": 
 
 @lru_cache(maxsize=2)
 def _fx_load(day):   # day = UTC 날짜키 → 매일 자동 무효화
-    """최신 환율(to_krw)을 fx_rates_daily에서 로드. 실패 시 폴백."""
+    """최신 환율(to_krw) 로드. 마트 bm_fx 우선(서비스 SA 접근가능) → raw → 정적 폴백."""
     rates = dict(_FX_FALLBACK)
     asof = None
-    try:
-        rows = list(_client().query(
-            "SELECT currency, to_krw, date FROM `innocean-perf-apac-kr.apac_kr_raw.fx_rates_daily` "
-            "WHERE date=(SELECT MAX(date) FROM `innocean-perf-apac-kr.apac_kr_raw.fx_rates_daily`)").result())
-        for r in rows:
-            if r["to_krw"]:
-                rates[r["currency"]] = float(r["to_krw"])
-        if rows:
-            asof = str(rows[0]["date"])
-    except Exception:
-        pass
+    for q in (
+        "SELECT currency, to_krw, CAST(asof AS STRING) d FROM "
+        "`innocean-perf-apac-kr.apac_kr_benchmark.bm_fx`",
+        "SELECT currency, to_krw, CAST(date AS STRING) d FROM "
+        "`innocean-perf-apac-kr.apac_kr_raw.fx_rates_daily` "
+        "WHERE date=(SELECT MAX(date) FROM `innocean-perf-apac-kr.apac_kr_raw.fx_rates_daily`)",
+    ):
+        try:
+            rows = list(_client().query(q).result())
+            if rows:
+                for r in rows:
+                    if r["to_krw"]:
+                        rates[r["currency"]] = float(r["to_krw"])
+                asof = rows[0]["d"]
+                break
+        except Exception:
+            continue
     rates["KRW"] = 1.0
     return rates, asof
 

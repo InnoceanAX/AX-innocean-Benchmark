@@ -1080,24 +1080,41 @@ function sugClick(btn,q){
     return fetch(url).then(function(r){return r.json();}).then(function(j){ try{ sessionStorage.setItem(k, JSON.stringify(j)); }catch(e){} return j; });
   }
   window.bmClearCache=function(){ try{ for(var i=sessionStorage.length-1;i>=0;i--){ var key=sessionStorage.key(i); if(key&&key.indexOf('bmc:')===0) sessionStorage.removeItem(key); } }catch(e){} };
-  // 기준차원/필터 컨트롤바
+  // 원본 필터 패널(.fp .fpg) 데이터 구동 재구성 — 기간/통화/환율은 보존, 원본 클래스 사용.
+  // 지원 필터(업종·국가·브랜드·캠페인목표)는 실데이터 연결, 미지원 2차 필터는 비활성(연동예정).
+  var DIM_LABELS={market:'국가',objective:'캠페인목표',brand:'브랜드',industry:'업종',device:'디바이스',age:'연령',gender:'성별'};
+  var PH_BY_MEDIA={
+    G:[['광고 상품','Search / Display(배너) / YouTube'],['영상 길이','6s / 15s / 30s / 60s+']],
+    D:[['광고 상품','Display(배너) / YouTube'],['라인아이템 유형','Display / Video']],
+    V:[['영상 길이','6s / 15s / 30s / 60s+'],['스킵 유형','Skippable / Bumper']],
+    M:[['구매 유형','AUCTION / RESERVED'],['노출 위치','피드 / 스토리 / 릴스']],
+    K:[['캠페인 유형','도달 / 동영상조회 / 전환'],['노출 위치','카카오톡 / 다음']],
+    T:[['노출 위치','In-Feed']],N:[['노출 위치','메인 / 서브']]};
   function buildControlBar(){
-    var old=document.getElementById('bmCtl'); if(old)old.remove();
-    var anchor=document.querySelector('#pgBM .fp')||document.querySelector('#pgBM .bmwrap'); if(!anchor)return;
-    var o=window._bmOptions||{};
-    var dims=DIMS.slice();  // DB 세그먼트 뷰가 있는 매체에서만 자동 노출
-    if(o.device_available) dims=dims.concat([['device','디바이스']]);
-    if(o.age_available) dims=dims.concat([['age','연령']]);
-    if(o.gender_available) dims=dims.concat([['gender','성별']]);
-    if(dims.map(function(d){return d[0];}).indexOf(curDim)<0) curDim='market';  // 매체 전환 시 미지원 차원 보정(영상=권역/목표/브랜드/업종)
-    var dimRow='<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap"><span style="font-size:12px;color:#767676;font-weight:700;min-width:64px">기준 차원</span>'+dims.map(function(d){return '<button class="dbtn'+(d[0]===curDim?' pri':'')+'" data-dim="'+d[0]+'" onclick="window.bmSetDim(\''+d[0]+'\')">'+d[1]+'</button>';}).join('')+'</div>';
-    function sel(key,label){ var opts='<option value="">전체</option>'+((o[key]||[]).map(function(x){return '<option value="'+x.v+'"'+(curFilters[key]===x.v?' selected':'')+'>'+x.name+'</option>';}).join('')); return '<div style="display:flex;flex-direction:column;gap:4px"><span style="font-size:11px;color:#767676;font-weight:600">'+label+'</span><select class="fsel" data-fk="'+key+'" style="height:34px;min-width:130px;border:1px solid #E5E7EB;padding:0 8px">'+opts+'</select></div>'; }
-    var fRow='<div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap"><span style="font-size:12px;color:#767676;font-weight:700;min-width:64px;padding-bottom:8px">필터</span>'+sel('market','국가')+sel('objective','캠페인목표')+sel('brand','브랜드')+'</div>';
-    var box=document.createElement('div'); box.id='bmCtl'; box.style.cssText='border:1px solid #E5E7EB;padding:14px 16px;margin-bottom:16px;background:#FAFAFA'; box.innerHTML=dimRow+fRow;
-    anchor.parentNode.insertBefore(box, anchor);
-    box.querySelectorAll('select[data-fk]').forEach(function(s){ s.onchange=function(){ curFilters[s.dataset.fk]=s.value; if(STATE.pg==='B')reloadAll(); }; });
+    var box=document.getElementById('bmCtl'); if(box)box.remove();   // 이전 임시 컨트롤바 제거
+    var fpg=document.querySelector('#pgBM .fpg'); if(!fpg)return;
+    var o=window._bmOptions||{}, media=(typeof STATE!=='undefined'&&STATE.media)||'G';
+    var dims=[['market','국가'],['objective','캠페인목표'],['brand','브랜드'],['industry','업종']];
+    if(o.device_available)dims.push(['device','디바이스']); if(o.age_available)dims.push(['age','연령']); if(o.gender_available)dims.push(['gender','성별']);
+    if(dims.map(function(d){return d[0];}).indexOf(curDim)<0)curDim='market';
+    function selOpts(key){ return '<option value="">전체</option>'+((o[key]||[]).map(function(x){return '<option value="'+x.v+'"'+(curFilters[key]===x.v?' selected':'')+'>'+x.name+'</option>';}).join('')); }
+    function fgSel(label,fk){ return '<div class="fg"><span class="flbl">'+label+'</span><select class="fsel" data-fk="'+fk+'">'+selOpts(fk)+'</select></div>'; }
+    var dimOpts=dims.map(function(d){return '<option value="'+d[0]+'"'+(d[0]===curDim?' selected':'')+'>'+d[1]+'</option>';}).join('');
+    var geo=(['K','N'].indexOf(media)<0)?'<div class="fg"><span class="flbl">국가</span><select class="fsel" data-fk="market">'+selOpts('market')+'</select></div>'
+      :'<div class="fg" title="카카오·네이버는 국내(KR) 기준"><span class="flbl">국가</span><select class="fsel" disabled><option>South Korea</option></select></div>';
+    var ph=(PH_BY_MEDIA[media]||[]).map(function(p){return '<div class="fg" title="현재 데이터로 미지원 — 추후 연동" style="opacity:.45"><span class="flbl">'+p[0]+' <span style="font-size:9px;color:#9CA3AF">(연동예정)</span></span><select class="fsel" disabled><option>'+p[1]+'</option></select></div>';}).join('');
+    var html='<div class="fg"><span class="flbl">기준 차원</span><select class="fsel" id="bmDimSel">'+dimOpts+'</select></div>'
+      +fgSel('업종','industry')+geo+fgSel('브랜드','brand')+fgSel('캠페인 목표','objective')+ph;
+    // 기간(frmDate) .fg는 보존하고 나머지 .fg/검색버튼 제거 후 재구성
+    var dateFg=null; fpg.querySelectorAll('.fg').forEach(function(el){ if(el.querySelector('#frmDate'))dateFg=el; });
+    fpg.querySelectorAll('.fg').forEach(function(el){ if(el!==dateFg)el.remove(); });
+    var ob=fpg.querySelector('.srcbtn'); if(ob)ob.remove();
+    if(dateFg)dateFg.insertAdjacentHTML('afterend',html); else fpg.insertAdjacentHTML('afterbegin',html);
+    var btn=document.createElement('button'); btn.className='srcbtn'; btn.textContent='데이터 검색'; btn.setAttribute('onclick','runSearch()'); fpg.appendChild(btn);
+    fpg.querySelectorAll('select[data-fk]').forEach(function(s){ s.onchange=function(){ curFilters[s.dataset.fk]=s.value; if(STATE.pg==='B')reloadAll(); }; });
+    var ds=document.getElementById('bmDimSel'); if(ds)ds.onchange=function(){ curDim=ds.value; if(STATE.pg==='B')reloadAll(); };
   }
-  window.bmSetDim=function(d){ curDim=d; document.querySelectorAll('#bmCtl button[data-dim]').forEach(function(x){x.className='dbtn';}); var b=document.querySelector('#bmCtl button[data-dim="'+d+'"]'); if(b)b.className='dbtn pri'; if(STATE.pg==='B')reloadAll(); };
+  window.bmSetDim=function(d){ curDim=d; var ds=document.getElementById('bmDimSel'); if(ds)ds.value=d; if(typeof STATE!=='undefined'&&STATE.pg==='B')reloadAll(); };
   function ensureVideoTab(o){   // 영상(V) 매체 탭 — 영상 마트에 데이터가 있을 때만 노출
     var tabs=document.querySelector('#pgBM .mtabs'); if(!tabs) return;
     var has=document.getElementById('mtV');
@@ -1123,11 +1140,7 @@ function sugClick(btn,q){
         b.setAttribute('onclick',"swM('"+x[0]+"')"); tabs.appendChild(b);
       });
     }
-    // 기존 정적 필터(기간 제외) 전부 숨김 → 새 컨트롤바(기준차원+필터)로 대체
-    document.querySelectorAll('#pgBM .fg').forEach(function(fg){
-      var l=fg.querySelector('.flbl'); var t=l?l.textContent.trim():'';
-      if(t.indexOf('기간')<0) fg.style.display='none';
-    });
+    // 원본 필터 패널은 buildControlBar()가 데이터 구동으로 재구성(숨기지 않음).
     // 통화: 선택 시 환산 재조회 (마트 KRW → 선택 통화)
     document.querySelectorAll('#pgBM input[name="bm_cur"]').forEach(function(r){
       r.disabled=false; if(r.parentNode)r.parentNode.style.opacity='';

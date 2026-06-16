@@ -209,10 +209,29 @@ def build_video(c):
     return True
 
 
+def build_fx(c):
+    """최신 환율을 마트로 복사 — 서비스 SA(benchmark-app)는 raw 미접근이므로 마트 경유.
+    소스 apac_kr_raw.fx_rates_daily(ECB). bm_fx = 최신일 통화별 to_krw."""
+    tbl = f"`{PROJECT}.{MART_DS}.bm_fx`"
+    src = f"`{PROJECT}.apac_kr_raw.fx_rates_daily`"
+    if not _table_exists(c, "apac_kr_raw", "fx_rates_daily"):
+        print("· fx_rates_daily 없음 → 환율 마트 skip")
+        return False
+    c.query(f"DROP TABLE IF EXISTS {tbl}").result()
+    c.query(f"""
+    CREATE OR REPLACE TABLE {tbl} AS
+    SELECT currency, to_krw, to_usd, date AS asof
+    FROM {src} WHERE date=(SELECT MAX(date) FROM {src}) AND to_krw IS NOT NULL
+    """).result()
+    print("· bm_fx: built (최신 환율 복사)")
+    return True
+
+
 def build():
     c = _client()
     ensure_dataset(c)
     build_campaign(c)
+    build_fx(c)
     for _dim, (_view, _col) in SEGMENTS.items():   # device/age/gender — 뷰 있으면 자동 빌드
         build_segment(c, _dim, _view, _col)
     build_video(c)                                 # 영상(V) — 뷰 있으면 자동 빌드
