@@ -1181,13 +1181,28 @@ function sugClick(btn,q){
     rows.forEach(function(r){ var tr=document.createElement('tr'); tr.innerHTML=cols.map(function(k){ return '<td>'+(r[k]!=null?r[k]:'—')+'</td>'; }).join(''); tbody.appendChild(tr); });
     var rc=document.getElementById('rowCnt'); if(rc) rc.textContent=rows.length+' / '+(BM_DATA.detail||[]).length+'건';
   }
-  // 지표 추가(Additional Index) 모달 — 실데이터에 존재하는 추가 지표만 노출
+  // 지표 추가(Additional Index) 모달 — 원안처럼 전체 지표를 그룹으로 노출.
+  // 실데이터 있는 지표는 활성(체크 가능), 없는 지표는 비활성(데이터없음) 표기.
+  var KPIMDL_CATALOG=[
+    ['전환', [['전환수','conv'],['CVR','cvr'],['ROAS','roas'],['전환비용',null]]],
+    ['조회 / 영상', [['조회수','views'],['VTR(조회율)','vtr'],['CPV','cpv'],['완전조회율','cr'],
+      ['VTR(3초)',null],['VTR(ThruPlay)',null],['VTR(TrueView)',null],['VTR(100%조회)',null],['CPV(3초)',null],['CPV(ThruPlay)',null]]],
+    ['클릭', [['CTR(링크클릭)',null],['CPC(링크클릭)',null],['링크클릭수',null]]],
+    ['참여', [['게시물참여',null],['게시물댓글',null],['게시물공감',null],['게시물공유',null],['사진조회',null],['잠재고객',null]]]
+  ];
   function buildKpiMdl(){
     var mdl=document.getElementById('kpiMdl'); if(!mdl)return; var body=mdl.querySelector('.mbdy'); if(!body)return;
     var base=detBase(), present=Object.keys((BM_DATA&&BM_DATA.detail&&BM_DATA.detail[0])||{});
-    var addable=present.filter(function(k){ return base.indexOf(k)<0 && DET_LABELS[k] && k!=='period' && k!=='name'; });
-    if(!addable.length){ body.innerHTML='<div style="padding:12px;color:#767676;font-size:13px">현재 매체·데이터로 추가 가능한 지표가 없습니다.</div>'; return; }
-    body.innerHTML='<div class="mgrp"><div class="mgrpt">상세표에 추가할 지표</div><div class="cbg">'+addable.map(function(k){ return '<label class="cblbl"><input type="checkbox" data-dc="'+k+'"'+(curDetCols.indexOf(k)>=0?' checked':'')+'>'+(DET_LABELS[k]||k)+'</label>'; }).join('')+'</div></div>';
+    var html='';
+    KPIMDL_CATALOG.forEach(function(g){
+      var items=g[1].map(function(it){
+        var key=it[1], on=key&&present.indexOf(key)>=0&&base.indexOf(key)<0;
+        if(on) return '<label class="cblbl"><input type="checkbox" data-dc="'+key+'"'+(curDetCols.indexOf(key)>=0?' checked':'')+'>'+it[0]+'</label>';
+        return '<label class="cblbl" style="opacity:.4;cursor:not-allowed" title="현재 데이터 없음 — 수집/연동 시 활성화"><input type="checkbox" disabled>'+it[0]+' <span style="font-size:9px;color:#9CA3AF">(데이터없음)</span></label>';
+      }).join('');
+      html+='<div class="mgrp"><div class="mgrpt">'+g[0]+'</div><div class="cbg">'+items+'</div></div>';
+    });
+    body.innerHTML=html;
   }
   window.applyKpi=function(){ var mdl=document.getElementById('kpiMdl'); curDetCols=[]; if(mdl)mdl.querySelectorAll('input[data-dc]:checked').forEach(function(c){ curDetCols.push(c.getAttribute('data-dc')); }); if(window.closeMdl)closeMdl('kpiMdl'); renderDet(); };
   window.applySumKpi=window.applyKpi;   // Summary 지표추가도 동일 처리
@@ -1221,8 +1236,8 @@ function sugClick(btn,q){
       s.onchange=cb; }
     fill('kpiSelL',rate,curKpiL,function(){ curKpiL=this.value; renderCharts(); });
     fill('kpiSelR',cost,curKpiR,function(){ curKpiR=this.value; renderCharts(); });
-    var subL=document.getElementById('kpiSubL'); if(subL)subL.style.display='none';
-    var subR=document.getElementById('kpiSubR'); if(subR)subR.style.display='none';
+    // 보조선택(기준/조회기준 등 비기능 드롭다운) 숨김 — 기능하는 Rate·단가 2개만 노출
+    document.querySelectorAll('#pgBM .ngrow select').forEach(function(s){ if(s.id!=='kpiSelL'&&s.id!=='kpiSelR') s.style.display='none'; });
   }
   window.updateLeftChart=function(){ var s=document.getElementById('kpiSelL'); if(s){curKpiL=s.value;} renderCharts(); };
   window.updateRightChart=function(){ var s=document.getElementById('kpiSelR'); if(s){curKpiR=s.value;} renderCharts(); };
