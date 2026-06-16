@@ -316,12 +316,14 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     # 2) detail (월 × 기준차원)
     detail = []
     det_sql = f"""
-      SELECT period, {dim} AS dim, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost{vid_camp}
+      SELECT period, {dim} AS dim, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost,
+             SUM(conv) conv, SUM(rev) rev{vid_camp}
       FROM {src} WHERE {where} GROUP BY period, dim HAVING imp > 0
       ORDER BY period DESC, cost DESC
     """
     for r in cl.query(det_sql, job_config=qcfg).result():
         imp, clk, cost = r["imp"] or 0, r["clk"] or 0, r["cost"] or 0.0
+        conv, rev = r.get("conv") or 0.0, r.get("rev") or 0.0
         vv, vp = (r.get("vviews") or 0), (r.get("vp100") or 0)
         d = {"period": r["period"], "name": dim_name(dim, r["dim"]),
              "spend": money(cost), "imps": _num(imp), "clicks": _num(clk),
@@ -332,6 +334,9 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             d.update({"views": _num(vv), "vtr": _pct(vv / imp * 100 if imp else 0),
                       "cpv": money2(cost / vv if vv else 0),
                       "cr": _pct(vp / imp * 100 if imp else 0)})
+        else:   # 지표추가 대상: 전환수·CVR·ROAS (커버리지 있을 때만 의미)
+            d.update({"conv": _num(conv), "cvr": _pct(conv / clk * 100 if clk else 0),
+                      "roas": (f"{(rev / cost / gf):.2f}배" if cost else "—")})
         detail.append(d)
 
     # 3) charts: trend(월별, 조건 전체) + compare(기준차원별 중앙값)

@@ -1060,6 +1060,11 @@ function sugClick(btn,q){
   var curKpi='cpm', curDim='market', curFilters={market:'',objective:'',brand:'',industry:''};
   var curKpiL='cpm', curKpiR='ctr';   // Summary 차트 선택지표 (좌=추세, 우=비교)
   var curGross=0;   // Net/Gross 수수료율(%) — 0=Net
+  var curDetCols=[];   // 지표추가(Additional Index)로 켠 상세표 추가 컬럼
+  var detSort={k:null,asc:false};   // 상세표 정렬 상태
+  var DET_LABELS={period:'기간',name:'__dim__',spend:'지출예산',imps:'노출수',clicks:'클릭수',views:'조회수',conv:'전환수',cpm:'CPM',cpc:'CPC',ctr:'CTR',cvr:'CVR',roas:'ROAS',vtr:'VTR',cpv:'CPV',cr:'완전조회율'};
+  function detBase(){ return (BM_DATA&&BM_DATA.meta&&BM_DATA.meta.is_video)?['period','name','spend','imps','views','cpm','vtr','cpv','cr']:['period','name','spend','imps','clicks','cpm','cpc','ctr']; }
+  function detNum(v){ if(v==null)return -Infinity; var n=parseFloat(String(v).replace(/[^0-9.\-]/g,'')); return isNaN(n)?-Infinity:n; }
   var KU={cpm:'CPM',cpc:'CPC',ctr:'CTR',cvr:'CVR',roas:'ROAS',vtr:'VTR',cpv:'CPV',cr:'완전조회율'};
   var PCT_KPI={ctr:1,cvr:1,vtr:1,cr:1};   // % 단위 KPI
   var DIMS=[['market','권역'],['objective','캠페인목표'],['brand','브랜드'],['industry','업종']];
@@ -1160,8 +1165,11 @@ function sugClick(btn,q){
     // 영상(YouTube)·DV360(배너) 매체 라벨 정리
     var mtV=document.getElementById('mtV'); if(mtV) mtV.textContent='YouTube(영상)';
     var mtDb=document.getElementById('mtD'); if(mtDb) mtDb.textContent='DV360(배너)';
-    // '지표 추가' 버튼 숨김 (마트에 확장지표 없음 → 가짜 방지)
-    document.querySelectorAll('#pgBM button').forEach(function(b){ if((b.textContent||'').indexOf('지표 추가')>=0) b.style.display='none'; });
+    // '지표 추가'(Additional Index) 버튼 복원 — kpiMdl 모달로 상세표 지표 추가(원안 기능)
+    document.querySelectorAll('#pgBM button').forEach(function(b){ if((b.textContent||'').indexOf('지표 추가')>=0) b.style.display=''; });
+    // List Size에 200건 옵션 추가(2차 설계: 20/50/100/200)
+    var lsz=document.getElementById('lsz');
+    if(lsz && !lsz.querySelector('option[value="200"]')){ var o=document.createElement('option'); o.value='200'; o.textContent='200건'; var full=lsz.querySelector('option[value="9999"]'); lsz.insertBefore(o, full||null); }
     // KPI 토글 주입 (요약표 위)
     var sumTwrap=document.querySelector('#pgBM .twrap');
     if(sumTwrap && !document.getElementById('bmKpiTgl')){
@@ -1203,17 +1211,46 @@ function sugClick(btn,q){
   function renderDet(){
     if(!window.BM_DATA) return;
     var thead=document.getElementById('detHead'), tbody=document.getElementById('detBody'); if(!thead||!tbody) return;
-    var isV=!!(BM_DATA.meta&&BM_DATA.meta.is_video);
-    var cols=isV
-      ?[['period','기간'],['name',dimLabel()],['spend','지출예산'],['imps','노출수'],['views','조회수'],['cpm','CPM'],['vtr','VTR'],['cpv','CPV'],['cr','완전조회율']]
-      :[['period','기간'],['name',dimLabel()],['spend','지출예산'],['imps','노출수'],['clicks','클릭수'],['cpm','CPM'],['cpc','CPC'],['ctr','CTR']];
-    thead.innerHTML=''; cols.forEach(function(c){ var th=document.createElement('th'); th.textContent=c[1]; thead.appendChild(th); });
+    var cols=detBase().slice();
+    curDetCols.forEach(function(k){ if(cols.indexOf(k)<0)cols.push(k); });   // 지표추가 컬럼
+    // 헤더 + 컬럼 클릭 정렬
+    thead.innerHTML='';
+    cols.forEach(function(k){ var th=document.createElement('th'); th.style.cursor='pointer';
+      th.textContent=(k==='name'?dimLabel():(DET_LABELS[k]||k))+(detSort.k===k?(detSort.asc?' ▲':' ▼'):'');
+      th.onclick=function(){ if(detSort.k===k)detSort.asc=!detSort.asc; else {detSort.k=k;detSort.asc=false;} renderDet(); };
+      thead.appendChild(th); });
+    var data=(BM_DATA.detail||[]).slice();
+    if(detSort.k){ var k=detSort.k; data.sort(function(a,b){
+      if(k==='period'||k==='name'){ var av=String(a[k]||''),bv=String(b[k]||''); return detSort.asc?av.localeCompare(bv):bv.localeCompare(av); }
+      var an=detNum(a[k]),bn=detNum(b[k]); return detSort.asc?an-bn:bn-an; }); }
     var n=parseInt((document.getElementById('lsz')||{}).value)||20;
-    var rows=(BM_DATA.detail||[]).slice(0,n);
+    var rows=data.slice(0,n);
     tbody.innerHTML='';
-    rows.forEach(function(r){ var tr=document.createElement('tr'); tr.innerHTML=cols.map(function(c){ return '<td>'+(r[c[0]]!=null?r[c[0]]:'—')+'</td>'; }).join(''); tbody.appendChild(tr); });
+    rows.forEach(function(r){ var tr=document.createElement('tr'); tr.innerHTML=cols.map(function(k){ return '<td>'+(r[k]!=null?r[k]:'—')+'</td>'; }).join(''); tbody.appendChild(tr); });
     var rc=document.getElementById('rowCnt'); if(rc) rc.textContent=rows.length+' / '+(BM_DATA.detail||[]).length+'건';
   }
+  // 지표 추가(Additional Index) 모달 — 실데이터에 존재하는 추가 지표만 노출
+  function buildKpiMdl(){
+    var mdl=document.getElementById('kpiMdl'); if(!mdl)return; var body=mdl.querySelector('.mbdy'); if(!body)return;
+    var base=detBase(), present=Object.keys((BM_DATA&&BM_DATA.detail&&BM_DATA.detail[0])||{});
+    var addable=present.filter(function(k){ return base.indexOf(k)<0 && DET_LABELS[k] && k!=='period' && k!=='name'; });
+    if(!addable.length){ body.innerHTML='<div style="padding:12px;color:#767676;font-size:13px">현재 매체·데이터로 추가 가능한 지표가 없습니다.</div>'; return; }
+    body.innerHTML='<div class="mgrp"><div class="mgrpt">상세표에 추가할 지표</div><div class="cbg">'+addable.map(function(k){ return '<label class="cblbl"><input type="checkbox" data-dc="'+k+'"'+(curDetCols.indexOf(k)>=0?' checked':'')+'>'+(DET_LABELS[k]||k)+'</label>'; }).join('')+'</div></div>';
+  }
+  window.applyKpi=function(){ var mdl=document.getElementById('kpiMdl'); curDetCols=[]; if(mdl)mdl.querySelectorAll('input[data-dc]:checked').forEach(function(c){ curDetCols.push(c.getAttribute('data-dc')); }); if(window.closeMdl)closeMdl('kpiMdl'); renderDet(); };
+  // CSV 다운로드 — 현재 상세표(추가지표 포함) 전체 행
+  window.bmCSV=function(){
+    if(!window.BM_DATA||!(BM_DATA.detail||[]).length){ if(window.toast)toast('내보낼 데이터가 없습니다.','ℹ'); return; }
+    var cols=detBase().slice(); curDetCols.forEach(function(k){ if(cols.indexOf(k)<0)cols.push(k); });
+    var head=cols.map(function(k){ return k==='name'?dimLabel():(DET_LABELS[k]||k); });
+    var lines=[head.join(',')];
+    (BM_DATA.detail||[]).forEach(function(r){ lines.push(cols.map(function(k){ var v=(r[k]!=null?String(r[k]):''); if(v.indexOf(',')>=0||v.indexOf('"')>=0)v='"'+v.split('"').join('""')+'"'; return v; }).join(',')); });
+    var blob=new Blob(['﻿'+lines.join('\n')],{type:'text/csv;charset=utf-8'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='benchmark_'+((typeof STATE!=='undefined'&&STATE.media)||'G')+'_'+(BM_DATA.meta&&BM_DATA.meta.dim||'')+'.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); if(window.toast)toast('CSV 다운로드 완료','✓');
+  };
+  // 통화 기본값: 글로벌(Meta/Google/DV360/TikTok/영상)=USD, 국내(카카오/네이버)=KRW
+  function applyDefaultCurrency(m){ var def=(['K','N'].indexOf(m)>=0)?'KRW':'USD'; var rb=document.querySelector('#pgBM input[name="bm_cur"][value="'+def+'"]'); if(rb)rb.checked=true; }
   function kpiLbl(k){ var sym=(BM_DATA&&BM_DATA.meta&&BM_DATA.meta.symbol)||'₩'; return PCT_KPI[k]?KU[k]+' (%)':(k==='roas'?KU[k]+' (배)':KU[k]+' ('+sym+')'); }
   // 차트 지표 드롭다운 (원안 복원): kpiSelL=추세지표, kpiSelR=비교지표. 전체 지표 노출, 미가용은 비활성.
   function buildChartSelectors(){
@@ -1269,10 +1306,10 @@ function sugClick(btn,q){
       bar.appendChild(b);
     });
   }
-  function renderAll(){ buildKpiToggle(); buildChartSelectors(); updateExrate(); renderBench(); renderDet(); renderCharts(); }
+  function renderAll(){ buildKpiToggle(); buildChartSelectors(); updateExrate(); renderBench(); renderDet(); buildKpiMdl(); renderCharts(); }
   function reloadAll(){ bmLoad().then(renderAll); }
   window.reloadAll=reloadAll;
-  function enterBM(){ injectUI(); refreshControls(); reloadAll(); }
+  function enterBM(){ injectUI(); applyDefaultCurrency((typeof STATE!=='undefined'&&STATE.media)||'G'); refreshControls(); reloadAll(); }
   window.enterBM=enterBM;
 
   // 원본 함수 오버라이드 → 실데이터 렌더로 연결
@@ -1352,7 +1389,7 @@ function sugClick(btn,q){
   window.goPg=function(p){ _goPg(p); if(p==='B'){ enterBM(); } if(p==='A'){ injectAI(); } };
   window.runSearch=function(){ if(window.toast)toast('데이터를 새로 불러오는 중...'); bmClearCache(); refreshControls(); reloadAll(); setTimeout(function(){ if(window.toast)toast('검색이 완료되었습니다.'); },400); };
   var _swM=window.swM;
-  if(_swM){ window.swM=function(m){ _swM(m); if(typeof STATE!=='undefined'&&STATE.pg==='B'){ refreshControls(); reloadAll(); } }; }
+  if(_swM){ window.swM=function(m){ _swM(m); applyDefaultCurrency(m); if(typeof STATE!=='undefined'&&STATE.pg==='B'){ refreshControls(); reloadAll(); } }; }
 
   // AI 채팅
   window._chatHist=window._chatHist||[];
