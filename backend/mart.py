@@ -107,6 +107,23 @@ def build_campaign(c):
     join = f"LEFT JOIN ({gmap}) g ON CAST(u.campaign_id AS STRING)=g.cid" if gmap else "LEFT JOIN (SELECT '' cid, '' nm) g ON FALSE"
     cmap = _channel_map(c)
     cjoin = f"LEFT JOIN ({cmap}) ch ON CAST(u.campaign_id AS STRING)=ch.cid" if cmap else "LEFT JOIN (SELECT '' cid, CAST(NULL AS STRING) ct) ch ON FALSE"
+    # 영상(YouTube) 지표를 캠페인×월 grain으로 부착 — 영상 데이터는 google 전용이라
+    # 영상 캠페인은 자기 플랫폼(Google)에 귀속. 영상 캠페인만의 분모(vimp/vcost)로 VTR/CPV 산출(비영상 희석 없음).
+    vjoin = ""
+    vcols = ("0 AS vimp, 0 AS vviews, 0.0 AS vcost, 0 AS vp25, 0 AS vp50, "
+             "0 AS vp75, 0 AS vp100, 0 AS veng")
+    if _table_exists(c, "apac_kr_unified", "v_perf_unified_video"):
+        vsrc = f"`{PROJECT}.apac_kr_unified.v_perf_unified_video`"
+        vjoin = (f"LEFT JOIN (SELECT FORMAT_DATE('%Y-%m', date) vp, CAST(campaign_id AS STRING) vcid, "
+                 f"SUM(impressions) vimp, SUM(spend_krw) vcost, SUM(video_views) vviews, "
+                 f"SUM(video_p25) vp25, SUM(video_p50) vp50, SUM(video_p75) vp75, SUM(video_p100) vp100, "
+                 f"SUM(engagements) veng FROM {vsrc} WHERE NOT IFNULL(is_excluded,FALSE) GROUP BY vp, vcid) vid "
+                 f"ON CAST(u.campaign_id AS STRING)=vid.vcid AND FORMAT_DATE('%Y-%m',u.date)=vid.vp "
+                 f"AND u.platform='google_ads'")
+        vcols = ("IFNULL(ANY_VALUE(vid.vimp),0) AS vimp, IFNULL(ANY_VALUE(vid.vviews),0) AS vviews, "
+                 "IFNULL(ANY_VALUE(vid.vcost),0) AS vcost, IFNULL(ANY_VALUE(vid.vp25),0) AS vp25, "
+                 "IFNULL(ANY_VALUE(vid.vp50),0) AS vp50, IFNULL(ANY_VALUE(vid.vp75),0) AS vp75, "
+                 "IFNULL(ANY_VALUE(vid.vp100),0) AS vp100, IFNULL(ANY_VALUE(vid.veng),0) AS veng")
     tbl = f"`{PROJECT}.{MART_DS}.bm_campaign_monthly`"
     c.query(f"DROP TABLE IF EXISTS {tbl}").result()
     sql = f"""
@@ -126,17 +143,19 @@ def build_campaign(c):
       SUM(u.spend_krw) AS cost,
       SUM(u.conversions) AS conv,
       {_rev_expr(c, 'v_perf_unified')} AS rev,
+      {vcols},
       CURRENT_TIMESTAMP() AS _built_at
     FROM {SOURCE} u
     {join}
     {cjoin}
+    {vjoin}
     WHERE u.date IS NOT NULL AND NOT IFNULL(u.is_excluded, FALSE)
       AND u.platform IN ({_plats()}) AND u.market IS NOT NULL AND u.market != ''
     GROUP BY period, media, market, industry, objective, brand, agency, channel, campaign_id
     HAVING imp > 0
     """
     c.query(sql).result()
-    print("bm_campaign_monthly: rebuilt (google 캠페인명 raw 보강 포함)")
+    print("bm_campaign_monthly: rebuilt (google 캠페인명 raw 보강 + 영상지표 부착)")
 
 
 def _table_exists(c, dataset, table):

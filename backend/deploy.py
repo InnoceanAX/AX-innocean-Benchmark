@@ -29,7 +29,7 @@ RUNTIME_SA = f"perf-data-analyst@{PROJECT}.iam.gserviceaccount.com"
 SERVICE_SA = f"benchmark-app@{PROJECT}.iam.gserviceaccount.com"
 REPO = "cloud-run-source-deploy"                           # 기존 AR repo 재사용
 IMAGE = "innocean-benchmark"
-TAG = "backend-v37"
+TAG = "backend-v41"
 IMG_URI = f"{REGION}-docker.pkg.dev/{PROJECT}/{REPO}/{IMAGE}:{TAG}"
 STAGE_BUCKET = "innocean-perf-apac-kr-cloudbuild-source"
 SRC_OBJECT = "benchmark/source.tar.gz"
@@ -218,10 +218,37 @@ def verify():
     return uri
 
 
+def wait_job_exec(exec_name):
+    """마트 Job 실행(execution) 완료 대기."""
+    url = f"https://{REGION}-run.googleapis.com/v2/{exec_name}"
+    for _ in range(120):
+        d = S.get(url).json()
+        cond = {c.get("type"): c.get("state") for c in (d.get("conditions") or [])}
+        if d.get("completionTime") or cond.get("Completed") in ("CONDITION_SUCCEEDED", "CONDITION_FAILED"):
+            ok = cond.get("Completed") == "CONDITION_SUCCEEDED" or (d.get("succeededCount", 0) >= 1)
+            print("· 마트 Job 실행", "성공" if ok else f"종료(상태 미확정: {cond})")
+            return ok
+        time.sleep(5)
+    print("· 마트 Job 실행 폴링 타임아웃(백그라운드 계속될 수 있음)")
+    return False
+
+
+def run_mart_job_now_wait():
+    base = f"https://{REGION}-run.googleapis.com/v2/projects/{PROJECT}/locations/{REGION}/jobs"
+    r = _ok(S.post(f"{base}/{MART_JOB}:run"))
+    exec_name = r.json().get("metadata", {}).get("name") or r.json().get("name", "")
+    print("· 마트 Job 수동 실행:", exec_name[:90])
+    if exec_name:
+        return wait_job_exec(exec_name)
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--build", action="store_true")
     ap.add_argument("--verify", action="store_true")
+    ap.add_argument("--full", action="store_true",
+                    help="서비스 배포 + 마트 Job 이미지 갱신 + 마트 즉시 재빌드(채널 컬럼 복구)")
     a = ap.parse_args()
     print(f"배포 대상: {PROJECT}/{REGION}/{SERVICE}  (deployer={creds.service_account_email})")
     if a.verify:
@@ -232,6 +259,9 @@ def main():
     if a.build:
         print("빌드 완료 (배포 생략)"); return
     deploy_service(with_secret=has_secret)
+    if a.full:
+        deploy_mart_job()       # 마트 Job을 새 이미지로 갱신(야간 스케줄도 새 mart.py 사용)
+        run_mart_job_now_wait()  # 마트 즉시 재빌드 → 누락된 channel 컬럼 복구
     verify()
     print("\n✅ 배포 완료.")
 
