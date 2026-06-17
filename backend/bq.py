@@ -33,22 +33,23 @@ KPI_EXPR = {
     "cr": "SAFE_DIVIDE(vp100,vimp)*100",   # 완전조회율 = 영상노출 대비 끝까지 재생(≤100%)
     "cpv100": "SAFE_DIVIDE(vcost,vp100)",  # 100%(완전)조회 기준 CPV — '기준 지표' 셀렉터(차트 전용)
     "vtr3s": "SAFE_DIVIDE(mv3s,imp)*100", "cpv3s": "SAFE_DIVIDE(cost,mv3s)",   # Meta 3초조회 기준 VTR/CPV
+    "vtrthru": "SAFE_DIVIDE(vthru,vimp)*100", "cpvthru": "SAFE_DIVIDE(vcost,vthru)",  # ThruPlay 기준(Meta영상)
     "ctrlk": "SAFE_DIVIDE(mlclk,imp)*100", "cpclk": "SAFE_DIVIDE(cost,mlclk)",  # 링크클릭 기준 CTR/CPC(Meta)
 }
 KPI_LOWER_BETTER = {"cpm": True, "cpc": True, "ctr": False, "cvr": False, "roas": False,
                     "vtr": False, "cpv": True, "cr": False, "cpv100": True,
-                    "vtr3s": False, "cpv3s": True, "ctrlk": False, "cpclk": True}
+                    "vtr3s": False, "cpv3s": True, "vtrthru": False, "cpvthru": True, "ctrlk": False, "cpclk": True}
 KPI_FMT = {"cpm": "money2", "cpc": "money2", "ctr": "pct", "cvr": "pct", "roas": "x",
            "vtr": "pct", "cpv": "money2", "cr": "pct", "cpv100": "money2",
-           "vtr3s": "pct", "cpv3s": "money2", "ctrlk": "pct", "cpclk": "money2"}
+           "vtr3s": "pct", "cpv3s": "money2", "vtrthru": "pct", "cpvthru": "money2", "ctrlk": "pct", "cpclk": "money2"}
 KPIS_DEFAULT = ("cpm", "cpc", "ctr", "cvr", "roas")
 # 영상 KPI — 영상 캠페인 보유 매체(Google)에서 커버리지 게이트(≥10%)로 노출. 비영상 매체는 자동 숨김.
 VIDEO_KPIS = ("vtr", "cpv")
 # 차트 '기준 지표(basis)' 전용 — 4분위/트렌드/비교 시리즈는 계산하되 표·Rate/KPI토글엔 미노출.
 # cr=100%조회VTR, vtr3s/cpv3s=Meta 3초조회 기준, ctrlk/cpclk=링크클릭 기준.
-CHART_ONLY_KPIS = ("cpv100", "cr", "vtr3s", "cpv3s", "ctrlk", "cpclk")
+CHART_ONLY_KPIS = ("cpv100", "cr", "vtr3s", "cpv3s", "vtrthru", "cpvthru", "ctrlk", "cpclk")
 # 캠페인 마트(TBL)에만 존재하는 보강 집계 컬럼(영상=v*, Meta=m*) — 세그먼트 마트엔 없음.
-EXTRA_COLS = ("vimp", "vviews", "vcost", "vp25", "vp50", "vp75", "vp100", "veng",
+EXTRA_COLS = ("vimp", "vviews", "vcost", "vp25", "vp50", "vp75", "vp100", "veng", "vthru",
               "mlclk", "mv3s", "meng", "mcmt", "mrct", "mlead", "mshare")
 KPIS = KPIS_DEFAULT   # 하위호환(타 모듈 참조)
 
@@ -71,6 +72,8 @@ def _agg_extra(k, imp, cost, conv, ex):
     """보강(Meta·링크·참여) 표시지표 집계값. ex=EXTRA_COLS 합계 dict."""
     if k == "vtr3s":  return ex["mv3s"] / imp * 100 if imp else 0
     if k == "cpv3s":  return cost / ex["mv3s"] if ex["mv3s"] else 0
+    if k == "vtrthru": return ex["vthru"] / ex["vimp"] * 100 if ex["vimp"] else 0
+    if k == "cpvthru": return ex["vcost"] / ex["vthru"] if ex["vthru"] else 0
     if k == "ctrlk":  return ex["mlclk"] / imp * 100 if imp else 0
     if k == "cpclk":  return cost / ex["mlclk"] if ex["mlclk"] else 0
     if k == "cpa":    return cost / conv if conv else 0
@@ -283,6 +286,8 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             e = f"IF(vimp>0,{k},NULL)"      # 영상(Google) 캠페인만
         elif k in ("vtr3s", "cpv3s"):
             e = f"IF(mv3s>0,{k},NULL)"      # Meta 3초조회 캠페인만
+        elif k in ("vtrthru", "cpvthru"):
+            e = f"IF(vthru>0,{k},NULL)"     # ThruPlay 있는 영상 캠페인만
         elif k in ("ctrlk", "cpclk"):
             e = f"IF(mlclk>0,{k},NULL)"     # 링크클릭 있는 캠페인만
         else:
@@ -298,7 +303,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     vcols_sel = (", " + ", ".join(f"SUM({c}) {c}" for c in EXTRA_COLS)) if has_video else ""
     vcols_pass = (", " + ", ".join(EXTRA_COLS)) if has_video else ""
     vcols_out = (", " + ", ".join(f"SUM({c}) {c}" for c in EXTRA_COLS)
-                 + ", COUNTIF(vimp>0) nvid, COUNTIF(mv3s>0) nv3s, COUNTIF(mlclk>0) nlclk, "
+                 + ", COUNTIF(vimp>0) nvid, COUNTIF(mv3s>0) nv3s, COUNTIF(vthru>0) nthru, COUNTIF(mlclk>0) nlclk, "
                  + "COUNTIF(veng+meng>0) neng, COUNTIF(meng>0) nmeng") if has_video else ""
     ck_exprs = ", ".join(f"{KPI_EXPR[k]} {k}" for k in calc_kpis)
     qcols = ", ".join(_qblock(k) for k in calc_kpis)
@@ -332,7 +337,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         return {c: (r.get(c) or 0) for c in EXTRA_COLS}
 
     def _kval(k, imp, clk, cost, conv, rev, ex):  # KPI 집계값(영상=v*, Meta=m* 분모)
-        if k in ("vtr3s", "cpv3s", "ctrlk", "cpclk"):
+        if k in ("vtr3s", "cpv3s", "vtrthru", "cpvthru", "ctrlk", "cpclk"):
             return _agg_extra(k, imp, cost, conv, ex)
         return _agg_kpi(k, imp, clk, cost, conv, rev, ex["vviews"], ex["vp100"], ex["vimp"], ex["vcost"])
 
@@ -343,7 +348,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
                 "vtr25": _pct(ex["vp25"] / vimp * 100 if vimp else 0),
                 "vtr50": _pct(ex["vp50"] / vimp * 100 if vimp else 0),
                 "vtr75": _pct(ex["vp75"] / vimp * 100 if vimp else 0),
-                "v3s": _num(ex["mv3s"]), "lclk": _num(ex["mlclk"]),
+                "v3s": _num(ex["mv3s"]), "vthru": _num(ex["vthru"]), "lclk": _num(ex["mlclk"]),
                 "eng": _num(engsum), "engr": _pct(engsum / imp * 100 if imp else 0),
                 "cmt": _num(ex["mcmt"]), "rct": _num(ex["mrct"]), "lead": _num(ex["mlead"]), "shr": _num(ex["mshare"]),
                 "cpa": money2(cost / conv if conv else 0)}
@@ -351,13 +356,13 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     benchmark = []
     tot = {"imp": 0, "clk": 0, "cost": 0.0, "n": 0, "rev": 0.0, "conv": 0.0}
     tex = {c: 0 for c in EXTRA_COLS}   # EXTRA 컬럼 합계(전체 행)
-    tot_nrev = tot_nconv = tot_nvid = tot_nv3s = tot_nlclk = tot_neng = tot_nmeng = 0
+    tot_nrev = tot_nconv = tot_nvid = tot_nv3s = tot_nthru = tot_nlclk = tot_neng = tot_nmeng = 0
     for r in rows:
         imp, clk, cost, conv, rev = r["imp"] or 0, r["clk"] or 0, r["cost"] or 0.0, r.get("conv") or 0.0, r["rev"] or 0.0
         ex = _ex(r)
         tot["imp"] += imp; tot["clk"] += clk; tot["cost"] += cost; tot["n"] += r["n"]; tot["rev"] += rev; tot["conv"] += conv
         tot_nrev += (r.get("nrev") or 0); tot_nconv += (r.get("nconv") or 0); tot_nvid += (r.get("nvid") or 0)
-        tot_nv3s += (r.get("nv3s") or 0); tot_nlclk += (r.get("nlclk") or 0)
+        tot_nv3s += (r.get("nv3s") or 0); tot_nthru += (r.get("nthru") or 0); tot_nlclk += (r.get("nlclk") or 0)
         tot_neng += (r.get("neng") or 0); tot_nmeng += (r.get("nmeng") or 0)
         if has_video:
             for c in EXTRA_COLS:
@@ -380,8 +385,10 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     n_all = tot["n"] or 1
     roas_avail = (tot_nrev / n_all) >= 0.10
     cvr_avail = (tot_nconv / n_all) >= 0.10
-    vid_avail = has_video and (tot_nvid / n_all) >= 0.10        # 영상(Google): VTR/CPV/완전조회율/구간
-    metaview_avail = has_video and (tot_nv3s / n_all) >= 0.10   # Meta 3초조회
+    # 영상 지표는 영상 캠페인만(IF vimp>0 등)으로 산출 → 희석 없음. %가 아니라 '충분한 캠페인 수' 게이트(≥20).
+    vid_avail = has_video and tot_nvid >= 20        # 영상: VTR/CPV/완전조회율/구간(Google·Meta 영상캠페인)
+    metaview_avail = has_video and tot_nv3s >= 20   # Meta 3초조회
+    thru_avail = has_video and tot_nthru >= 20      # ThruPlay(Meta 영상)
     link_avail = has_video and (tot_nlclk / n_all) >= 0.10      # 링크클릭(Meta)
     engage_avail = has_video and (tot_neng / n_all) >= 0.10     # 게시물 참여(Google영상/Meta)
     meta_eng_avail = has_video and (tot_nmeng / n_all) >= 0.10  # 댓글·공감·잠재고객(Meta 전용)
@@ -406,7 +413,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
              "conv": _num(conv), "cvr": _pct(conv / clk * 100 if clk else 0),
              "roas": (f"{(rev / cost / gf):.2f}배" if cost else "—")}
         if has_video:
-            for k in ("vtr", "cpv", "cr", "cpv100", "vtr3s", "cpv3s", "ctrlk", "cpclk"):
+            for k in ("vtr", "cpv", "cr", "cpv100", "vtr3s", "cpv3s", "vtrthru", "cpvthru", "ctrlk", "cpclk"):
                 d[k] = qf(k, _kval(k, imp, clk, cost, conv, rev, ex))
             d.update(_extra_disp(ex, imp, cost, conv))
         detail.append(d)
@@ -456,11 +463,12 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     if roas_avail: avail_metrics += ["roas"]
     if vid_avail: avail_metrics += ["views", "vtr", "cpv", "cr", "cpv100", "v25", "v50", "v75", "v100", "vtr25", "vtr50", "vtr75"]
     if metaview_avail: avail_metrics += ["v3s", "vtr3s", "cpv3s"]
+    if thru_avail: avail_metrics += ["vthru", "vtrthru", "cpvthru"]
     if link_avail: avail_metrics += ["lclk", "ctrlk", "cpclk"]
     if engage_avail: avail_metrics += ["eng", "engr"]
     if meta_eng_avail: avail_metrics += ["cmt", "rct", "lead", "shr"]
     # VTR/CPV 기준(basis) 가용: tv/100=영상(Google), 3s=Meta3초; 링크클릭 기준=link_avail
-    video_bases = (["tv", "100"] if vid_avail else []) + (["3s"] if metaview_avail else [])
+    video_bases = (["tv", "100"] if vid_avail else []) + (["3s"] if metaview_avail else []) + (["thru"] if thru_avail else [])
     fx_rates, fx_asof = _fx()
     result = {
         "benchmark": [total] + benchmark,

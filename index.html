@@ -1150,8 +1150,8 @@ function sugClick(btn,q){
       ['25% 조회수','v25'],['50% 조회수','v50'],['75% 조회수','v75'],['100% 조회수','v100'],
       ['25% VTR','vtr25'],['50% VTR','vtr50'],['75% VTR','vtr75'],
       ['조회수(3초)','v3s'],['VTR(3초)','vtr3s'],['CPV(3초)','cpv3s'],
-      ['조회수(6초)',null],['조회수(ThruPlay)',null],
-      ['VTR(6초)',null],['VTR(ThruPlay)',null],['CPV(6초)',null],['CPV(ThruPlay)',null]]],
+      ['조회수(ThruPlay)','vthru'],['VTR(ThruPlay)','vtrthru'],['CPV(ThruPlay)','cpvthru'],
+      ['조회수(6초)',null],['VTR(6초)',null],['CPV(6초)',null]]],
     ['참여', [['게시물 참여','eng'],['참여율','engr'],['게시물 댓글','cmt'],['게시물 공감','rct'],['게시물 공유','shr'],['잠재 고객','lead'],['사진 조회',null]]],
     ['전환', [['전환수','conv'],['CVR','cvr'],['ROAS','roas'],['전환비용','cpa']]]
   ];
@@ -1264,7 +1264,7 @@ function sugClick(btn,q){
     function on(b){ return bases.indexOf(b)>=0; }
     if(kpi==='vtr'||kpi==='cpv') return [
       {v:'',l:'전체',on:true},
-      {v:'3s',l:'3초 조회',on:on('3s')},{v:'6s',l:'6초 조회',on:false},{v:'thru',l:'ThruPlay',on:false},
+      {v:'3s',l:'3초 조회',on:on('3s')},{v:'6s',l:'6초 조회',on:false},{v:'thru',l:'ThruPlay',on:on('thru')},
       {v:'tv',l:'TrueView 조회',on:on('tv')},{v:'100',l:'100% 조회',on:on('100')}];
     if(kpi==='ctr'||kpi==='cpc') return [
       {v:'',l:'전체',on:true},{v:'all',l:'전체클릭',on:true},{v:'link',l:'링크클릭',on:link}];
@@ -1272,8 +1272,8 @@ function sugClick(btn,q){
   }
   // (지표,기준) → 실제 차트 시리즈 키. VTR 100%=cr·3초=vtr3s, CPV 100%=cpv100·3초=cpv3s, CTR/CPC 링크=ctrlk/cpclk.
   function seriesKey(kpi,basis){
-    if(kpi==='vtr') return basis==='100'?'cr':(basis==='3s'?'vtr3s':'vtr');
-    if(kpi==='cpv') return basis==='100'?'cpv100':(basis==='3s'?'cpv3s':'cpv');
+    if(kpi==='vtr') return basis==='100'?'cr':(basis==='3s'?'vtr3s':(basis==='thru'?'vtrthru':'vtr'));
+    if(kpi==='cpv') return basis==='100'?'cpv100':(basis==='3s'?'cpv3s':(basis==='thru'?'cpvthru':'cpv'));
     if(kpi==='ctr') return basis==='link'?'ctrlk':'ctr';
     if(kpi==='cpc') return basis==='link'?'cpclk':'cpc';
     return kpi;

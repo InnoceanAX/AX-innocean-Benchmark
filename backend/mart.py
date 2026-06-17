@@ -111,19 +111,21 @@ def build_campaign(c):
     # 영상 캠페인은 자기 플랫폼(Google)에 귀속. 영상 캠페인만의 분모(vimp/vcost)로 VTR/CPV 산출(비영상 희석 없음).
     vjoin = ""
     vcols = ("0 AS vimp, 0 AS vviews, 0.0 AS vcost, 0 AS vp25, 0 AS vp50, "
-             "0 AS vp75, 0 AS vp100, 0 AS veng")
+             "0 AS vp75, 0 AS vp100, 0 AS veng, 0 AS vthru")
     if _table_exists(c, "apac_kr_unified", "v_perf_unified_video"):
         vsrc = f"`{PROJECT}.apac_kr_unified.v_perf_unified_video`"
-        vjoin = (f"LEFT JOIN (SELECT FORMAT_DATE('%Y-%m', date) vp, CAST(campaign_id AS STRING) vcid, "
-                 f"SUM(impressions) vimp, SUM(spend_krw) vcost, SUM(video_views) vviews, "
+        # 영상뷰는 Google+Meta. campaign_id 충돌 방지 위해 platform까지 조인키에 포함.
+        vthru_col = "SUM(thruplay) vthru, " if _has_col(c, "v_perf_unified_video", "thruplay") else "0 vthru, "
+        vjoin = (f"LEFT JOIN (SELECT FORMAT_DATE('%Y-%m', date) vp, CAST(campaign_id AS STRING) vcid, platform vplat, "
+                 f"SUM(impressions) vimp, SUM(spend_krw) vcost, SUM(video_views) vviews, {vthru_col}"
                  f"SUM(video_p25) vp25, SUM(video_p50) vp50, SUM(video_p75) vp75, SUM(video_p100) vp100, "
-                 f"SUM(engagements) veng FROM {vsrc} WHERE NOT IFNULL(is_excluded,FALSE) GROUP BY vp, vcid) vid "
-                 f"ON CAST(u.campaign_id AS STRING)=vid.vcid AND FORMAT_DATE('%Y-%m',u.date)=vid.vp "
-                 f"AND u.platform='google_ads'")
+                 f"SUM(engagements) veng FROM {vsrc} WHERE NOT IFNULL(is_excluded,FALSE) GROUP BY vp, vcid, vplat) vid "
+                 f"ON CAST(u.campaign_id AS STRING)=vid.vcid AND FORMAT_DATE('%Y-%m',u.date)=vid.vp AND u.platform=vid.vplat")
         vcols = ("IFNULL(ANY_VALUE(vid.vimp),0) AS vimp, IFNULL(ANY_VALUE(vid.vviews),0) AS vviews, "
                  "IFNULL(ANY_VALUE(vid.vcost),0) AS vcost, IFNULL(ANY_VALUE(vid.vp25),0) AS vp25, "
                  "IFNULL(ANY_VALUE(vid.vp50),0) AS vp50, IFNULL(ANY_VALUE(vid.vp75),0) AS vp75, "
-                 "IFNULL(ANY_VALUE(vid.vp100),0) AS vp100, IFNULL(ANY_VALUE(vid.veng),0) AS veng")
+                 "IFNULL(ANY_VALUE(vid.vp100),0) AS vp100, IFNULL(ANY_VALUE(vid.veng),0) AS veng, "
+                 "IFNULL(ANY_VALUE(vid.vthru),0) AS vthru")
     # Meta 참여·영상 보강 — DB 정식 뷰 v_perf_unified_meta_ext 소비(raw 파싱 제거, DB 권장). 공유(share) 포함.
     mjoin = ""
     mcols = "0 AS mlclk, 0 AS mv3s, 0 AS meng, 0 AS mcmt, 0 AS mrct, 0 AS mlead, 0 AS mshare"
