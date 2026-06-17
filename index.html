@@ -1440,6 +1440,37 @@ function sugClick(btn,q){
     return out.slice(0,4);
   }
 
+  // 추천 질문 동적 생성 — 우측 화면 데이터(가용 지표·실제 업종)에 맞춰 다양한 8개를 진입 시 구성
+  function aiSuggest(d){
+    var m=d.meta||{}, kpis=(m.kpis||['cpm','cpc','ctr','cvr','roas']).slice();
+    var rows=(d.benchmark||[]).filter(function(x){return !x.cls;});
+    var names=rows.map(function(r){return r.name;}).filter(Boolean);
+    var KUL={cpm:'CPM',cpc:'CPC',ctr:'CTR',cvr:'전환율(CVR)',roas:'ROAS',vtr:'영상 VTR',cpv:'영상 CPV',cr:'완전조회율'};
+    var low={cpm:1,cpc:1,cpv:1};   // 낮을수록 좋은 지표
+    function sh(a){ for(var i=a.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1)),t=a[i];a[i]=a[j];a[j]=t;} return a; }
+    var picks=[];
+    // 1) 가용 지표 중 최대 6개 — 지표마다 변형(비교/우수·효율/추세) 랜덤 → 다양성
+    sh(kpis.slice()).slice(0,6).forEach(function(k){
+      var ku=KUL[k]||k.toUpperCase();
+      var vs=[['업종별 '+ku, '업종별 '+ku+' 벤치마크 비교해줘'],
+              [ku+(low[k]?' 효율 업종':' 우수 업종'), ku+(low[k]?' 가장 효율적인 업종 알려줘':' 가장 높은 업종 알려줘')]];
+      if(PCT_KPI[k]) vs.push([ku+' 추세', ku+' 월별 추세 분석해줘']);
+      picks.push(vs[Math.floor(Math.random()*vs.length)]);
+    });
+    // 2) 실제 업종 1개 콕 집어서 + 3) 전체 요약
+    if(names.length){ var n=names[Math.floor(Math.random()*names.length)]; picks.push([n+' 요약', n+' 업종 벤치마크 요약해줘']); }
+    picks.push(['전체 요약', '전체 벤치마크 요약해줘']);
+    // 라벨 중복 제거 후 8개
+    var seen={}, res=[]; picks.forEach(function(p){ if(!seen[p[0]]){seen[p[0]]=1;res.push(p);} });
+    return res.slice(0,8);
+  }
+  function aiBuildChips(d){
+    var sq=document.getElementById('sqbtns'); if(!sq) return;
+    sq.innerHTML='';
+    aiSuggest(d).forEach(function(it){ var btn=document.createElement('button'); btn.className='sqchip'; btn.textContent=it[0]; btn.title=it[1];
+      btn.onclick=(function(q){ return function(){ chipQ(q); }; })(it[1]); sq.appendChild(btn); });
+  }
+
   async function renderAIOverview(){
     var main=document.querySelector('#pgAI .aimain'); if(!main) return;
     var r=range();
@@ -1477,14 +1508,12 @@ function sugClick(btn,q){
     html+='<div class="inscard"><div class="instit">&#128161; 주요 인사이트</div>'+ins.map(function(t){return '<div class="insit"><div class="indot"></div><div>'+t+'</div></div>';}).join('')+'</div>';
     main.innerHTML=html;
     aiSyncBasis(); renderAICharts();
+    if(!window._aiChipsBuilt){ aiBuildChips(d); window._aiChipsBuilt=true; }   // 진입 시 1회, 우측 데이터 기반 추천 질문
   }
 
   function injectAI(){
     if(typeof STATE!=='undefined'&&STATE.media==='V') STATE.media='G';  // AI 대시보드는 영상(V) 미지원 → 기본 매체로
-    var chips=document.querySelectorAll('#pgAI .sqchip');
-    // 전체매체·업종별 벤치마크 + Rate/단가 지표 구조에 맞춘 추천 질문(질문→해당 지표·차원 그래프 갱신)
-    var qs=['업종별 CPM 비교','CTR 높은 업종은?','업종별 전환율(CVR)','VTR(영상 조회율) 분석','전체 벤치마크 요약'];
-    chips.forEach(function(c,i){ if(qs[i]){ c.style.display=''; c.textContent=qs[i]; c.setAttribute('onclick',"chipQ('"+qs[i]+"')"); } else { c.style.display='none'; } });
+    window._aiChipsBuilt=false;   // 추천 질문은 데이터 로드 후(진입 시) 우측 데이터 기반으로 동적 생성
     renderAIOverview();
   }
 
