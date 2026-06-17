@@ -292,6 +292,11 @@ def build():
     for _dim, (_view, _col) in SEGMENTS.items():   # device/age/gender — 뷰 있으면 자동 빌드
         build_segment(c, _dim, _view, _col)
     build_video(c)                                 # 영상(V) — 뷰 있으면 자동 빌드
+    try:                                            # 값 없는 지표 자동 감지 → DB 에이전트 요청 큐 발행
+        import gaps
+        gaps.request_gaps(c)
+    except Exception as _e:
+        print(f"· [경고] 데이터-갭 요청 스킵: {str(_e)[:120]}")
     n = list(c.query(
         f"SELECT COUNT(*) n, COUNT(DISTINCT campaign_id) camps, COUNT(DISTINCT media) media, "
         f"COUNT(DISTINCT market) markets, COUNT(DISTINCT objective) objs "
