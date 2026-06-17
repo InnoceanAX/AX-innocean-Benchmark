@@ -1145,26 +1145,24 @@ function sugClick(btn,q){
   // [라벨, 데이터키]. 키=null 이면 데이터 없음(항상 비활성). 가용성은 metricAvail()이 매체별로 판정 → Summary·Detail 팝업 동일.
   var METRIC_CATALOG=[
     ['노출', [['노출수','imp'],['CPM','cpm'],['지출','spend']]],
-    ['클릭', [['클릭수(전체)','clicks'],['CTR(전체클릭)','ctr'],['CPC(전체클릭)','cpc'],['클릭수(링크)',null],['CTR(링크클릭)',null],['CPC(링크클릭)',null]]],
+    ['클릭', [['클릭수(전체)','clicks'],['CTR(전체클릭)','ctr'],['CPC(전체클릭)','cpc'],['클릭수(링크)','lclk'],['CTR(링크클릭)','ctrlk'],['CPC(링크클릭)','cpclk']]],
     ['조회', [['조회수(TrueView)','views'],['VTR(TrueView)','vtr'],['CPV(TrueView)','cpv'],['CPV(100%조회)','cpv100'],
       ['25% 조회수','v25'],['50% 조회수','v50'],['75% 조회수','v75'],['100% 조회수','v100'],
       ['25% VTR','vtr25'],['50% VTR','vtr50'],['75% VTR','vtr75'],
-      ['조회수(3초)',null],['조회수(6초)',null],['조회수(ThruPlay)',null],
-      ['VTR(3초)',null],['VTR(6초)',null],['VTR(ThruPlay)',null],
-      ['CPV(3초)',null],['CPV(6초)',null],['CPV(ThruPlay)',null]]],
-    ['참여', [['게시물 참여','eng'],['참여율','engr'],['게시물 댓글',null],['게시물 공감',null],['게시물 공유',null],['사진 조회',null],['잠재 고객',null]]],
-    ['전환', [['전환수','conv'],['CVR','cvr'],['ROAS','roas'],['전환비용',null]]]
+      ['조회수(3초)','v3s'],['VTR(3초)','vtr3s'],['CPV(3초)','cpv3s'],
+      ['조회수(6초)',null],['조회수(ThruPlay)',null],
+      ['VTR(6초)',null],['VTR(ThruPlay)',null],['CPV(6초)',null],['CPV(ThruPlay)',null]]],
+    ['참여', [['게시물 참여','eng'],['참여율','engr'],['게시물 댓글','cmt'],['게시물 공감','rct'],['잠재 고객','lead'],['게시물 공유',null],['사진 조회',null]]],
+    ['전환', [['전환수','conv'],['CVR','cvr'],['ROAS','roas'],['전환비용','cpa']]]
   ];
-  var VIDEO_METRIC_KEYS={views:1,vtr:1,cpv:1,cr:1,cpv100:1,v25:1,v50:1,v75:1,v100:1,vtr25:1,vtr50:1,vtr75:1,eng:1,engr:1};
   var METRIC_LBL={}, METRIC_ORDER=[];   // 키→라벨, 카탈로그 정렬 순서(표 컬럼 순서)
   METRIC_CATALOG.forEach(function(g){ g[1].forEach(function(it){ if(it[1]){ METRIC_LBL[it[1]]=it[0]; METRIC_ORDER.push(it[1]); } }); });
   // 매체별 현재 데이터에 존재하는 필드(Summary 행 + Detail 행 통합) → 두 팝업 동일 판정
   function _dataFields(){ if(!window.BM_DATA)return {}; var f={}, b=BM_DATA.benchmark||[], row=b[1]||b[0]||{}, d=(BM_DATA.detail||[])[0]||{};
     Object.keys(row).forEach(function(k){f[k]=1;}); Object.keys(d).forEach(function(k){f[k]=1;}); return f; }
   function metricAvail(key){ if(!key||!window.BM_DATA)return false; var meta=BM_DATA.meta||{};
-    if(key==='conv'||key==='cvr')return !!meta.cvr_available; if(key==='roas')return !!meta.roas_available;   // 전환 추적 충분할 때만
-    if(VIDEO_METRIC_KEYS[key])return !!meta.video_available;   // 영상지표는 영상 데이터 보유 매체(Google)만
-    var f=_dataFields(); if(key==='imp')return !!(f.imp||f.imps); return !!f[key]; }
+    var av=meta.avail_metrics; if(av) return av.indexOf(key)>=0;   // 백엔드가 매체별 커버리지로 산출한 가용 지표
+    var f=_dataFields(); if(key==='imp')return !!(f.imp||f.imps); return !!f[key]; }   // 폴백
   function cellVal(r,key){ if(key==='imp')return (r.imp!=null?r.imp:(r.imps!=null?r.imps:'—')); return (r[key]!=null?r[key]:'—'); }
   function mLabel(k){ return k==='name'?dimLabel():(k==='period'?'기간':(METRIC_LBL[k]||k)); }
   // 매체별 기본 컬럼(원안 표시 지표). video↔비디오 전환 시 리셋.
@@ -1258,22 +1256,27 @@ function sugClick(btn,q){
   function kpiLbl(k){ var sym=(BM_DATA&&BM_DATA.meta&&BM_DATA.meta.symbol)||'₩'; return PCT_KPI[k]?KU[k]+' (%)':(k==='roas'?KU[k]+' (배)':KU[k]+' ('+sym+')'); }
   // 원안 '기준 지표(basis)': 선택한 Rate/단가 지표가 산출되는 기준(조회 이벤트·클릭 종류)을 바로 옆에서 선택.
   // 실데이터 가용한 기준만 활성 — 영상(YouTube)=TrueView/100%조회, 그 외(Meta 3·6초·ThruPlay, 링크클릭)는 미수집→비활성.
-  function isVid(){ return !!(window.BM_DATA&&BM_DATA.meta&&BM_DATA.meta.video_available); }
-  function basisOptions(kpi, vid){
-    var v=(vid===undefined)?isVid():!!vid;   // vid=해당 화면 데이터의 영상 가용성(벤치마크=BM_DATA, AI=_aiData)
+  function metaFlags(m){ m=m||{}; return {bases:(m.video_bases||[]), link:!!m.link_available}; }
+  function basisFlags(){ return metaFlags(window.BM_DATA&&BM_DATA.meta); }
+  // 기준 가용성: bases=['tv','100','3s'] 중 보유분, link=링크클릭 보유. 미수집(6초/ThruPlay/사진)은 비활성.
+  function basisOptions(kpi, flags){
+    flags=flags||basisFlags(); var bases=flags.bases||[], link=!!flags.link;
+    function on(b){ return bases.indexOf(b)>=0; }
     if(kpi==='vtr'||kpi==='cpv') return [
       {v:'',l:'전체',on:true},
-      {v:'3s',l:'3초 조회',on:false},{v:'6s',l:'6초 조회',on:false},{v:'thru',l:'ThruPlay',on:false},
-      {v:'tv',l:'TrueView 조회',on:v},{v:'100',l:'100% 조회',on:v}];
+      {v:'3s',l:'3초 조회',on:on('3s')},{v:'6s',l:'6초 조회',on:false},{v:'thru',l:'ThruPlay',on:false},
+      {v:'tv',l:'TrueView 조회',on:on('tv')},{v:'100',l:'100% 조회',on:on('100')}];
     if(kpi==='ctr'||kpi==='cpc') return [
-      {v:'',l:'전체',on:true},{v:'all',l:'전체클릭',on:true},{v:'link',l:'링크클릭',on:false}];
-    return [];   // cpm/cvr/cr 등은 기준 선택 없음
+      {v:'',l:'전체',on:true},{v:'all',l:'전체클릭',on:true},{v:'link',l:'링크클릭',on:link}];
+    return [];   // cpm/cvr 등은 기준 선택 없음
   }
-  // (지표,기준) → 실제 차트 시리즈 키. VTR 100%기준=완전조회율(cr), CPV 100%기준=cpv100.
+  // (지표,기준) → 실제 차트 시리즈 키. VTR 100%=cr·3초=vtr3s, CPV 100%=cpv100·3초=cpv3s, CTR/CPC 링크=ctrlk/cpclk.
   function seriesKey(kpi,basis){
-    if(kpi==='vtr') return basis==='100'?'cr':'vtr';
-    if(kpi==='cpv') return basis==='100'?'cpv100':'cpv';
-    return kpi;   // ctr/cpc/cpm/cvr — 기준 변형 데이터 동일(전체=전체클릭)
+    if(kpi==='vtr') return basis==='100'?'cr':(basis==='3s'?'vtr3s':'vtr');
+    if(kpi==='cpv') return basis==='100'?'cpv100':(basis==='3s'?'cpv3s':'cpv');
+    if(kpi==='ctr') return basis==='link'?'ctrlk':'ctr';
+    if(kpi==='cpc') return basis==='link'?'cpclk':'cpc';
+    return kpi;
   }
   var BASIS_LBL={tv:'TrueView 조회','100':'100% 조회','3s':'3초 조회','6s':'6초 조회',thru:'ThruPlay',all:'전체클릭',link:'링크클릭'};
   function basisSuffix(basis){ return basis&&BASIS_LBL[basis]?(' · '+BASIS_LBL[basis]+' 기준'):''; }
@@ -1370,19 +1373,28 @@ function sugClick(btn,q){
   var aiKpiL='ctr', aiKpiR='cpm', aiBasisL='', aiBasisR='';   // 좌=Rate지표(추세), 우=단가지표(차원비교)
   var aiDim='industry', aiHighlight=null; window._aiData=null; window._aiCharts={};
   var AI_DIM_LABEL={market:'국가',industry:'업종',objective:'캠페인목표',brand:'브랜드',channel:'광고상품',device:'디바이스',age:'연령',gender:'성별'};
+  // 질문 → 차원 추론용 엔티티 키워드(실제 데이터 값) — 차원 키워드가 없어도 '금융 CTR'처럼 추론
+  var AI_ENT=[
+    [['금융','보험','전자','가전','게임','패션','미용','화장품','뷰티','유통','쇼핑','커머스','수송','항공','모빌리티','앱','사이트','의료','병원','식품','음료','자동차'],'industry'],
+    [['한국','미국','일본','브라질','인도','스페인','사우디','독일','프랑스','영국','호주','필리핀','인도네시아','베트남','태국','멕시코','캐나다','네덜란드','이탈리아'],'market'],
+    [['현대','기아','제네시스'],'brand'],
+    [['퍼포먼스','브랜딩','트래픽','영상조회','앱설치'],'objective'],
+    [['검색광고','디스플레이','디맨드젠','pmax','실적최대화'],'channel']
+  ];
   // 채팅 질문 파싱 → 관련 KPI·차원 추출(오른쪽 그래프에 반영)
   function parseAIQuery(q){
     q=String(q||''); var s=q.toLowerCase(), kpi=null, dim=null;
-    var km=[['roas','roas'],['로아스','roas'],['광고수익','roas'],['수익률','roas'],['vtr','vtr'],['조회율','vtr'],['cpv','cpv'],['조회당','cpv'],['완전조회','cr'],['cvr','cvr'],['전환율','cvr'],['ctr','ctr'],['클릭률','ctr'],['cpc','cpc'],['클릭당','cpc'],['클릭단가','cpc'],['cpm','cpm'],['노출단가','cpm']];
+    var km=[['roas','roas'],['로아스','roas'],['광고수익','roas'],['수익률','roas'],['vtr','vtr'],['조회율','vtr'],['유튜브','vtr'],['cpv','cpv'],['조회당','cpv'],['완전조회','cr'],['cvr','cvr'],['전환율','cvr'],['ctr','ctr'],['클릭률','ctr'],['cpc','cpc'],['클릭당','cpc'],['클릭단가','cpc'],['cpm','cpm'],['노출단가','cpm']];
     for(var i=0;i<km.length;i++){ if(s.indexOf(km[i][0])>=0){ kpi=km[i][1]; break; } }
     if(q.indexOf('업종')>=0)dim='industry'; else if(q.indexOf('브랜드')>=0)dim='brand';
     else if(q.indexOf('캠페인목표')>=0||q.indexOf('목표')>=0)dim='objective';
     else if(q.indexOf('광고상품')>=0||q.indexOf('상품')>=0)dim='channel';
     else if(q.indexOf('국가')>=0||q.indexOf('권역')>=0||q.indexOf('나라')>=0)dim='market';
+    if(!dim){ for(var e=0;e<AI_ENT.length&&!dim;e++){ for(var j=0;j<AI_ENT[e][0].length;j++){ if(s.indexOf(AI_ENT[e][0][j])>=0){ dim=AI_ENT[e][1]; break; } } } }
     return {kpi:kpi,dim:dim,q:q};
   }
-  // 질문을 오른쪽 대시보드에 반영(Rate=%지표→좌 추세, 단가→우 비교)
-  window.aiApply=function(q){ var p=parseAIQuery(q); if(p.kpi){ if(PCT_KPI[p.kpi])aiKpiL=p.kpi; else if(p.kpi!=='roas')aiKpiR=p.kpi; } if(p.dim)aiDim=p.dim; aiHighlight=q; renderAIOverview(); };
+  // 질문을 오른쪽 대시보드에 반영(Rate=%지표→좌 추세, 단가→우 비교) + 추천질문 재생성
+  window.aiApply=function(q){ var p=parseAIQuery(q); if(p.kpi){ if(PCT_KPI[p.kpi])aiKpiL=p.kpi; else if(p.kpi!=='roas')aiKpiR=p.kpi; } if(p.dim)aiDim=p.dim; aiHighlight=q; window._aiChipsBuilt=false; renderAIOverview(); };
   function aiKpiLbl(k){ var sym=(window._aiData&&_aiData.meta&&_aiData.meta.symbol)||'₩'; return PCT_KPI[k]?(KU[k]||k)+' (%)':(k==='roas'?(KU[k]||k)+' (배)':(KU[k]||k)+' ('+sym+')'); }
   // 업종 벤치마크 Summary와 동일한 Rate/단가 지표 셀렉터(전체 데이터 기준)
   function aiFillKpiSel(){
@@ -1393,7 +1405,7 @@ function sugClick(btn,q){
     function opts(list,cur){return list.map(function(k){var on=avail.indexOf(k)>=0;return '<option value="'+k+'"'+(k===cur?' selected':'')+(on?'':' disabled')+'>'+(KU[k]||k.toUpperCase())+(on?'':' (데이터없음)')+'</option>';}).join('');}
     return {rateOpts:opts(rate,aiKpiL),costOpts:opts(cost,aiKpiR)};
   }
-  function aiBasisOpts(kpi,cur){ var o=basisOptions(kpi, !!(window._aiData&&_aiData.meta&&_aiData.meta.video_available)); if(!o.length)return ''; if(!o.some(function(x){return x.v===cur&&x.on;}))cur=''; return o.map(function(x){return '<option value="'+x.v+'"'+(x.v===cur?' selected':'')+(x.on?'':' disabled')+'>'+x.l+(x.on?'':' (데이터없음)')+'</option>';}).join(''); }
+  function aiBasisOpts(kpi,cur){ var o=basisOptions(kpi, metaFlags(window._aiData&&_aiData.meta)); if(!o.length)return ''; if(!o.some(function(x){return x.v===cur&&x.on;}))cur=''; return o.map(function(x){return '<option value="'+x.v+'"'+(x.v===cur?' selected':'')+(x.on?'':' disabled')+'>'+x.l+(x.on?'':' (데이터없음)')+'</option>';}).join(''); }
   function aiSyncBasis(){ var sl=document.getElementById('aiSubL'); if(sl){ sl.innerHTML=aiBasisOpts(aiKpiL,aiBasisL); sl.style.display=sl.innerHTML?'':'none'; } var sr=document.getElementById('aiSubR'); if(sr){ sr.innerHTML=aiBasisOpts(aiKpiR,aiBasisR); sr.style.display=sr.innerHTML?'':'none'; } }
   window.aiSetKpiL=function(v){ aiKpiL=v; aiBasisL=''; aiSyncBasis(); renderAICharts(); };
   window.aiSetKpiR=function(v){ aiKpiR=v; aiBasisR=''; aiSyncBasis(); renderAICharts(); };
@@ -1440,28 +1452,35 @@ function sugClick(btn,q){
     return out.slice(0,4);
   }
 
-  // 추천 질문 동적 생성 — 우측 화면 데이터(가용 지표·실제 업종)에 맞춰 다양한 8개를 진입 시 구성
+  // 추천 질문 동적 생성 — 현재 데이터 세트(가용 지표·차원·실제 항목 + 현재 보고 있는 지표/차원)에 맞춰 follow-up 8개
+  var AI_KUL={cpm:'CPM',cpc:'CPC',ctr:'CTR',cvr:'전환율(CVR)',roas:'ROAS',vtr:'영상 VTR',cpv:'영상 CPV',cr:'완전조회율'};
   function aiSuggest(d){
     var m=d.meta||{}, kpis=(m.kpis||['cpm','cpc','ctr','cvr','roas']).slice();
     var rows=(d.benchmark||[]).filter(function(x){return !x.cls;});
     var names=rows.map(function(r){return r.name;}).filter(Boolean);
-    var KUL={cpm:'CPM',cpc:'CPC',ctr:'CTR',cvr:'전환율(CVR)',roas:'ROAS',vtr:'영상 VTR',cpv:'영상 CPV',cr:'완전조회율'};
-    var low={cpm:1,cpc:1,cpv:1};   // 낮을수록 좋은 지표
+    var DN={market:'국가',industry:'업종',objective:'캠페인목표',brand:'브랜드',channel:'광고상품',device:'디바이스',age:'연령',gender:'성별'};
+    var low={cpm:1,cpc:1,cpv:1};
     function sh(a){ for(var i=a.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1)),t=a[i];a[i]=a[j];a[j]=t;} return a; }
-    var picks=[];
-    // 1) 가용 지표 중 최대 6개 — 지표마다 변형(비교/우수·효율/추세) 랜덤 → 다양성
-    sh(kpis.slice()).slice(0,6).forEach(function(k){
-      var ku=KUL[k]||k.toUpperCase();
-      var vs=[['업종별 '+ku, '업종별 '+ku+' 벤치마크 비교해줘'],
-              [ku+(low[k]?' 효율 업종':' 우수 업종'), ku+(low[k]?' 가장 효율적인 업종 알려줘':' 가장 높은 업종 알려줘')]];
-      if(PCT_KPI[k]) vs.push([ku+' 추세', ku+' 월별 추세 분석해줘']);
-      picks.push(vs[Math.floor(Math.random()*vs.length)]);
+    var curDimL=DN[aiDim]||'업종', picks=[];
+    // (a) 현재 차원 × 다른 지표 2개 (지금 보는 차원에서 지표 바꿔보기)
+    sh(kpis.filter(function(k){return k!==aiKpiL&&k!==aiKpiR;})).slice(0,2).forEach(function(k){
+      var ku=AI_KUL[k]||k.toUpperCase(); picks.push([curDimL+'별 '+ku, curDimL+'별 '+ku+' 비교해줘']);
     });
-    // 2) 실제 업종 1개 콕 집어서 + 3) 전체 요약
-    if(names.length){ var n=names[Math.floor(Math.random()*names.length)]; picks.push([n+' 요약', n+' 업종 벤치마크 요약해줘']); }
+    // (b) 현재 단가 지표 × 다른 차원 2개 (차원 바꿔보기)
+    var curK=aiKpiR||'cpm', kuc=AI_KUL[curK]||curK.toUpperCase();
+    sh(['industry','market','objective','brand'].filter(function(dk){return dk!==aiDim;})).slice(0,2).forEach(function(dk){
+      picks.push([DN[dk]+'별 '+kuc, DN[dk]+'별 '+kuc+' 비교해줘']);
+    });
+    // (c) 상위 항목 드릴다운 1개
+    if(names.length){ var n=names[Math.floor(Math.random()*Math.min(3,names.length))]; picks.push([n+' 상세', n+' '+curDimL+' 상세 분석해줘']); }
+    // (d) 현재 Rate 지표 추세 1개
+    var rk=aiKpiL||'ctr', kur=AI_KUL[rk]||rk.toUpperCase(); picks.push([kur+' 추세', kur+' 월별 추세 분석해줘']);
+    // (e) 가용 특수지표(영상/링크/참여) 1개
+    if(kpis.indexOf('vtr')>=0) picks.push(['영상 VTR 효율','VTR 가장 높은 '+curDimL+' 알려줘']);
+    else if((m.avail_metrics||[]).indexOf('ctrlk')>=0) picks.push(['링크 CTR','링크클릭 기준 CTR 비교해줘']);
+    // (f) 전체 요약
     picks.push(['전체 요약', '전체 벤치마크 요약해줘']);
-    // 라벨 중복 제거 후 8개
-    var seen={}, res=[]; picks.forEach(function(p){ if(!seen[p[0]]){seen[p[0]]=1;res.push(p);} });
+    var seen={}, res=[]; sh(picks); picks.forEach(function(p){ if(!seen[p[0]]){seen[p[0]]=1;res.push(p);} });
     return res.slice(0,8);
   }
   function aiBuildChips(d){

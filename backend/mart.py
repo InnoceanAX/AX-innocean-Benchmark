@@ -124,6 +124,25 @@ def build_campaign(c):
                  "IFNULL(ANY_VALUE(vid.vcost),0) AS vcost, IFNULL(ANY_VALUE(vid.vp25),0) AS vp25, "
                  "IFNULL(ANY_VALUE(vid.vp50),0) AS vp50, IFNULL(ANY_VALUE(vid.vp75),0) AS vp75, "
                  "IFNULL(ANY_VALUE(vid.vp100),0) AS vp100, IFNULL(ANY_VALUE(vid.veng),0) AS veng")
+    # Meta 지표를 raw(meta_insights_daily)에서 보강 — 링크클릭/3초조회(video_view)/참여·댓글·공감·잠재고객.
+    # Meta는 통합뷰에 영상·참여 breakdown이 없어 raw actions JSON 파싱으로 직접 수집(캠페인×월).
+    mjoin = ""
+    mcols = "0 AS mlclk, 0 AS mv3s, 0 AS meng, 0 AS mcmt, 0 AS mrct, 0 AS mlead"
+    if _table_exists(c, "apac_kr_raw", "meta_insights_daily"):
+        msrc = f"`{PROJECT}.apac_kr_raw.meta_insights_daily`"
+        def _act(t):  # actions JSON에서 특정 action_type 값 합
+            return (f"(SELECT SUM(CAST(JSON_VALUE(a,'$.value') AS FLOAT64)) "
+                    f"FROM UNNEST(JSON_QUERY_ARRAY(actions)) a WHERE JSON_VALUE(a,'$.action_type')='{t}')")
+        mjoin = (f"LEFT JOIN (SELECT FORMAT_DATE('%Y-%m', _date) mp, CAST(campaign_id AS STRING) mcid, "
+                 f"SUM(IFNULL(inline_link_clicks,0)) mlclk, SUM(IFNULL({_act('video_view')},0)) mv3s, "
+                 f"SUM(IFNULL({_act('post_engagement')},0)) meng, SUM(IFNULL({_act('comment')},0)) mcmt, "
+                 f"SUM(IFNULL({_act('post_reaction')},0)) mrct, SUM(IFNULL({_act('lead')},0)) mlead "
+                 f"FROM {msrc} WHERE _date IS NOT NULL AND campaign_id IS NOT NULL GROUP BY mp, mcid) mt "
+                 f"ON CAST(u.campaign_id AS STRING)=mt.mcid AND FORMAT_DATE('%Y-%m',u.date)=mt.mp "
+                 f"AND u.platform='meta'")
+        mcols = ("IFNULL(ANY_VALUE(mt.mlclk),0) AS mlclk, IFNULL(ANY_VALUE(mt.mv3s),0) AS mv3s, "
+                 "IFNULL(ANY_VALUE(mt.meng),0) AS meng, IFNULL(ANY_VALUE(mt.mcmt),0) AS mcmt, "
+                 "IFNULL(ANY_VALUE(mt.mrct),0) AS mrct, IFNULL(ANY_VALUE(mt.mlead),0) AS mlead")
     tbl = f"`{PROJECT}.{MART_DS}.bm_campaign_monthly`"
     c.query(f"DROP TABLE IF EXISTS {tbl}").result()
     sql = f"""
@@ -144,18 +163,20 @@ def build_campaign(c):
       SUM(u.conversions) AS conv,
       {_rev_expr(c, 'v_perf_unified')} AS rev,
       {vcols},
+      {mcols},
       CURRENT_TIMESTAMP() AS _built_at
     FROM {SOURCE} u
     {join}
     {cjoin}
     {vjoin}
+    {mjoin}
     WHERE u.date IS NOT NULL AND NOT IFNULL(u.is_excluded, FALSE)
       AND u.platform IN ({_plats()}) AND u.market IS NOT NULL AND u.market != ''
     GROUP BY period, media, market, industry, objective, brand, agency, channel, campaign_id
     HAVING imp > 0
     """
     c.query(sql).result()
-    print("bm_campaign_monthly: rebuilt (google 캠페인명 raw 보강 + 영상지표 부착)")
+    print("bm_campaign_monthly: rebuilt (google 캠페인명 raw 보강 + 영상지표 + Meta actions 부착)")
 
 
 def _table_exists(c, dataset, table):
