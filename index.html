@@ -1146,7 +1146,7 @@ function sugClick(btn,q){
   var METRIC_CATALOG=[
     ['노출', [['노출수','imp'],['CPM','cpm'],['지출','spend']]],
     ['클릭', [['클릭수(전체)','clicks'],['CTR(전체클릭)','ctr'],['CPC(전체클릭)','cpc'],['클릭수(링크)',null],['CTR(링크클릭)',null],['CPC(링크클릭)',null]]],
-    ['조회', [['조회수(TrueView)','views'],['VTR(TrueView)','vtr'],['CPV(TrueView)','cpv'],['완전조회율(100%)','cr'],['CPV(100%조회)','cpv100'],
+    ['조회', [['조회수(TrueView)','views'],['VTR(TrueView)','vtr'],['CPV(TrueView)','cpv'],['CPV(100%조회)','cpv100'],
       ['25% 조회수','v25'],['50% 조회수','v50'],['75% 조회수','v75'],['100% 조회수','v100'],
       ['25% VTR','vtr25'],['50% VTR','vtr50'],['75% VTR','vtr75'],
       ['조회수(3초)',null],['조회수(6초)',null],['조회수(ThruPlay)',null],
@@ -1259,8 +1259,8 @@ function sugClick(btn,q){
   // 원안 '기준 지표(basis)': 선택한 Rate/단가 지표가 산출되는 기준(조회 이벤트·클릭 종류)을 바로 옆에서 선택.
   // 실데이터 가용한 기준만 활성 — 영상(YouTube)=TrueView/100%조회, 그 외(Meta 3·6초·ThruPlay, 링크클릭)는 미수집→비활성.
   function isVid(){ return !!(window.BM_DATA&&BM_DATA.meta&&BM_DATA.meta.video_available); }
-  function basisOptions(kpi){
-    var v=isVid();
+  function basisOptions(kpi, vid){
+    var v=(vid===undefined)?isVid():!!vid;   // vid=해당 화면 데이터의 영상 가용성(벤치마크=BM_DATA, AI=_aiData)
     if(kpi==='vtr'||kpi==='cpv') return [
       {v:'',l:'전체',on:true},
       {v:'3s',l:'3초 조회',on:false},{v:'6s',l:'6초 조회',on:false},{v:'thru',l:'ThruPlay',on:false},
@@ -1393,7 +1393,7 @@ function sugClick(btn,q){
     function opts(list,cur){return list.map(function(k){var on=avail.indexOf(k)>=0;return '<option value="'+k+'"'+(k===cur?' selected':'')+(on?'':' disabled')+'>'+(KU[k]||k.toUpperCase())+(on?'':' (데이터없음)')+'</option>';}).join('');}
     return {rateOpts:opts(rate,aiKpiL),costOpts:opts(cost,aiKpiR)};
   }
-  function aiBasisOpts(kpi,cur){ var o=basisOptions(kpi); if(!o.length)return ''; if(!o.some(function(x){return x.v===cur&&x.on;}))cur=''; return o.map(function(x){return '<option value="'+x.v+'"'+(x.v===cur?' selected':'')+(x.on?'':' disabled')+'>'+x.l+(x.on?'':' (데이터없음)')+'</option>';}).join(''); }
+  function aiBasisOpts(kpi,cur){ var o=basisOptions(kpi, !!(window._aiData&&_aiData.meta&&_aiData.meta.video_available)); if(!o.length)return ''; if(!o.some(function(x){return x.v===cur&&x.on;}))cur=''; return o.map(function(x){return '<option value="'+x.v+'"'+(x.v===cur?' selected':'')+(x.on?'':' disabled')+'>'+x.l+(x.on?'':' (데이터없음)')+'</option>';}).join(''); }
   function aiSyncBasis(){ var sl=document.getElementById('aiSubL'); if(sl){ sl.innerHTML=aiBasisOpts(aiKpiL,aiBasisL); sl.style.display=sl.innerHTML?'':'none'; } var sr=document.getElementById('aiSubR'); if(sr){ sr.innerHTML=aiBasisOpts(aiKpiR,aiBasisR); sr.style.display=sr.innerHTML?'':'none'; } }
   window.aiSetKpiL=function(v){ aiKpiL=v; aiBasisL=''; aiSyncBasis(); renderAICharts(); };
   window.aiSetKpiR=function(v){ aiKpiR=v; aiBasisR=''; aiSyncBasis(); renderAICharts(); };

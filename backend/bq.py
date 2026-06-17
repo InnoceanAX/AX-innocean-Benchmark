@@ -39,9 +39,10 @@ KPI_FMT = {"cpm": "money2", "cpc": "money2", "ctr": "pct", "cvr": "pct", "roas":
            "vtr": "pct", "cpv": "money2", "cr": "pct", "cpv100": "money2"}
 KPIS_DEFAULT = ("cpm", "cpc", "ctr", "cvr", "roas")
 # 영상 KPI — 영상 캠페인 보유 매체(Google)에서 커버리지 게이트(≥10%)로 노출. 비영상 매체는 자동 숨김.
-VIDEO_KPIS = ("vtr", "cpv", "cr")
-# 차트 '기준 지표(basis)' 전용 — 4분위/트렌드/비교 시리즈는 계산하되 표·KPI토글엔 미노출.
-CHART_ONLY_KPIS = ("cpv100",)
+VIDEO_KPIS = ("vtr", "cpv")
+# 차트 '기준 지표(basis)' 전용 — 4분위/트렌드/비교 시리즈는 계산하되 표·Rate/KPI토글엔 미노출.
+# cr(완전조회율=100%조회 VTR)은 Rate 지표 옵션에선 제외하되 VTR의 '100% 조회' 기준 시리즈로만 사용.
+CHART_ONLY_KPIS = ("cpv100", "cr")
 # 캠페인 마트(TBL)에만 존재하는 영상 집계 컬럼 — 세그먼트 마트엔 없음.
 VIDEO_COLS = ("vimp", "vviews", "vcost", "vp25", "vp50", "vp75", "vp100", "veng")
 KPIS = KPIS_DEFAULT   # 하위호환(타 모듈 참조)
