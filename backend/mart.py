@@ -22,7 +22,7 @@ PROJECT = "innocean-perf-apac-kr"
 MART_DS = "apac_kr_benchmark"
 LOCATION = "asia-northeast3"
 SOURCE = f"`{PROJECT}.apac_kr_unified.v_perf_unified`"
-PLATFORM_TO_MEDIA = {"google_ads": "G", "meta": "M", "dv360": "D", "tiktok": "T", "kakao": "K"}
+PLATFORM_TO_MEDIA = {"google_ads": "G", "meta": "M", "dv360": "D", "tiktok": "T", "kakao": "K", "naver": "N"}
 
 for _k in [os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", ""),
            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..",

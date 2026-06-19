@@ -1106,7 +1106,7 @@ function sugClick(btn,q){
     var tabs=document.querySelector('#pgBM .mtabs'); if(!tabs)return;
     removeVideoTab();
     ['G','M','K','N'].forEach(function(m){ var b=document.getElementById('mt'+m); if(b)tabs.appendChild(b); });
-    var nv=document.getElementById('mtN'); if(nv){ nv.style.opacity='.4'; nv.style.pointerEvents='none'; nv.title='네이버 수집 예정'; }
+    var nv=document.getElementById('mtN'); if(nv){ nv.style.opacity=''; nv.style.pointerEvents=''; nv.title=''; }   // 네이버 수집 완료 → 활성화
   }
   function refreshControls(){ var media=(typeof STATE!=='undefined'&&STATE.media)||'G'; return cachedJSON(API+'/meta/options?media='+media).then(function(o){ window._bmOptions=o; buildControlBar(); tidyMediaTabs(); }).catch(function(){ buildControlBar(); }); }
   function setLoading(on){
