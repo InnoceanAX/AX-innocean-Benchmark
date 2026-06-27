@@ -76,10 +76,13 @@ def ai_chat(req: ChatReq):
         context = bq.get_summary_context(
             req.media, req.dim, req.date_from, req.date_to, req.currency,
             market=req.market, objective=req.objective, brand=req.brand, industry=req.industry)
-        reply = ai.answer(req.message, context, history=req.history)
-        return {"reply": reply}
+        res = ai.answer(req.message, context, history=req.history)
+        # 동일 내용 한/영 동시 반환 — 프론트 토글이 선택 언어만 표시. reply=기존 호환(한국어).
+        return {"reply": res["ko"], "reply_ko": res["ko"], "reply_en": res["en"]}
     except Exception as e:  # noqa: BLE001
-        return JSONResponse({"reply": f"(오류) {e}"}, status_code=500)
+        ko = f"(오류) {e}"
+        en = f"(Error) {e}"
+        return JSONResponse({"reply": ko, "reply_ko": ko, "reply_en": en}, status_code=500)
 
 
 if __name__ == "__main__":

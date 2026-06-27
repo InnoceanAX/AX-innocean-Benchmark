@@ -6,6 +6,7 @@ AI 분석 답변 계층.
 실데이터(context)를 근거로만 답하도록 시스템 프롬프트로 제약 → 환각 최소화.
 """
 import os
+import re
 
 _MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
@@ -45,11 +46,17 @@ SYSTEM = (
     "②대신 답할 수 있는 가장 가까운 분석을 데이터 근거와 함께 제시한 뒤, "
     "③정확히 답하려면 무엇을 바꿔/추가해 다시 물어보면 되는지 안내하라 "
     "(예: '매체를 Google로 바꿔주세요', '기준 기간을 좁혀주세요', '○○ 업종/국가를 지정해 주세요', '△△ 지표는 아직 수집 전이라 □□로 대체 분석 가능합니다'). "
-    "요컨대 데이터로 뒷받침되면 상세히 답하고, 뒷받침 안 되면 정직하게 한계와 보완요청을 안내한다."
+    "요컨대 데이터로 뒷받침되면 상세히 답하고, 뒷받침 안 되면 정직하게 한계와 보완요청을 안내한다.\n\n"
+    # ── 출력 형식: 동일 내용을 한국어/영어 두 버전으로 (프론트 토글이 선택 언어만 표시) ──
+    "**출력 형식(반드시 준수)**: 먼저 한국어 분석을 쓰고, 이어서 같은 내용의 영어 번역을 쓴다. "
+    "정확히 아래 구분자만 사용하라(다른 머리말 금지):\n"
+    "[KO]\n<한국어 분석>\n[EN]\n<English translation — same numbers, structure, and conclusions>\n"
+    "두 버전은 수치·구조·결론이 완전히 동일해야 하며, 영어는 광고 실무 용어(CPM/CPC/CTR/CVR/ROAS/VTR/CPV 등)를 자연스럽게 사용한다."
 )
 
 
-def answer(message: str, context: str, history=None) -> str:
+def answer(message: str, context: str, history=None) -> dict:
+    """동일 내용을 한국어/영어로 반환: {"ko": ..., "en": ...}."""
     key = _api_key()
     if not key:
         return _fallback(message, context)
@@ -68,19 +75,43 @@ def answer(message: str, context: str, history=None) -> str:
         contents.append(types.Content(role="user",
                         parts=[types.Part(text=f"[현재 화면 데이터]\n{context}\n\n질문: {message}")]))
         cfg = types.GenerateContentConfig(
-            system_instruction=SYSTEM, temperature=0.35, max_output_tokens=3500,
+            system_instruction=SYSTEM, temperature=0.35, max_output_tokens=6000,
             # gemini-2.5-flash의 thinking이 출력토큰을 소진해 답변이 잘리는 것 방지
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
         resp = client.models.generate_content(model=_MODEL, contents=contents, config=cfg)
-        return (resp.text or "").strip() or _fallback(message, context)
+        text = (resp.text or "").strip()
+        if not text:
+            return _fallback(message, context)
+        ko, en = _split_bilingual(text)
+        if not ko:
+            return _fallback(message, context)
+        return {"ko": ko, "en": en or ko}
     except Exception as e:  # noqa: BLE001
         return _fallback(message, context, err=str(e))
 
 
-def _fallback(message, context, err=None):
-    head = "현재 조회된 벤치마크 데이터 요약입니다:\n\n" + context
-    tail = "\n\n더 구체적인 기준(매체·기간·업종·지표)을 주시면 정밀 분석해 드립니다."
+def _clean(s: str) -> str:
+    # 잔여 코드펜스(```)·[KO]/[EN] 토큰 제거
+    s = re.sub(r"```[a-zA-Z]*", "", s)
+    s = re.sub(r"\[(KO|EN)\]", "", s)
+    return s.strip()
+
+
+def _split_bilingual(text: str):
+    """'[KO]...[EN]...' 형식을 (ko, en)으로 분리. 구분자 없으면 (text, '')."""
+    parts = re.split(r"\n?\s*\[EN\]\s*\n?", text, maxsplit=1)
+    ko = _clean(parts[0])
+    en = _clean(parts[1]) if len(parts) > 1 else ""
+    return ko, en
+
+
+def _fallback(message, context, err=None) -> dict:
+    head_ko = "현재 조회된 벤치마크 데이터 요약입니다:\n\n" + context
+    tail_ko = "\n\n더 구체적인 기준(매체·기간·업종·지표)을 주시면 정밀 분석해 드립니다."
+    head_en = "Here is a summary of the currently loaded benchmark data:\n\n" + context
+    tail_en = "\n\nShare more specific criteria (media, period, industry, metric) for a precise analysis."
     if err:
-        tail += f"\n(참고: AI 모델 호출 미연결 — {err[:80]})"
-    return head + tail
+        tail_ko += f"\n(참고: AI 모델 호출 미연결 — {err[:80]})"
+        tail_en += f"\n(Note: AI model not connected — {err[:80]})"
+    return {"ko": head_ko + tail_ko, "en": head_en + tail_en}
