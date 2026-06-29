@@ -46,6 +46,15 @@ def benchmark(media: str = "G", dim: str = "market",
         return JSONResponse({"error": str(e), "benchmark": [], "detail": []}, status_code=500)
 
 
+@app.get("/api/v1/media_summary")
+def media_summary(date_from: str = "2025-06-01", date_to: str = "2026-06-08", currency: str = "KRW"):
+    """첫 진입 화면 상단 — 매체별 요약(상품수/노출/클릭/조회/예산)."""
+    try:
+        return JSONResponse(bq.get_media_summary(date_from, date_to, currency))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e), "media": [], "total": {}}, status_code=500)
+
+
 @app.get("/api/v1/meta/options")
 def filter_options(media: str = "G"):
     """필터 드롭다운용 차원별 distinct 값."""

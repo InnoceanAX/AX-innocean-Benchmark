@@ -22,7 +22,11 @@ VIDEO_TBL = f"`{PROJECT}.apac_kr_benchmark.bm_video_monthly`"   # 영상(media='
 LOCATION = "asia-northeast3"
 
 MEDIA_NAME = {"G": "Google", "M": "Meta", "N": "Naver", "K": "Kakao",
-              "D": "DV360", "T": "TikTok", "V": "영상(YouTube)", "ALL": "전체(매체통합)"}
+              "D": "DV360", "T": "TikTok", "V": "영상(YouTube)", "ALL": "전체(매체통합)",
+              "GD": "Google"}
+# 매체 묶음 — Google Ads(G) + DV360(D)을 'Google'(GD)로 통합 표시·집계
+MEDIA_GROUP = {"GD": ("G", "D")}
+MEDIA_GROUP_OF = {m: g for g, ms in MEDIA_GROUP.items() for m in ms}
 # KPI 정의: alias → (캠페인단위 SQL식, 낮을수록좋음, 표시포맷)
 KPI_EXPR = {
     "cpm": "SAFE_DIVIDE(cost,imp)*1000", "cpc": "SAFE_DIVIDE(cost,clk)",
@@ -224,9 +228,14 @@ def _filter_clauses(media, p0, p1, filters):
         bigquery.ScalarQueryParameter("p0", "STRING", p0),
         bigquery.ScalarQueryParameter("p1", "STRING", p1),
     ]
-    if media and str(media).upper() != "ALL":   # ALL=전체 매체 통합(매체 필터 생략)
-        clauses.insert(0, "media=@media")
-        params.append(bigquery.ScalarQueryParameter("media", "STRING", media))
+    mu = str(media).upper() if media else ""
+    if mu and mu != "ALL":   # ALL=전체 매체 통합(매체 필터 생략)
+        if mu in MEDIA_GROUP:   # 묶음(예: GD=Google+DV360) → IN 절(코드는 화이트리스트 상수라 안전)
+            codes = ",".join("'%s'" % c for c in MEDIA_GROUP[mu])
+            clauses.insert(0, f"media IN ({codes})")
+        else:
+            clauses.insert(0, "media=@media")
+            params.append(bigquery.ScalarQueryParameter("media", "STRING", media))
     for k, v in (filters or {}).items():
         if k in FILTERS and v not in (None, "", "all", "전체"):
             clauses.append(f"{k}=@f_{k}")
@@ -442,7 +451,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
                 trend[k].append(round(v / gf, 2))
             else:
                 trend[k].append(round(v, 2))
-    top = benchmark[:10]
+    top = benchmark[:15]   # 비교 차트 노출 항목 수(국가 등) — 시연용 폭넓게
     compare = {"labels": [b["name"] for b in top]}
     for k in calc_kpis:
         med = lambda b, _k=k: next((r[f"{_k}_median"] for r in rows if r["dim"] == b["dim"]), 0) or 0
@@ -561,6 +570,45 @@ def get_filter_options(media="G"):
     except Exception:
         pass
     return out
+
+
+def get_media_summary(date_from="2025-01-01", date_to="2026-12-31", currency="KRW"):
+    """첫 진입 화면용 — 매체별 요약(상품수=캠페인수 / 노출 / 클릭 / 조회 / 예산). 단일 쿼리."""
+    p0, p1 = date_from[:7], date_to[:7]
+    cl = _client()
+    rate, sym = _currency(currency)
+
+    def money(v):
+        return sym + format(int(round((v or 0) / rate)), ",")
+
+    params = [bigquery.ScalarQueryParameter("p0", "STRING", p0),
+              bigquery.ScalarQueryParameter("p1", "STRING", p1)]
+    sql = f"""
+      SELECT media, COUNT(DISTINCT campaign_id) products, SUM(imp) imp, SUM(clk) clk,
+             SUM(vviews) views, SUM(cost) cost
+      FROM {TBL} WHERE period BETWEEN @p0 AND @p1
+      GROUP BY media HAVING imp > 0 ORDER BY imp DESC
+    """
+    rows = list(cl.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=params)).result())
+    # 매체 묶음 집계 (Google+DV360 → Google). 캠페인ID는 매체별 고유라 상품수는 단순 합산.
+    grp, tot = {}, {"products": 0, "imp": 0, "clk": 0, "views": 0, "cost": 0.0}
+    for r in rows:
+        g = MEDIA_GROUP_OF.get(r["media"], r["media"])
+        a = grp.setdefault(g, {"products": 0, "imp": 0, "clk": 0, "views": 0, "cost": 0.0})
+        for k, col in (("products", "products"), ("imp", "imp"), ("clk", "clk"),
+                       ("views", "views"), ("cost", "cost")):
+            v = r[col] or 0
+            a[k] += v; tot[k] += v
+    out = []
+    for g, a in sorted(grp.items(), key=lambda kv: kv[1]["imp"], reverse=True):
+        out.append({"media": g, "media_name": MEDIA_NAME.get(g, g),
+                    "products": _num(a["products"]), "imp": _num(a["imp"]), "clk": _num(a["clk"]),
+                    "views": _num(a["views"]), "spend": money(a["cost"])})
+    return {"media": out, "n_media": len(out),
+            "total": {"products": _num(tot["products"]), "imp": _num(tot["imp"]),
+                      "clk": _num(tot["clk"]), "views": _num(tot["views"]), "spend": money(tot["cost"])},
+            "currency": (currency or "KRW").upper(), "symbol": sym,
+            "date_from": date_from, "date_to": date_to}
 
 
 def get_summary_context(media="G", dim="market", date_from="2025-01-01", date_to="2026-12-31",
