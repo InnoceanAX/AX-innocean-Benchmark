@@ -2268,11 +2268,18 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       '<span class="hint" title="검색광고는 CPC 과금이라 CPM 이 지표가 아닙니다. 같은 분포에 넣으면 중앙값이 왜곡됩니다 — 실측상 업종에 따라 최대 63% 부풀려졌습니다.">'+
       'CPM·CPV 분포에서 검색광고 제외 <b>ⓘ</b></span>'+
       '<span class="hint" style="color:#B45309;margin-left:14px" title="'+
-      '① 정의가 다릅니다 — Google 은 conversion_action_layer 의 purchase 계층(266개 액션, 일부 장바구니·체크아웃 포함), '+
+      '① 정의가 다릅니다 — Google 은 conversion_action_layer 의 purchase 계층(200개 액션, 장바구니·결제시작 제외), '+
       'Meta 는 omni_purchase 하나만 셉니다.&#10;'+
       '② 커버리지가 다릅니다 — 2026년 구매 전환이 Google 3,137,336건 vs Meta 54건입니다.&#10;'+
       '정의를 대칭으로 맞춰도 Meta 는 표본이 없어 게이트에 걸립니다. 같은 매체 안에서 업종·국가끼리 비교하십시오.">'+
-      '⚠ 매체 간 ROAS·CVR 비교는 성립하지 않습니다 <b>ⓘ</b></span>';
+      '⚠ 매체 간 ROAS·CVR 비교는 성립하지 않습니다 <b>ⓘ</b></span>'+
+      '<span class="hint" style="color:var(--ind);margin-left:14px" title="'+
+      '2026-09-22 에 구매 전환 정의를 교정했습니다. 장바구니 담기·결제 시작·청약 작성이 «구매» 로 '+
+      '집계되고 있었고(구매 매출의 14.5%), 이를 별도 cart 계층으로 분리했습니다.&#10;'+
+      'Google ROAS 가 246% 대 → 213% 대로 내려간 것은 성과가 나빠진 것이 아니라 '+
+      '분자에서 매출이 아닌 것을 뺀 결과입니다.&#10;'+
+      '이전 기간과 비교하실 때 이 시점을 기준으로 값이 달라진다는 점을 감안하십시오.">'+
+      'ROAS 정의 교정 (2026-09-22) <b>ⓘ</b></span>';
     tw.parentNode.insertBefore(bar, tw);
     document.getElementById('cmpSel').onchange=function(){ CMP.mode=this.value; applyCompare(); };
   }
