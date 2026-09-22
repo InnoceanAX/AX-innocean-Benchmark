@@ -611,6 +611,27 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     meta_kpis = (["cpm", "cpc", "ctr"] + (["cvr"] if cvr_avail else []) + (["roas"] if roas_avail else [])
                  + (list(VIDEO_KPIS) if vid_avail else []))
     all_kpis = ["cpm", "cpc", "ctr", "cvr", "roas"] + (list(VIDEO_KPIS) if vid_avail else [])
+
+    # 🔴 커버리지 게이트에서 떨어진 지표는 '값 자체를' 내리지 않는다 — 화면만 숨기면
+    #    API 를 직접 읽는 쪽(타 솔루션·AI 분석)은 그 값을 그대로 본다.
+    #    실제로 device 차원이 roas_available=False 인데 행에는 ROAS 1.86배 가 실려 나갔다.
+    #    (DB 판정: device 는 분모가 캠페인 100% 인데 구매 계층 원천은 전환의 12.1% 뿐이라
+    #     붙이면 ROAS 가 '그럴듯하게' 8분의 1로 나온다. video 는 6.8%.)
+    _gated = {"cvr": (cvr_avail, "전환 추적 커버리지가 낮아 비교할 수 없습니다"),
+              "roas": (roas_avail, "구매 매출 추적 커버리지가 낮아 비교할 수 없습니다")}
+    for _k, (_ok, _why) in _gated.items():
+        if _ok or _k not in calc_kpis:
+            continue
+        for _row in [total] + benchmark:
+            if _row.get(_k) is not None:
+                _row[_k] = None
+                _row[_k + "_q"] = {q: None for q in ("avg", "median", "top25", "top10")}
+                _row.pop(_k + "_spread", None)
+                _row.setdefault(_k + "_na", _why)
+        for _d in detail:
+            if _d.get(_k) is not None:
+                _d[_k] = None
+                _d.setdefault(_k + "_na", _why)
     # 지표추가 카탈로그 가용 키 — 프론트가 이 목록으로 활성/비활성 판정(데이터 없는 건 자동 비활성)
     avail_metrics = ["imp", "cpm", "spend", "clicks", "ctr", "cpc"]
     if cvr_avail: avail_metrics += ["conv", "cvr", "cpa"]
