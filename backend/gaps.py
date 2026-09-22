@@ -11,6 +11,7 @@
       해소된 갭은 다음 스캔에서 status='fulfilled' 자동 처리. DB가 'unavailable'로 닫은 건 재요청 안 함(결정 존중).
 실행: mart.build() 끝에서 매일 자동 호출 + `python gaps.py` 수동.
 """
+from google.cloud import bigquery
 from mart import _client, PROJECT, MART_DS
 
 AGENT_ID = "benchmark"
@@ -198,6 +199,40 @@ Q4) 라벨을 늘리면 기존 9라벨 기준으로 만든 화면 드롭다운�
   에스더포뮬러 n=32 ₩3.3억 [제약] · Hanwha DA n=214 ₩3.1억 [기업PR] ·
   제주신화월드 n=37 ₩2.7억 [여행/관광] · KT Skylife n=31 ₩2.5억 [통신] · 프리텔레콤 n=101 ₩2.5억 [통신]"""),
 
+    ("all", "purchase_definition_alignment",
+     "구매 계층 정의가 매체마다 다릅니다 — A1·DB·벤치마크 합의 필요", """[매체 간 비교가 정의 수준에서 성립하지 않습니다. 세 주체가 같은 '구매'를 쓰는지 맞춰야 합니다.]
+
+DB(0f)가 찾아준 것 — 두 매체가 전혀 다른 기준으로 접혀 있습니다.
+  meta        actions JSON 의 `omni_purchase` 하나만 (완료된 구매)
+  google_ads  apac_kr_ops.conversion_action_layer 의 layer='purchase' 266개 액션
+
+제가 그 266개를 열어 재봤습니다(conversions_365d 기준):
+  완료된 구매(추정)  229개 액션 · 3,922,936건 (98.8%)
+  장바구니           22개 액션 ·    42,039건 ( 1.1%)  <- 매출이 아님
+  체크아웃/진입       15개 액션 ·     4,525건 ( 0.1%)  <- 매출이 아님
+  포함 예시: 1107Google_장바구니 · add_to_cart · begin_checkout ·
+            (25년)청약진입 · (25년)청약작성 · form_start · 예약 요청 완료(initiateCheckout)
+
+[제 판단 — 문제는 맞지만 비대칭의 방향이 반대입니다]
+  google 쪽 상단퍼널 오염은 1.2% 라 ROAS 246% 를 크게 흔들지 않습니다.
+  더 큰 차이는 meta 가 너무 좁다는 쪽입니다. DB 추산으로 meta 를 대칭으로 맞추면
+  (omni_purchase + omni_initiated_checkout + omni_add_to_cart) 54 -> 17,519 입니다.
+  즉 «google 을 좁힐 것인가» 보다 «meta 를 넓힐 것인가» 가 실질 쟁점입니다.
+
+Q1) 어느 쪽으로 통일합니까?
+    (a) 완료된 구매만 — google 에서 cart/checkout/청약진입 계열 37개 액션을 layer='purchase'
+        에서 빼고 meta 는 omni_purchase 유지. ROAS 분자가 «매출» 의 뜻에 맞습니다.
+        DB(0f) 의견이 이쪽이고 저도 동의합니다.
+    (b) 상단퍼널 포함 — meta 에 initiated_checkout·add_to_cart 를 더해 대칭으로.
+        커버리지는 올라가지만 ROAS 분자에 매출 아닌 것이 들어갑니다.
+Q2) conversion_action_layer 는 A1 이 QA/16_ 에서 확정했다고 뷰 주석에 있습니다.
+    A1 이 이 테이블을 쓰는 다른 산출물이 있으면 같이 바뀝니다 — A1 의견이 필요합니다.
+Q3) 정하기 전까지 벤치마크는 현 상태(google_ads 만 ROAS/CVR 노출)를 유지합니다.
+    지금도 매체 간 비교는 안 되는 상태라 급한 오독은 없습니다.
+
+※ 이 건은 DB 세션 둘(0f·d9)과 A1 이 같은 정의를 쓰는지가 핵심입니다.
+  누가 답하든 «어느 세션이 어떤 근거로» 를 같이 적어 주십시오."""),
+
     ("all", "deprecate_stale_marts", "bm_benchmark·bm_fact_monthly 삭제 요청", """\
 A1 의 14_STALE_MARTS_FROM_A1.md 건 결론입니다.
 - 조용한 실패가 아니라 '의도적 제거'였습니다. 커밋 83c9f9b(2026-06-12, 다차원 벤치마크 Phase A)에서
@@ -266,6 +301,80 @@ def request_gaps(c=None):
         return -1
 
 
+LOG_TBL = f"`{PROJECT}.{MART_DS}.bm_agent_queue_log`"
+LOG_DDL = f"""CREATE TABLE IF NOT EXISTS {LOG_TBL} (
+  seen_at TIMESTAMP, dedupe_key STRING, status STRING,
+  response_hash STRING, response STRING
+)"""
+
+
+def snapshot_responses(c=None, keys=None):
+    """큐 회신을 읽을 때마다 스냅샷을 남기고, 이전과 달라졌으면 알린다.
+
+    ★ 왜 필요한가 — `agent_data_requests` 는 **여러 DB 세션이 같은 행을 쓴다**(현재 셋: 0f·d9·04).
+      응답자 필드가 없어서 누가 썼는지 알 수 없고, 실제로 2026-09-22 에
+      0f 의 회신이 다른 세션 글로 **덮어써졌다**(0f 가 타임트래블로 확인).
+      그 덮어쓰기로 0f 의 «device·video 는 컬럼을 넣지 말라» 판정이 큐에서 사라졌고,
+      그래서 판정이 반영되지 않은 채 컬럼이 들어갔다.
+      → 소비 측이 «읽은 시점의 내용» 을 남겨두지 않으면 이런 변경을 영영 모른다.
+      이 테이블은 append-only 이고 벤치마크 소유라 남이 덮어쓰지 않는다.
+    """
+    c = c or _client()
+    try:
+        c.query(LOG_DDL).result()
+        kf = ""
+        if keys:
+            lst = ",".join(f"'{k}'" for k in keys)
+            kf = f"AND dedupe_key IN ({lst})"
+        rows = list(c.query(f"""
+          WITH cur AS (
+            SELECT dedupe_key, status, IFNULL(db_response,'') resp,
+                   TO_HEX(MD5(IFNULL(db_response,''))) h
+            FROM {REQ_TBL} WHERE requested_by='{AGENT_ID}' {kf}
+          ),
+          last AS (
+            SELECT dedupe_key, response_hash, response,
+                   ROW_NUMBER() OVER (PARTITION BY dedupe_key ORDER BY seen_at DESC) rn
+            FROM {LOG_TBL}
+          )
+          SELECT cur.dedupe_key, cur.status, cur.resp, cur.h,
+                 l.response_hash prev_h, l.response prev
+          FROM cur LEFT JOIN (SELECT * FROM last WHERE rn=1) l USING (dedupe_key)
+        """).result())
+        changed, new_ = [], []
+        for r in rows:
+            if not r["resp"]:
+                continue
+            if r["prev_h"] is None:
+                new_.append(r)
+            elif r["prev_h"] != r["h"]:
+                changed.append(r)
+        if changed:
+            print(f"🔴 [큐] 이전에 읽은 회신이 바뀐 건 {len(changed)}건 — 같은 행을 다른 세션이 덮어썼을 수 있습니다:")
+            for r in changed:
+                print(f"    {r['dedupe_key']}  이전 {len(r['prev'])}자 → 현재 {len(r['resp'])}자")
+                print(f"      이전 앞부분: {r['prev'][:90]}")
+                print(f"      현재 앞부분: {r['resp'][:90]}")
+        if new_ or changed:
+            vals = " UNION ALL ".join(
+                f"SELECT CURRENT_TIMESTAMP() seen_at, @k{i} dedupe_key, @s{i} status, "
+                f"@h{i} response_hash, @r{i} response"
+                for i in range(len(new_ + changed)))
+            prm = []
+            for i, r in enumerate(new_ + changed):
+                prm += [bigquery.ScalarQueryParameter(f"k{i}", "STRING", r["dedupe_key"]),
+                        bigquery.ScalarQueryParameter(f"s{i}", "STRING", r["status"]),
+                        bigquery.ScalarQueryParameter(f"h{i}", "STRING", r["h"]),
+                        bigquery.ScalarQueryParameter(f"r{i}", "STRING", r["resp"])]
+            c.query(f"INSERT INTO {LOG_TBL} (seen_at, dedupe_key, status, response_hash, response) {vals}",
+                    job_config=bigquery.QueryJobConfig(query_parameters=prm)).result()
+            print(f"· 큐 회신 스냅샷 {len(new_)}건 신규 · {len(changed)}건 변경 기록")
+        return len(changed)
+    except Exception as e:
+        print(f"· [경고] 큐 스냅샷 실패(진행): {str(e)[:120]}")
+        return -1
+
+
 def ask_db(c=None, asks=None):
     """자유질의를 같은 큐에 발행(멱등) + 이미 도착한 회신 출력. (발행건수, 회신건수) 반환.
 
@@ -311,6 +420,7 @@ def ask_db(c=None, asks=None):
             print(f"  ← [{r['status']}] {r['platform']}|{r['metric']}: {(r['db_response'] or '')[:300]}")
         if not got:
             print("  ← 아직 회신 없음 (DB 에이전트가 큐를 폴링하면 db_response 에 답이 들어옵니다)")
+        snapshot_responses(c, keys)   # 읽은 내용을 남겨 덮어쓰기를 감지한다
         return sent, got
     except Exception as e:   # 질의 실패가 마트 빌드를 깨지 않도록
         print(f"· [경고] DB 질의 스킵: {str(e)[:160]}")
