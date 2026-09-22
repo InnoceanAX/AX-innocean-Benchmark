@@ -24,7 +24,7 @@ UPSTREAM: apac_kr_unified.v_perf_unified
 import os
 import sys
 from google.cloud import bigquery
-from industry_map import industry_case_sql, objective_case_sql
+from industry_map import industry_case_sql, industry_expr, objective_case_sql
 
 PROJECT = "innocean-perf-apac-kr"
 MART_DS = "apac_kr_benchmark"
@@ -168,7 +168,11 @@ def build_campaign(c):
     """캠페인 × 월 grain 다차원 테이블. google 캠페인명은 raw에서 보강(P0 자동수정)."""
     # 보강된 캠페인명 텍스트 (google: raw, 그 외: v_perf_unified)
     name_expr = "COALESCE(NULLIF(u.campaign_name,''), g.nm, '')"
-    ind = industry_case_sql(f"CONCAT(IFNULL(u.advertiser_name,''),' ',{name_expr})")
+    # DB 사전(advertiser_dim.industry → v_perf_unified.industry)이 오면 자동 전환된다.
+    _has_ind = _has_col(c, "v_perf_unified", "industry")
+    if _has_ind:
+        print("· v_perf_unified.industry 감지 → 사전 기반 업종 분류 사용(정규식은 폴백)")
+    ind = industry_expr(_has_ind, f"CONCAT(IFNULL(u.advertiser_name,''),' ',{name_expr})")
     obj = objective_case_sql(name_expr)
     gmap = _gname_union(c)
     join = f"LEFT JOIN ({gmap}) g ON CAST(u.campaign_id AS STRING)=g.cid" if gmap else "LEFT JOIN (SELECT '' cid, '' nm) g ON FALSE"
@@ -279,7 +283,7 @@ def build_segment(c, dim, view, col):
         return False
     dsrc = f"`{PROJECT}.apac_kr_unified.{view}`"
     name_expr = "COALESCE(g.nm,'')"
-    ind = industry_case_sql(name_expr)
+    ind = industry_expr(_has_col(c, view, 'industry'), name_expr)
     obj = objective_case_sql(name_expr)
     gmap = _gname_union(c)
     join = (f"LEFT JOIN ({gmap}) g ON CAST(u.campaign_id AS STRING)=g.cid"
@@ -315,7 +319,7 @@ def build_video(c):
         return False
     dsrc = f"`{PROJECT}.apac_kr_unified.{view}`"
     name_expr = "COALESCE(g.nm,'')"
-    ind = industry_case_sql(name_expr)
+    ind = industry_expr(_has_col(c, view, 'industry'), name_expr)
     obj = objective_case_sql(name_expr)
     gmap = _gname_union(c)
     join = (f"LEFT JOIN ({gmap}) g ON CAST(u.campaign_id AS STRING)=g.cid"
