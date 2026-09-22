@@ -2073,12 +2073,35 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
             date_to:(S.date_to||S.to||'2026-12-31'),
             market:S.market||'',objective:S.objective||'',brand:S.brand||'',industry:S.industry||''};
   }
+  // 원천 뷰 경고 — 커버리지 게이트를 통과하더라도 화면에 같이 띄운다.
+  // age·gender 는 caution 이라 막히지 않는데 커버리지가 임계와 1.6%p 차이다(8.4% vs 10%).
+  function mountCaveats(meta){
+    var pg=document.getElementById('pgBM'); if(!pg) return;
+    var box=document.getElementById('bmCaveat');
+    var cv=(meta&&meta.source_caveats)||[];
+    if(!cv.length){ if(box) box.remove(); return; }
+    if(!box){
+      box=document.createElement('div'); box.id='bmCaveat'; box.className='note';
+      box.style.borderLeftColor='#B45309'; box.style.background='#FFFBEB';
+      var tw=pg.querySelector('.twrap'); if(!tw) return;
+      tw.parentNode.insertBefore(box, tw);
+    }
+    var L={roas:'ROAS',cvr:'CVR'};
+    box.innerHTML='<b>이 차원의 '+cv.map(function(c){return L[c.metric]||c.metric;}).join('·')+' 는 원천이 불완전합니다</b><ul>'+
+      cv.map(function(c){
+        return '<li>'+(c.severity==='do_not_use'?'🔴 ':'⚠ ')+esc(c.note||'')+
+               ' <span style="opacity:.6">('+esc(c.source)+')</span></li>'; }).join('')+
+      '</ul><p style="margin:6px 0 0">분모(광고비)는 온전한데 분자만 일부 빠져 '+
+      '«그럴듯하게 낮은» 값이 나옵니다. 캠페인 축(업종·국가·브랜드)에서 보십시오.</p>';
+  }
+
   function bmRefresh(){
     bmPanel();
     var s=bmState();
     j(API+'/benchmark?'+qs(Object.assign({dim:(window.STATE&&STATE.dim)||'industry'},s))).then(function(d){
       if(!d||!d.meta) return;
       var m=d.meta, rows=(d.benchmark||[]).filter(function(r){return r.dim!=='TOTAL';});
+      mountCaveats(m);
       var mx=Math.max.apply(null,rows.map(function(r){return r.n||0;}).concat([1]));
       el('bmRelList').innerHTML=
         (m.freshness?'<div style="font-size:11px;color:var(--tm);margin-bottom:10px">마트 최신 집행월 <b style="color:#000">'+

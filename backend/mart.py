@@ -586,6 +586,33 @@ def build_reach(c):
     return True
 
 
+def build_metric_caveats(c):
+    """사전 경고를 마트로 복사 — 서비스 SA 는 apac_kr_ops 를 못 읽는다.
+
+    ★ 왜 필요한가 — device·video 는 사전이 do_not_use 로 막아 rev=0 이 되고 커버리지 게이트가
+      자동으로 잡는다. 그런데 age·gender 는 caution 이라 막지 않고, 커버리지가 8.4%/7.7% 로
+      임계(10%)와 1.6%p 차이다. 데이터가 조금만 움직이면 게이트를 통과하고
+      «23% 낮은 ROAS» 가 조용히 화면에 나간다(DB 실측: age/gender ROAS 189.7% vs 기준 245.6%).
+      게이트가 «우연히» 잡는 것에 기대지 않고, 경고 자체를 화면까지 가져간다.
+    """
+    if not _table_exists(c, "apac_kr_ops", "dictionary_column_notes"):
+        print("· dictionary_column_notes 없음 → 지표 경고 마트 skip")
+        return False
+    tbl = f"`{PROJECT}.{MART_DS}.bm_metric_caveats`"
+    c.query(f"DROP TABLE IF EXISTS {tbl}").result()
+    c.query(f"""
+    CREATE OR REPLACE TABLE {tbl} AS
+    SELECT mart_name, column_name, severity, note,
+           CAST(use_instead AS STRING) AS use_instead,
+           CURRENT_TIMESTAMP() AS _built_at
+    FROM `{PROJECT}.apac_kr_ops.dictionary_column_notes`
+    WHERE severity IN ('do_not_use','caution')
+    """).result()
+    n = list(c.query(f"SELECT COUNT(*) n FROM {tbl}").result())[0]["n"]
+    print(f"· bm_metric_caveats: built ({n}건 — 서비스가 화면 경고에 사용)")
+    return True
+
+
 def build_fx(c):
     """최신 환율을 마트로 복사 — 서비스 SA(benchmark-app)는 raw 미접근이므로 마트 경유.
     소스 apac_kr_raw.fx_rates_daily(ECB). bm_fx = 최신일 통화별 to_krw."""
@@ -644,6 +671,7 @@ def build():
     build_video(c)                                 # 영상(V) — 뷰 있으면 자동 빌드
     build_dplan_creative(c)                        # 디플랜 NAS 소재 grain — raw 있으면 자동 빌드
     build_reach(c)                                 # Meta 캠페인 누적 도달 — 서비스 SA 접근용 복사
+    build_metric_caveats(c)                        # 사전 경고 — 서비스가 화면에 띄울 수 있게 복사
     try:                                            # 값 없는 지표 자동 감지 → DB 에이전트 요청 큐 발행
         import gaps
         gaps.request_gaps(c)

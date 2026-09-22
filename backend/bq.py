@@ -288,6 +288,44 @@ def _filter_clauses(media, p0, p1, filters):
     return " AND ".join(clauses), params
 
 
+SEGMENT_SOURCE_VIEW = {"device": "v_perf_unified_device", "age": "v_perf_unified_age",
+                       "gender": "v_perf_unified_gender"}
+
+
+@lru_cache(maxsize=4)
+def _caveats(day):
+    """마트로 복사된 사전 경고. {(mart, col): (severity, note)}  day=일일 캐시키."""
+    out = {}
+    try:
+        for r in _client().query(
+                f"SELECT mart_name, column_name, severity, note "
+                f"FROM `{PROJECT}.apac_kr_benchmark.bm_metric_caveats`").result():
+            out[(r["mart_name"], r["column_name"])] = (r["severity"], r["note"])
+    except Exception:
+        pass
+    return out
+
+
+def _source_caveats(dim):
+    """이 차원의 원천 뷰에 달린 경고 — 게이트를 통과해도 화면에 같이 띄운다.
+
+    age·gender 는 caution 이라 막히지 않는데 커버리지가 임계와 1.6%p 차이다.
+    게이트가 '우연히' 잡는 것에 기대지 않는다.
+    """
+    import datetime
+    view = SEGMENT_SOURCE_VIEW.get(dim)
+    if not view:
+        return []
+    cv = _caveats(datetime.date.today().isoformat())
+    out = []
+    for col, metric in (("revenue_purchase_krw", "roas"), ("conversions_purchase", "cvr")):
+        sev_note = cv.get((view, col))
+        if sev_note:
+            out.append({"metric": metric, "severity": sev_note[0],
+                        "note": sev_note[1], "source": f"{view}.{col}"})
+    return out
+
+
 @lru_cache(maxsize=8)
 def _rev_src(tbl_ref):
     """ROAS 분자로 쓸 컬럼명. rev_pur 가 있으면 그걸, 없으면 rev.
@@ -667,6 +705,8 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             "n_low_dims": sum(1 for b in benchmark if b.get("n_low")),
             # 데이터 신선도 — '조회는 되는데 낡은' 상태를 막는다(14_STALE_MARTS 와 같은 사고 방지).
             "freshness": _freshness(),
+            # 원천 뷰에 달린 사전 경고 — 커버리지 게이트를 통과해도 화면에 같이 띄운다
+            "source_caveats": _source_caveats(dim),
             # 지표 정의 주의 — 화면이 각주로 띄운다. DB 사전(dictionary_column_notes) 근거.
             "metric_caveats": ({"cvr": "전환수는 매체별 정의가 섞여 있습니다"
                                        "(google_ads 는 구매·리드·참여를 같은 전환으로 더함). "
