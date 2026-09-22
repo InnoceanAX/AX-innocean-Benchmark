@@ -2154,11 +2154,23 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     });
   }
 
+  // 기존 tidyMediaTabs() 가 언제 도는지 알 수 없어(데이터 로드 뒤에도 돈다) 타이머로는 못 따라잡는다.
+  // .mtabs 를 관찰해 순서가 흐트러질 때마다 다시 맞춘다. 재정렬 중에는 관찰을 꺼 루프를 막는다.
+  var reorderObs=null;
+  function watchTabs(){
+    var tabs=document.querySelector('#pgBM .mtabs'); if(!tabs || reorderObs) return;
+    reorderObs=new MutationObserver(function(){
+      reorderObs.disconnect();
+      try{ extendMediaTabs(); } finally { reorderObs.observe(tabs,{childList:true}); }
+    });
+    reorderObs.observe(tabs,{childList:true});
+  }
+
   var _go=window.goPg;
   window.goPg=function(p){
     _go(p);
-    if(p==='B') [300,900,1800,3500].forEach(function(ms){
-      setTimeout(function(){ extendMediaTabs(); mountSubnav('pgBM','B','.mtabs'); },ms); });
+    if(p==='B') [200,700,1600].forEach(function(ms){
+      setTimeout(function(){ extendMediaTabs(); mountSubnav('pgBM','B','.mtabs'); watchTabs(); },ms); });
     if(p==='R') setTimeout(function(){ mountSubnav('pgRS','R','h2'); },60);
   };
 })();
