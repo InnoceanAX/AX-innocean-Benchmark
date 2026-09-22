@@ -273,7 +273,19 @@ def build_campaign(c):
     else:
         _has_ind = _has_col(c, "v_perf_unified", "industry")
         ind = industry_expr(_has_ind, _fallback)
-    obj = objective_case_sql(name_expr)
+    # 캠페인 목표 — DB 사전 v_perf_unified.objective_layer 우선(2026-09-22 전 매체 확대, 집행 98.4%).
+    # ★ 벤치마크에 중요한 이유: 인지(awareness) 캠페인과 리드(lead) 캠페인을 같은 표에 놓으면
+    #   CPA·ROAS 가 목적이 달라서 벌어진 것을 성과 차이로 읽는다. 같은 목표끼리 견줘야 한다.
+    #   objective_source: setting_l1/l2=매체 설정에서 읽음(신뢰) · name=캠페인명 추론 · unresolved=미상
+    _has_obj = _has_col(c, "v_perf_unified", "objective_layer")
+    osrc = "CAST(NULL AS STRING)"
+    if _has_obj:
+        obj = f"COALESCE(NULLIF(u.objective_layer,''), {objective_case_sql(name_expr)})"
+        if _has_col(c, "v_perf_unified", "objective_source"):
+            osrc = "ANY_VALUE(IFNULL(u.objective_source,'regex_fallback'))"
+        print("· v_perf_unified.objective_layer 감지 → 사전 기반 캠페인목표(정규식은 폴백)")
+    else:
+        obj = objective_case_sql(name_expr)
     gmap = _gname_union(c)
     join = f"LEFT JOIN ({gmap}) g ON CAST(u.campaign_id AS STRING)=g.cid" if gmap else "LEFT JOIN (SELECT '' cid, '' nm) g ON FALSE"
     cmap = _channel_map(c)
@@ -328,6 +340,7 @@ def build_campaign(c):
       {ind} AS industry,
       {isrc} AS industry_source,
       {obj} AS objective,
+      {osrc} AS objective_source,
       u.brand AS brand,
       IFNULL(NULLIF(u.agency,''),'(미상)') AS agency,
       IFNULL(ch.ct,'(기타)') AS channel,
