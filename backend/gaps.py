@@ -99,6 +99,24 @@ Q) 이 4개 뷰에 revenue_purchase_krw 를 추가해 주실 수 있습니까?
    불가하면 알려 주십시오 — 해당 차원에서 ROAS 지표를 아예 내리겠습니다.
    부풀려진 ROAS 를 노출하느니 안 내는 편이 낫다고 판단합니다."""),
 
+    ("all", "dict_rev_columns", "마트 rev 계열 컬럼 사전 갱신 요청", """[타 솔루션이 막히고 있습니다]
+2026-09-22 자로 bm_campaign_monthly 의 rev 컬럼 의미를 바꿨습니다:
+  rev      revenue_krw(혼합) -> revenue_purchase_krw(구매 계층)   ※ 이름은 그대로, 뜻만 바뀜
+  rev_pur  rev 와 같은 값. '구매 계층'임을 이름으로 드러내려고 신설
+  rev_all  예전 rev(혼합 전환가치). 진단·대조용. ROAS 분자로 쓰지 말 것
+  conv_pur / conv_lead  구매·리드 계층 전환
+
+A1 솔루션이 이 마트를 읽는데, 사전에 rev 가 아직 caution 으로 남아 있어
+("매체별 정의가 다르다 - google=전 카테고리 전환가치, meta=omni_purchase, tiktok/kakao=미추적")
+A1 게이트가 rev 를 막습니다. A1 은 rev_pur 만 쓰기로 했고 그게 맞는 동작입니다.
+
+Q) dictionary_column_notes / dictionary_marts 에 아래를 반영해 주실 수 있습니까?
+   - bm_campaign_monthly.rev      : caution 해제 또는 '구매 계층으로 변경됨(2026-09-22)' 로 갱신
+   - bm_campaign_monthly.rev_pur  : ROAS 분자로 권장 (info)
+   - bm_campaign_monthly.rev_all  : do_not_use (ROAS 분자 금지, 진단 전용)
+   - bm_campaign_monthly.conv     : do_not_use (혼합 전환 - CPA/ROAS 금지)
+   이름이 같은데 뜻이 바뀌는 것이 제일 위험한 변경이라, 사전에 남겨두는 편이 안전합니다."""),
+
     ("all", "deprecate_stale_marts", "bm_benchmark·bm_fact_monthly 삭제 요청", """\
 A1 의 14_STALE_MARTS_FROM_A1.md 건 결론입니다.
 - 조용한 실패가 아니라 '의도적 제거'였습니다. 커밋 83c9f9b(2026-06-12, 다차원 벤치마크 Phase A)에서

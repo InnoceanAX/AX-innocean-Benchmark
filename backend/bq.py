@@ -391,9 +391,19 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
                # 표본이 적으면 중앙값·분위수가 흔들린다. 화면에서 경고 표시를 붙이기 위한 플래그.
                "n_low": (r["n"] or 0) < N_MIN_RELIABLE,
                "imp": _num(imp), "clicks": _num(clk), "spend": money(cost), "conv": _num(conv)}
+        # 행 단위 '미측정' 판정 — 커버리지 게이트는 전체 합계 기준이라 개별 행의 구멍을 못 막는다.
+        # 예) media=G·dim=industry 의 '게임' 은 전환커버리지 62.5% 로 게이트를 통과하는데 매출이 0이다.
+        #     그대로 두면 'ROAS 0.00배' 가 찍히고, 읽는 사람은 '매출이 전혀 없었다' 로 읽는다.
+        #     실제로는 '매출을 못 잰다'(추적 미설정)이다. 둘은 다른 말이라 0 대신 null 로 낸다.
+        nrev_r, nconv_r = (r.get("nrev") or 0), (r.get("nconv") or 0)
         for k in calc_kpis:
             row[k] = qf(k, _kval(k, imp, clk, cost, conv, rev, ex))
             row[k + "_q"] = {q: qf(k, r.get(f"{k}_{q}")) for q in ("avg", "median", "top25", "top10")}
+            if (k == "roas" and (nrev_r == 0 or not rev)) or (k == "cvr" and (nconv_r == 0 or not conv)):
+                row[k] = None
+                row[k + "_q"] = {q: None for q in ("avg", "median", "top25", "top10")}
+                row[k + "_na"] = ("구매 매출이 기록되지 않았습니다(전환은 있으나 매출 추적 미설정으로 보입니다)"
+                                  if k == "roas" else "전환이 기록되지 않았습니다(추적 미설정으로 보입니다)")
         if has_video:
             row.update(_extra_disp(ex, imp, cost, conv))
         benchmark.append(row)
@@ -401,6 +411,10 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
              "clicks": _num(tot["clk"]), "spend": money(tot["cost"]), "conv": _num(tot["conv"]), "cls": "ttl"}
     for k in calc_kpis:
         total[k] = qf(k, _kval(k, tot["imp"], tot["clk"], tot["cost"], tot["conv"], tot["rev"], tex))
+        if (k == "roas" and not tot["rev"]) or (k == "cvr" and not tot["conv"]):
+            total[k] = None
+            total[k + "_na"] = ("구매 매출이 기록되지 않았습니다" if k == "roas"
+                                else "전환이 기록되지 않았습니다")
     if has_video:
         total.update(_extra_disp(tex, tot["imp"], tot["cost"], tot["conv"]))
     # 커버리지 게이트(≥10%) — 추적/보강 캠페인이 충분할 때만 노출(오해성 0값 방지).
