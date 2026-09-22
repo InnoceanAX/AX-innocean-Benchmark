@@ -117,6 +117,32 @@ Q) dictionary_column_notes / dictionary_marts 에 아래를 반영해 주실 수
    - bm_campaign_monthly.conv     : do_not_use (혼합 전환 - CPA/ROAS 금지)
    이름이 같은데 뜻이 바뀌는 것이 제일 위험한 변경이라, 사전에 남겨두는 편이 안전합니다."""),
 
+    ("all", "purchase_conversions_other_platforms",
+     "Meta·TikTok·Kakao·Naver 구매 계층 전환/매출 수집 가능 여부", """[CVR·ROAS 가 google_ads 전용이 된 근본 원인입니다]
+
+사전 지시대로 ROAS 분자를 revenue_purchase_krw, CVR 분자를 conversions_purchase 로 바꿨습니다.
+그 결과 지표가 google_ads 에서만 나옵니다 — 다른 매체는 구매 계층 값이 전부 0 이기 때문입니다.
+
+  매체  conversions(혼합)  conversions_purchase  revenue_purchase_krw
+  G       62,648,936          3,054,812            1,314억
+  M        1,143,539                  0                  0
+  T       11,370,356                  0                  0
+  D        1,335,574                  0                  0
+  N              716                  0                  0
+  K              363                  0                  0
+
+혼합 conv 로 계산하면 Google 42.22% · TikTok 76.02% 같은 값이 나와 '전환율'로 읽힐 수 없습니다
+(사전에 적어주신 그대로 — google 전환의 92.7%가 참여, tiktok 은 목표달성 수).
+그래서 혼합값은 cvr_all 로 격리하고 주지표에서 내렸습니다.
+
+Q1) Meta 는 actions JSON 에 purchase 액션이 있을 텐데 conversions_purchase 로 분해 가능합니까?
+    (omni_purchase 로 revenue 는 이미 뽑고 계신 것으로 압니다)
+Q2) TikTok·Kakao·Naver 도 구매 전환을 따로 받을 수 있습니까? 아니면 원천에 계층 구분이 없습니까?
+Q3) 불가한 매체는 'unavailable' 로 닫아 주십시오 — 화면에서 해당 매체 CVR·ROAS 를 영구 숨김으로 두겠습니다.
+
+벤치마크는 매체 간 비교가 본질이라, 한 매체만 지표가 나오는 상태가 오래가면 안 됩니다.
+가능한 매체부터 순차로 채워 주시면 커버리지 게이트가 알아서 열립니다."""),
+
     ("all", "deprecate_stale_marts", "bm_benchmark·bm_fact_monthly 삭제 요청", """\
 A1 의 14_STALE_MARTS_FROM_A1.md 건 결론입니다.
 - 조용한 실패가 아니라 '의도적 제거'였습니다. 커밋 83c9f9b(2026-06-12, 다차원 벤치마크 Phase A)에서

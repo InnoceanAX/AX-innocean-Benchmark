@@ -445,6 +445,36 @@ def build_fx(c):
     return True
 
 
+def check_upstream_freshness(c):
+    """업스트림(google_ads DTS)이 이 빌드보다 늦게 도착했는지 확인해 로그로 남긴다.
+
+    DTS 는 최근 2~3일을 재진술(restate)하므로, 빌드가 DTS 보다 먼저 돌면 그 차이만큼
+    google_ads 가 낮게 잡힌다. 예약 빌드(20:00 UTC)는 DTS(≈04:46 UTC)보다 뒤라 안전하지만,
+    수동 재빌드를 02~05시 UTC 에 돌리면 경합이 난다 — 그때 조용히 넘어가지 않게 한다.
+    막지는 않는다(빌드 실패가 더 나쁘다). 알리기만 한다.
+    """
+    try:
+        rows = list(c.query(f"""
+            SELECT COUNTIF(TIMESTAMP_MILLIS(last_modified_time) > mart_ts) AS stale,
+                   COUNT(*) AS n,
+                   FORMAT_TIMESTAMP('%Y-%m-%d %H:%M UTC', MAX(TIMESTAMP_MILLIS(last_modified_time))) AS newest
+            FROM `{PROJECT}.apac_kr_raw.__TABLES__`,
+                 (SELECT TIMESTAMP_MILLIS(last_modified_time) mart_ts
+                  FROM `{PROJECT}.{MART_DS}.__TABLES__` WHERE table_id='bm_campaign_monthly')
+            WHERE table_id LIKE 'p_ads_CampaignBasicStats%'
+        """).result())
+        if not rows or not rows[0]["n"]:
+            return
+        r = rows[0]
+        if r["stale"]:
+            print(f"· [주의] google_ads DTS {r['stale']}/{r['n']}개가 마트 빌드보다 늦게 도착했습니다"
+                  f"(최신 {r['newest']}). 이번 빌드는 그만큼 낮게 잡혔을 수 있습니다 — 재빌드를 권합니다.")
+        else:
+            print(f"· 업스트림 신선도 OK (google_ads DTS {r['n']}개 전부 빌드 이전, 최신 {r['newest']})")
+    except Exception as e:
+        print(f"· [경고] 업스트림 신선도 확인 스킵: {str(e)[:120]}")
+
+
 def build():
     c = _client()
     ensure_dataset(c)
@@ -460,6 +490,7 @@ def build():
         gaps.ask_db(c)      # 판단이 필요한 질의 발행 + 도착한 회신 로그 출력
     except Exception as _e:
         print(f"· [경고] 데이터-갭 요청 스킵: {str(_e)[:120]}")
+    check_upstream_freshness(c)
     n = list(c.query(
         f"SELECT COUNT(*) n, COUNT(DISTINCT campaign_id) camps, COUNT(DISTINCT media) media, "
         f"COUNT(DISTINCT market) markets, COUNT(DISTINCT objective) objs "
