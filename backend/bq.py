@@ -698,6 +698,11 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             "metaview_available": metaview_avail, "link_available": link_avail, "engage_available": engage_avail,
             "video_bases": video_bases,
             "roas_coverage": round(tot_nrev / n_all, 3), "conv_coverage": round(tot_nconv / n_all, 3),
+            # ★ 무엇을 재는 비율인지 명시한다. DB 쪽은 같은 이름으로 '매출 비중'(SUM 기준)을 재고 있어
+            #   (예: age 매출 56.4% vs 여기 행 8.4%) 적어두지 않으면 «왜 막히냐»가 나온다.
+            "coverage_basis": ("측정된 캠페인 수 비율 = COUNTIF(지표>0) / 전체 캠페인. "
+                               "매출 금액 비중이 아니라 '몇 개 캠페인이 그 지표를 기록했나'입니다."),
+            "coverage_threshold": COVER_MIN_ROW,
             "video_coverage": round(tot_nvid / n_all, 3), "is_video": False,
             # 표본 신뢰도 — 화면이 소표본 경고를 붙일 수 있게 임계와 집계를 함께 준다.
             "n_min_reliable": N_MIN_RELIABLE,
