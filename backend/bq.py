@@ -266,6 +266,29 @@ def _filter_clauses(media, p0, p1, filters):
     return " AND ".join(clauses), params
 
 
+@lru_cache(maxsize=8)
+def _rev_src(tbl_ref):
+    """ROAS 분자로 쓸 컬럼명. rev_pur 가 있으면 그걸, 없으면 rev.
+
+    `rev` 는 2026-09-22 에 revenue_krw → revenue_purchase_krw 로 **이름은 그대로 두고 뜻만**
+    바뀐 컬럼이다. DB 사전에 caution + use_instead=rev_pur 로 등재돼 있다.
+    이름이 뜻을 말하는 쪽을 쓰면 나중에 또 바뀌어도 조용히 틀리지 않는다.
+    """
+    cols = _table_cols(tbl_ref)
+    return "rev_pur" if (cols and "rev_pur" in cols) else "rev"
+
+
+@lru_cache(maxsize=8)
+def _conv_src(tbl_ref):
+    """CVR 분자로 쓸 컬럼명. conv_pur 가 있으면 그걸, 없으면 conv.
+
+    세그먼트 마트는 구매 계층 원천이 없으면 conv 자체를 0 으로 채운다(mart._conv_strict).
+    그래서 conv 를 그대로 써도 '혼합값으로 후퇴'하지 않는다 — 커버리지 게이트가 막는다.
+    """
+    cols = _table_cols(tbl_ref)
+    return "conv_pur" if (cols and "conv_pur" in cols) else "conv"
+
+
 def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026-12-31",
                   currency="KRW", gross=0.0, **filters):
     if dim not in DIMS:
@@ -279,6 +302,8 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             "media": media, "media_name": MEDIA_NAME.get(media, media), "available": False,
             "dim": dim, "note": f"{DIMS.get(dim, dim)} 데이터 준비 중입니다 (통합뷰 추가 대기)."}}
     src = SEGMENT_TBL.get(dim, TBL)
+    revc = _rev_src(src)       # ROAS 분자 컬럼 — rev_pur 우선(이름이 뜻을 말하는 쪽)
+    convc = _conv_src(src)     # CVR 분자 컬럼 — conv_pur 우선
     has_video = (src == TBL)   # 영상 집계 컬럼은 캠페인 마트에만 존재(세그먼트 마트엔 없음)
     if src != TBL:   # 세그먼트 소스엔 channel/agency 컬럼 없음 → 해당 필터 제거
         filters = {k: v for k, v in filters.items() if k not in CAMPAIGN_ONLY_FILTERS}
@@ -345,7 +370,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     bench_sql = f"""
     WITH camp AS (
       SELECT {dim} AS dim, campaign_id,
-        SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv, SUM(conv_pur) conv_pur, SUM(rev) rev{vcols_sel}
+        SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv, SUM({convc}) conv_pur, SUM({revc}) rev{vcols_sel}
       FROM {src} WHERE {where}
       GROUP BY dim, campaign_id HAVING {camp_having}
     ),
@@ -465,7 +490,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     detail = []
     det_sql = f"""
       SELECT period, {dim} AS dim, COUNT(*) n, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost,
-             SUM(conv) conv, SUM(conv_pur) conv_pur, SUM(rev) rev{vcols_sel}
+             SUM(conv) conv, SUM({convc}) conv_pur, SUM({revc}) rev{vcols_sel}
       FROM {src} WHERE {where} GROUP BY period, dim HAVING imp > 0
       ORDER BY period DESC, cost DESC
     """
@@ -495,7 +520,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         trend[k] = []
     mt = {m: None for m in months}
     for r in cl.query(f"SELECT period, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, "
-                      f"SUM(conv) conv, SUM(conv_pur) conv_pur, SUM(rev) rev{vcols_sel} "
+                      f"SUM(conv) conv, SUM({convc}) conv_pur, SUM({revc}) rev{vcols_sel} "
                       f"FROM {src} WHERE {where} GROUP BY period", job_config=qcfg).result():
         mt[r["period"]] = (r["imp"] or 0, r["clk"] or 0, r["cost"] or 0.0, r["conv"] or 0.0,
                            r["rev"] or 0.0, _ex(r), r["conv_pur"] or 0.0)
@@ -761,6 +786,8 @@ def period_compare(media="G", dim="industry", date_from="2025-01-01", date_to="2
     if dim not in DIMS:
         dim = "industry"
     src = SEGMENT_TBL.get(dim, TBL)
+    revc = _rev_src(src)       # ROAS 분자 — rev_pur 우선
+    convc = _conv_src(src)     # CVR 분자 — conv_pur 우선
     p0, p1 = date_from[:7], date_to[:7]
     span = (int(p1[:4]) * 12 + int(p1[5:7])) - (int(p0[:4]) * 12 + int(p0[5:7])) + 1
     back = 12 if mode == "yoy" else span
@@ -774,7 +801,7 @@ def period_compare(media="G", dim="industry", date_from="2025-01-01", date_to="2
         rows = list(cl.query(f"""
           WITH camp AS (
             SELECT {dim} AS dim, campaign_id, SUM(imp) imp, SUM(clk) clk,
-                   SUM(cost) cost, SUM(conv_pur) conv_pur, SUM(rev) rev
+                   SUM(cost) cost, SUM({convc}) conv_pur, SUM({revc}) rev
             FROM {src} WHERE {where}
             GROUP BY dim, campaign_id HAVING imp >= 1000 AND clk > 0
           )

@@ -100,6 +100,30 @@ def _has_col(c, view, col):
         return False
 
 
+def _rev_strict(c, view, alias="u"):
+    """구매 계층 매출만. **없으면 0 이다 — revenue_krw 로 후퇴하지 않는다.**
+
+    세그먼트·영상 뷰에는 revenue_purchase_krw 가 없다. 예전엔 revenue_krw 로 후퇴했는데
+    그러면 두 가지가 겹쳐 틀린다:
+      ① revenue_krw 는 혼합값이라 ROAS 가 부풀려진다(사전 do_not_use).
+      ② DB 실측 — device 축은 분모가 캠페인 100% 인데 구매 계층 원천은 전환의 12.1% 뿐이다.
+         붙이면 ROAS 가 «그럴듯하게» 8분의 1로 나온다. video 는 6.8% 다.
+    0 으로 두면 커버리지 게이트가 그 차원의 ROAS 를 «측정 불가» 로 자동 차단한다.
+    DB 가 age·gender 에 컬럼을 추가하면(작업 중) 여기서 자동으로 살아난다.
+    """
+    if _has_col(c, view, "revenue_purchase_krw"):
+        return f"SUM({alias}.revenue_purchase_krw)"
+    print(f"· {view}: revenue_purchase_krw 없음 → 해당 차원 ROAS 차단(0)")
+    return "0"
+
+
+def _conv_strict(c, view, alias="u"):
+    """구매 계층 전환만. 없으면 0 → CVR 도 자동 차단(혼합 conv 로 후퇴하지 않는다)."""
+    if _has_col(c, view, "conversions_purchase"):
+        return f"SUM({alias}.conversions_purchase)"
+    return "0"
+
+
 def _rev_expr(c, view, alias="u"):
     """ROAS 분자 — **`revenue_purchase_krw` 를 쓴다. `revenue_krw` 가 아니다.**
 
@@ -267,8 +291,8 @@ def build_segment(c, dim, view, col):
     SELECT FORMAT_DATE('%Y-%m', u.date) AS period, {_media_case()} AS media,
       IFNULL(NULLIF(u.market,''),'(미상)') AS market, {ind} AS industry, {obj} AS objective, u.brand AS brand,
       UPPER(CAST(u.{col} AS STRING)) AS {dim}, u.campaign_id AS campaign_id,
-      SUM(u.impressions) imp, SUM(u.clicks) clk, SUM(u.spend_krw) cost, SUM(u.conversions) conv,
-      {_rev_expr(c, view)} AS rev,
+      SUM(u.impressions) imp, SUM(u.clicks) clk, SUM(u.spend_krw) cost, {_conv_strict(c, view)} AS conv,
+      {_rev_strict(c, view)} AS rev,
       CURRENT_TIMESTAMP() AS _built_at
     FROM {dsrc} u
     {join}
@@ -303,8 +327,8 @@ def build_video(c):
     SELECT FORMAT_DATE('%Y-%m', u.date) AS period, 'V' AS media,
       IFNULL(NULLIF(u.market,''),'(미상)') AS market, {ind} AS industry, {obj} AS objective, u.brand AS brand,
       u.campaign_id AS campaign_id,
-      SUM(u.impressions) imp, SUM(u.clicks) clk, SUM(u.spend_krw) cost, SUM(u.conversions) conv,
-      {_rev_expr(c, view)} AS rev,
+      SUM(u.impressions) imp, SUM(u.clicks) clk, SUM(u.spend_krw) cost, {_conv_strict(c, view)} AS conv,
+      {_rev_strict(c, view)} AS rev,
       SUM(u.video_views) vviews, SUM(u.video_p100) vp100, SUM(u.engagements) eng,
       CURRENT_TIMESTAMP() AS _built_at
     FROM {dsrc} u
