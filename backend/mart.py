@@ -427,6 +427,35 @@ def build_dplan_creative(c):
     return True
 
 
+def build_reach(c):
+    """Meta 캠페인 누적 도달을 마트로 복사.
+
+    ⚠️ 서비스 SA(benchmark-app)는 `apac_kr_benchmark` 만 읽는다. 원본 뷰
+    `apac_kr_unified.v_meta_campaign_reach` 는 권한이 없어 런타임에 조회가 실패한다
+    (로컬은 perf-data-analyst 라 되고 라이브는 안 되는, 가려지기 쉬운 차이다).
+    bm_fx 와 같은 경로로 빌더가 읽어 마트에 복사한다.
+    """
+    view = "v_meta_campaign_reach"
+    if not _table_exists(c, "apac_kr_unified", view):
+        print(f"· {view} 없음 → 도달 마트 skip")
+        return False
+    tbl = f"`{PROJECT}.{MART_DS}.bm_meta_campaign_reach`"
+    c.query(f"DROP TABLE IF EXISTS {tbl}").result()
+    c.query(f"""
+    CREATE OR REPLACE TABLE {tbl} CLUSTER BY market AS
+    SELECT campaign_id, campaign_name, market, brand, advertiser_name,
+           period_start, period_end, period_days,
+           impressions, unique_reach, frequency, spend_krw,
+           cost_per_1k_reach_krw, source_snapshot_date,
+           CURRENT_TIMESTAMP() AS _built_at
+    FROM `{PROJECT}.apac_kr_unified.{view}`
+    WHERE unique_reach > 0 AND impressions > 0
+    """).result()
+    r = list(c.query(f"SELECT COUNT(*) n, COUNT(DISTINCT market) m FROM {tbl}").result())[0]
+    print(f"· bm_meta_campaign_reach: built (캠페인 {r['n']:,} · 시장 {r['m']})")
+    return True
+
+
 def build_fx(c):
     """최신 환율을 마트로 복사 — 서비스 SA(benchmark-app)는 raw 미접근이므로 마트 경유.
     소스 apac_kr_raw.fx_rates_daily(ECB). bm_fx = 최신일 통화별 to_krw."""
@@ -484,6 +513,7 @@ def build():
         build_segment(c, _dim, _view, _col)
     build_video(c)                                 # 영상(V) — 뷰 있으면 자동 빌드
     build_dplan_creative(c)                        # 디플랜 NAS 소재 grain — raw 있으면 자동 빌드
+    build_reach(c)                                 # Meta 캠페인 누적 도달 — 서비스 SA 접근용 복사
     try:                                            # 값 없는 지표 자동 감지 → DB 에이전트 요청 큐 발행
         import gaps
         gaps.request_gaps(c)

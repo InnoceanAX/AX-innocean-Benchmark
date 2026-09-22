@@ -2103,10 +2103,10 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
 
   /* 매체 탭: 틱톡(API 수집 있음) + 디플랜 NAS 매체.
      NAS 는 API 데이터와 합산이 불가해 같은 표에 못 올린다 → 탭은 두되 소재 벤치마크로 보낸다. */
+  // 기존 tidyMediaTabs() 가 G·M·K·N 을 매번 뒤로 다시 붙이므로,
+  // 이 함수는 멱등하게 '항상 순서를 다시 맞추는' 방식으로 동작해야 한다.
   function extendMediaTabs(){
-    var tabs=document.querySelector('#pgBM .mtabs');
-    if(!tabs || tabs.getAttribute('data-ext')) return;
-    tabs.setAttribute('data-ext','1');
+    var tabs=document.querySelector('#pgBM .mtabs'); if(!tabs) return;
     if(!el('mtT')){
       var t=document.createElement('button');
       t.className='mtab'; t.id='mtT'; t.textContent='틱톡';
@@ -2114,17 +2114,25 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       tabs.appendChild(t);
     }
     NAS_TABS.forEach(function(name){
+      if(tabs.querySelector('[data-nas="'+name+'"]')) return;
       var b=document.createElement('button');
-      b.className='mtab nas'; b.textContent=name;
+      b.className='mtab nas'; b.setAttribute('data-nas',name); b.textContent=name;
       b.title='디플랜 NAS 데이터입니다. API 집계와 합산할 수 없어 소재 벤치마크에서 봅니다.';
       b.onclick=function(){ window.__dpPreselect=name; window.goPg('D'); };
       tabs.appendChild(b);
     });
-    var more=document.createElement('button');
-    more.className='mtab'; more.textContent='기타';
-    more.title='그 밖의 디플랜 NAS 매체(SMR·COVI·Teads·블라인드 등)';
-    more.onclick=function(){ window.__dpPreselect=''; window.goPg('D'); };
-    tabs.appendChild(more);
+    if(!tabs.querySelector('[data-nas="__more"]')){
+      var more=document.createElement('button');
+      more.className='mtab'; more.setAttribute('data-nas','__more'); more.textContent='기타';
+      more.title='그 밖의 디플랜 NAS 매체(SMR·COVI·Teads·블라인드 등)';
+      more.onclick=function(){ window.__dpPreselect=''; window.goPg('D'); };
+      tabs.appendChild(more);
+    }
+    // 순서 강제: API 매체 → 틱톡 → NAS → 기타
+    ['mtG','mtM','mtN','mtK','mtT'].forEach(function(id){
+      var b=el(id); if(b) tabs.appendChild(b); });
+    NAS_TABS.concat(['__more']).forEach(function(name){
+      var b=tabs.querySelector('[data-nas="'+name+'"]'); if(b) tabs.appendChild(b); });
   }
 
   /* 서브메뉴 — PPT: 매체탭 아래 'ㄴ 벤치마크 / 도달 시뮬레이터' */
@@ -2149,7 +2157,8 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   var _go=window.goPg;
   window.goPg=function(p){
     _go(p);
-    if(p==='B') setTimeout(function(){ extendMediaTabs(); mountSubnav('pgBM','B','.mtabs'); },300);
+    if(p==='B') [300,900,1800,3500].forEach(function(ms){
+      setTimeout(function(){ extendMediaTabs(); mountSubnav('pgBM','B','.mtabs'); },ms); });
     if(p==='R') setTimeout(function(){ mountSubnav('pgRS','R','h2'); },60);
   };
 })();

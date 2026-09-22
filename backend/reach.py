@@ -40,8 +40,9 @@ from google.cloud import bigquery
 
 PROJECT = "innocean-perf-apac-kr"
 LOCATION = "asia-northeast3"
-CAMP_TBL = f"`{PROJECT}.apac_kr_benchmark.bm_campaign_monthly`"
-DPLAN_TBL = f"`{PROJECT}.apac_kr_benchmark.bm_dplan_creative_monthly`"
+MART_DS = "apac_kr_benchmark"
+CAMP_TBL = f"`{PROJECT}.{MART_DS}.bm_campaign_monthly`"
+DPLAN_TBL = f"`{PROJECT}.{MART_DS}.bm_dplan_creative_monthly`"
 
 # 기본 유니버스(도달 가능 모집단). **가정값이다** — 화면에서 사용자가 바꿀 수 있어야 한다.
 # 근거: 대한민국 15~69세 인터넷 이용 인구 근사치. 매체별 실제 도달가능 규모는 이보다 작다.
@@ -187,7 +188,8 @@ class AssumptionProvider(Provider):
         }
 
 
-REACH_VIEW = f"`{PROJECT}.apac_kr_unified.v_meta_campaign_reach`"
+# 서비스 SA 는 apac_kr_benchmark 만 읽는다 → 마트 복사본을 본다(원본은 빌더가 읽어 옮긴다).
+REACH_VIEW = f"`{PROJECT}.{MART_DS}.bm_meta_campaign_reach`"
 FIT_MIN_CAMPAIGNS = 12   # 이보다 적으면 그 시장은 적합하지 않는다(과적합 방지)
 
 
