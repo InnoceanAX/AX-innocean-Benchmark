@@ -9,6 +9,14 @@
 - bm_campaign_monthly : 캠페인 × 월 grain. 차원(매체·국가·업종·캠페인목표·브랜드·대행사) + 지표.
   → 백엔드가 임의의 기준차원 × 필터 조합으로 4분위 벤치마크를 동적 계산.
 
+⚠️ 2026-09-22 컬럼 의미 변경 (이 마트를 읽는 다른 솔루션 주의)
+  rev      : revenue_krw(혼합) → **revenue_purchase_krw(구매 계층)** 으로 바뀌었다.
+             이전 값으로 계산한 ROAS 는 google_ads 기준 1,676%로 부풀려져 있었다(정정 후 246%).
+  rev_pur  : rev 와 같은 값. '구매 계층'임을 이름으로 드러내려고 추가.
+  rev_all  : 예전 rev(혼합 전환가치). 진단·대조용. **ROAS 분자로 쓰지 말 것.**
+  conv     : 혼합 전환(google_ads 는 구매·리드·참여를 합산 — 92.7%가 참여). CPA·ROAS 에 쓰지 말 것.
+  conv_pur / conv_lead : 구매·리드 계층 전환.
+
 데이터 현실: 스펜드 ~99% 현대·기아 자동차. 업종 다양성은 약하나, 국가/캠페인목표/브랜드는 풍부.
 UPSTREAM: apac_kr_unified.v_perf_unified
 실행: python mart.py [--check]
@@ -112,6 +120,11 @@ def _rev_expr(c, view, alias="u"):
     return "0"
 
 
+def _rev_all_expr(c, view, alias="u"):
+    """혼합 전환가치(`revenue_krw`) — 진단·대조 전용. ROAS 분자로 쓰지 말 것."""
+    return f"SUM({alias}.revenue_krw)" if _has_col(c, view, "revenue_krw") else "0"
+
+
 def _conv_tiers(c, view, alias="u"):
     """전환 계층 — `conversions` 단독은 CPA 에 쓸 수 없다.
 
@@ -195,6 +208,10 @@ def build_campaign(c):
       SUM(u.spend_krw) AS cost,
       SUM(u.conversions) AS conv,
       {_rev_expr(c, 'v_perf_unified')} AS rev,
+      -- rev 와 같은 값이지만 '구매 계층'임을 이름으로 드러낸다(타 솔루션이 이름만 보고 쓰도록).
+      {_rev_expr(c, 'v_perf_unified')} AS rev_pur,
+      -- 혼합 전환가치(전 카테고리). ROAS 에 쓰면 안 되고 진단·대조용으로만 둔다.
+      {_rev_all_expr(c, 'v_perf_unified')} AS rev_all,
       {_conv_tiers(c, 'v_perf_unified')},
       {vcols},
       {mcols},
