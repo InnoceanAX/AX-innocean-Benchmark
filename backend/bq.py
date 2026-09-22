@@ -68,6 +68,11 @@ KPIS = KPIS_DEFAULT   # 하위호환(타 모듈 참조)
 #   A1 은 문장으로 답하므로 아예 막고(comparable:false), 여기는 표를 보는 화면이라 배지를 붙인다.
 N_MIN_RELIABLE = 20
 
+# 행 단위 커버리지 하한 — 전체 게이트(10%)와 같은 값이지만 '행'에 적용한다.
+# 전체 게이트만 있으면 개별 업종·브랜드의 구멍을 못 막는다. 측정된 캠페인이 이보다 적으면
+# '성과가 0' 이 아니라 '견줄 수 없음' 으로 낸다 — 「없다」와 「0이다」는 다른 말이다.
+COVER_MIN_ROW = 0.10
+
 
 def _agg_kpi(k, imp, clk, cost, conv, rev, vv, vp, vimp=0, vcost=0.0):
     """합계 지표로부터 KPI 집계값(표시용). 영상지표는 영상 분모(vimp/vcost) 사용."""
@@ -396,14 +401,29 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         #     그대로 두면 'ROAS 0.00배' 가 찍히고, 읽는 사람은 '매출이 전혀 없었다' 로 읽는다.
         #     실제로는 '매출을 못 잰다'(추적 미설정)이다. 둘은 다른 말이라 0 대신 null 로 낸다.
         nrev_r, nconv_r = (r.get("nrev") or 0), (r.get("nconv") or 0)
+        n_r = r["n"] or 1
         for k in calc_kpis:
             row[k] = qf(k, _kval(k, imp, clk, cost, conv, rev, ex))
             row[k + "_q"] = {q: qf(k, r.get(f"{k}_{q}")) for q in ("avg", "median", "top25", "top10")}
-            if (k == "roas" and (nrev_r == 0 or not rev)) or (k == "cvr" and (nconv_r == 0 or not conv)):
+            na = None
+            if k == "roas":
+                if nrev_r == 0 or not rev:
+                    na = "구매 매출이 기록되지 않았습니다(전환은 있으나 매출 추적 미설정으로 보입니다)"
+                elif nrev_r / n_r < COVER_MIN_ROW:
+                    # 예) naver 브랜드 17개 중 1개만 매출 기록(₩3,624 / ₩106M) → ROAS 0.00배로 찍힌다.
+                    #     측정된 캠페인이 너무 적어 '성과가 0' 이 아니라 '견줄 수 없음' 이다.
+                    na = (f"매출을 추적한 캠페인이 {nrev_r}/{n_r}개({nrev_r/n_r*100:.0f}%)뿐이라 "
+                          f"비교할 수 없습니다")
+            elif k == "cvr":
+                if nconv_r == 0 or not conv:
+                    na = "전환이 기록되지 않았습니다(추적 미설정으로 보입니다)"
+                elif nconv_r / n_r < COVER_MIN_ROW:
+                    na = (f"전환을 추적한 캠페인이 {nconv_r}/{n_r}개({nconv_r/n_r*100:.0f}%)뿐이라 "
+                          f"비교할 수 없습니다")
+            if na:
                 row[k] = None
                 row[k + "_q"] = {q: None for q in ("avg", "median", "top25", "top10")}
-                row[k + "_na"] = ("구매 매출이 기록되지 않았습니다(전환은 있으나 매출 추적 미설정으로 보입니다)"
-                                  if k == "roas" else "전환이 기록되지 않았습니다(추적 미설정으로 보입니다)")
+                row[k + "_na"] = na
         if has_video:
             row.update(_extra_disp(ex, imp, cost, conv))
         benchmark.append(row)
