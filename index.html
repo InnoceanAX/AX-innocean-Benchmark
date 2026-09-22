@@ -2637,7 +2637,8 @@ function sugClick(btn,q){
           }).join('')+
           (s.media||[]).map(function(m){ return '<option value="'+esc(m.media)+'">'+esc(m.media)+' (NAS)</option>'; }).join('');
         el('rsMedia').innerHTML=opts;
-        el('rsMedia').value='넷플릭스';
+        // 도달 곡선은 Meta 캠페인으로 적합하므로 기본 매체도 Meta 로 맞춘다(매체 혼합 경고 회피)
+        el('rsMedia').value='M';
         rsRun();
       }).catch(rsRun);
     } else rsRun();
@@ -2647,25 +2648,40 @@ function sugClick(btn,q){
               universe:el('rsUniverse').value||0, points:20});
     j(API+'/reach/curve?'+q).then(function(d){
       if(d.error){ el('rsBadge').innerHTML='<b>오류</b><p>'+esc(d.error)+'</p>'; return; }
-      el('rsBadge').innerHTML='<b>'+esc(d.estimate_badge)+'</b>'+
+      var bar=el('rsBadge');
+      bar.style.borderColor=d.fitted?'#1F7A3D':'#B45309';
+      bar.style.background=d.fitted?'#F3FBF5':'#FFFBEB';
+      bar.querySelector&&0;
+      var line2 = d.fitted
+        ? ('노출→도달은 <b>실측 캠페인 적합</b>입니다. '+esc((d.fit&&d.fit.interpretation)||'')+
+           ' <span style="opacity:.75">('+esc((d.fit&&d.fit.scope)||'')+' · '+esc((d.fit&&d.fit.model)||'')+')</span>')
+        : '노출→도달 변환은 <b>가정</b>입니다 — 우리 데이터로 적합한 곡선이 아닙니다. 아래 가정값을 바꿔 가며 보십시오.';
+      bar.innerHTML='<b style="color:'+(d.fitted?'#1F7A3D':'#B45309')+'">'+esc(d.estimate_badge)+'</b>'+
         '<p>예산→노출 환산은 <b>실측 CPM ₩'+Number(d.measured.cpm).toLocaleString()+'</b> 입니다 ('+esc(d.measured.cpm_source)+').<br>'+
-        '노출→도달 변환은 <b>가정</b>입니다 — 우리 데이터로 적합한 곡선이 아닙니다. 아래 가정값을 바꿔 가며 보십시오.</p>';
+        line2+'</p>';
       var pts=d.points;
       var tl=el('rsTbl').querySelector('thead tr'), tb=el('rsTbl').querySelector('tbody');
-      tl.innerHTML='<th class="r">예산</th><th class="r">노출</th><th class="r">도달</th><th class="r">도달률</th><th class="r">빈도</th>';
+      var hasPct=pts.some(function(p){return p.reach_pct!=null;});
+      tl.innerHTML='<th class="r">예산</th><th class="r">노출</th><th class="r">도달</th>'+
+        (hasPct?'<th class="r">도달률</th>':'')+'<th class="r">빈도</th>';
       tb.innerHTML=pts.map(function(p){
         return '<tr><td class="r">₩'+p.cost.toLocaleString()+'</td><td class="r">'+p.imps.toLocaleString()+
-               '</td><td class="r">'+p.reach.toLocaleString()+'</td><td class="r">'+p.reach_pct+'%</td><td class="r">'+(p.frequency||'—')+'</td></tr>';
+               '</td><td class="r">'+p.reach.toLocaleString()+'</td>'+
+               (hasPct?'<td class="r">'+(p.reach_pct==null?'—':p.reach_pct+'%')+'</td>':'')+
+               '<td class="r">'+(p.frequency||'—')+'</td></tr>';
       }).join('');
       if(window.Chart){
         if(rsChart) rsChart.destroy();
         rsChart=new Chart(el('rsChart'),{type:'line',data:{
           labels:pts.map(function(p){return (p.cost/100000000).toFixed(0)+'억';}),
-          datasets:[{label:'Reach 1+ (%)',data:pts.map(function(p){return p.reach_pct;}),
+          datasets:[{label:hasPct?'Reach 1+ (%)':'Reach 1+ (명)',
+            data:pts.map(function(p){return hasPct?p.reach_pct:p.reach;}),
             borderColor:getComputedStyle(document.documentElement).getPropertyValue('--ind').trim()||'#4F46E5',
             backgroundColor:'rgba(79,70,229,.08)',fill:true,tension:.3,pointRadius:3}]},
           options:{responsive:true,maintainAspectRatio:false,
-            scales:{y:{beginAtZero:true,ticks:{callback:function(v){return v+'%';}},title:{display:true,text:'Reach 1+'}},
+            scales:{y:{beginAtZero:true,ticks:{callback:function(v){
+                      return hasPct?(v+'%'):(v>=10000?(v/10000).toFixed(0)+'만':v);}},
+                    title:{display:true,text:hasPct?'Reach 1+ (%)':'Reach 1+ (명)'}},
                     x:{title:{display:true,text:'예산'}}},
             plugins:{legend:{display:false}}}});
       }

@@ -3,22 +3,30 @@
 
 ★ 설계 원칙: **실측하지 않은 것을 실측한 것처럼 그리지 않는다.**
 
-현재 가진 데이터로는 «우리 데이터에 적합한 도달 곡선» 을 만들 수 없다. DB 에이전트 실측 근거:
-  · DV360 : reach 컬럼 자체가 없다(수집 안 함).
-  · Meta  : reach 는 있으나(853,061행·95.8%) **일자 단위**다. reach 는 유니크 값이라 날짜를 더할 수 없다.
-            실증 — Hyundai_H-Promise 42일: 노출 13.7억, 일별 reach 합 12.9억, 일 최대 reach 3,414만.
-            합이 최대의 **38배**. 같은 사람을 매일 다시 센 값이다.
-            그 결과 빈도의 93.8%가 1.5 미만 → **포화 구간이 없어 곡선 적합이 불가능**하다.
-            (`apac_kr_ops.dictionary_column_notes` 에 severity='do_not_use' 로 박혀 있다)
-  · 넷플릭스: NAS 52행·7주뿐이고 원천에 frequency·reach 가 없다.
+제공자(provider)를 분리해 두고, 응답에 `fitted` 와 근거를 실어 화면이 그 사실을 숨길 수 없게 한다.
 
-그래서 제공자(provider)를 분리했다. 지금 동작하는 것은 **가정 기반 추정** 하나뿐이고,
-응답에 `fitted: False` 와 `assumptions` 를 실어 화면이 그 사실을 숨길 수 없게 한다.
+  AssumptionProvider   가정 기반. 노출→도달을 NBD 가정식으로 변환. 유니버스·k 를 사용자가 입력.
+                       «한 모집단이 포화되는» 모양을 보여 준다. 우리 자료로 적합한 값은 아니다.
+  FittedReachProvider  실측 적합. apac_kr_unified.v_meta_campaign_reach (캠페인당 1행,
+                       기간 전체 누적 유니크 도달)로 reach = a·imps^b 를 적합. R² 0.86~0.93.
+  NetflixReachProvider Netflix Reach Curve API — 이노션 전용 토큰 발급 대기.
 
-제공자 교체 경로 (인터페이스 동일):
-  AssumptionProvider  (지금)      노출/원 = 실측 CPM, 노출→도달 = 접촉분포 가정
-  FittedReachProvider (예정)      Meta lifetime reach(캠페인×전기간 재수집) 적합 → DB 승인 대기
-  NetflixReachProvider(예정)      Netflix Reach Curve API — 이노션 전용 토큰 발급 예정
+왜 일자별 reach 를 안 쓰나
+  reach 는 유니크 값이라 날짜를 더할 수 없다. 실증(DB 에이전트): 한 캠페인 42일에서
+  일별 reach 합 12.9억 vs 일 최대 3,414만 — **38배**. 같은 사람을 매일 다시 센 값이다.
+  일자 자료는 빈도의 93.8%가 1.5 미만이라 포화 구간 자체가 없다.
+  (`apac_kr_ops.dictionary_column_notes` 에 severity='do_not_use' 로 박혀 있다)
+
+왜 NBD 가 아니라 멱함수인가
+  캠페인마다 타겟 모집단이 달라 «하나의 U» 가 없다. NBD 를 적합하면 k 가 격자 하한에 고착되고
+  R² 가 0.09(전체)·0.00(BR·PH·IN)으로 붕괴한다(모형 오설정). 같은 자료에서 멱함수는 0.86~0.93.
+
+⚠️ 적합 곡선이 답하는 질문
+  맞음: "이 시장에서 노출 N 을 산 캠페인들은 평균 얼마나 도달했나"  (캠페인 «사이»)
+  아님: "이 캠페인에 돈을 더 쓰면 도달이 어떻게 포화되나"          (캠페인 «안»)
+  캠페인 간 자료로 캠페인 내 포화를 말하면 생태학적 오류다. 화면에도 이 구분을 적는다.
+
+DV360 은 reach 컬럼 자체가 없어(수집 안 함) 포함되지 않는다. 디바이스별 도달도 원천에 없다.
 """
 import math
 import os
@@ -102,6 +110,11 @@ def _reach_fraction(imps, universe, k):
     return 1.0 - (1.0 + grp / k) ** (-k)
 
 
+def _is_meta(media):
+    """도달 적합은 Meta 캠페인 기준이다. CPM 을 다른 매체에서 가져오면 조합이 섞인다."""
+    return (media or "").strip().upper() in ("M", "META", "인스타그램", "인스타그램+스레드", "페이스북")
+
+
 class Provider:
     name = "base"
     label = "base"
@@ -169,23 +182,136 @@ class AssumptionProvider(Provider):
         }
 
 
+REACH_VIEW = f"`{PROJECT}.apac_kr_unified.v_meta_campaign_reach`"
+FIT_MIN_CAMPAIGNS = 12   # 이보다 적으면 그 시장은 적합하지 않는다(과적합 방지)
+
+
+def _view_exists(fq):
+    try:
+        _client().get_table(fq.strip("`"))
+        return True
+    except Exception:
+        return False
+
+
+@lru_cache(maxsize=64)
+def _fit(market, day):
+    """캠페인 누적 unique reach 로 도달–노출 관계를 적합.
+
+    자료  apac_kr_unified.v_meta_campaign_reach — 캠페인당 1행(기간 전체 누적 유니크 도달).
+          일자별 reach 는 가법적이지 않아 쓸 수 없다(같은 사람이 매일 다시 세진다).
+
+    ★ 모델 선택 근거 — NBD(단일 유니버스)는 이 자료에 맞지 않는다.
+      reach = U*(1-(1+imps/(U*k))^-k) 를 격자탐색으로 적합하면 k 가 하한에 고착되고
+      R² 가 0.09(전체)·0.00(BR·PH·IN)로 붕괴한다. 캠페인마다 타겟 모집단이 달라
+      «하나의 U» 가 존재하지 않기 때문이다(모형 오설정).
+      멱함수 reach = a·imps^b 는 같은 자료에서 R² 0.86~0.93 으로 잘 맞는다.
+
+    ⚠️ 이 곡선이 답하는 질문을 혼동하지 말 것.
+      맞음: "이 시장에서 노출을 N 으로 집행한 캠페인들은 평균 얼마나 도달했나" (캠페인 간 관계)
+      아님: "지금 이 캠페인에 돈을 더 쓰면 도달이 어떻게 포화되나" (캠페인 내 포화)
+      캠페인 간 자료로 캠페인 내 포화를 말하면 생태학적 오류다. 화면에도 이 구분을 적는다.
+
+    반환 (a, b, n, r2) 또는 None(표본 부족)
+    """
+    c = _client()
+    mf = "AND market = @mk" if market else ""
+    params = [bigquery.ScalarQueryParameter("mk", "STRING", market)] if market else []
+    rows = list(c.query(
+        f"SELECT impressions imp, unique_reach rch FROM {REACH_VIEW} "
+        f"WHERE unique_reach > 0 AND impressions > 0 {mf}",
+        job_config=bigquery.QueryJobConfig(query_parameters=params)).result())
+    pts = [(float(r["imp"]), float(r["rch"])) for r in rows]
+    if len(pts) < FIT_MIN_CAMPAIGNS:
+        return None
+    n = len(pts)
+    sx = sy = sxx = sxy = 0.0
+    for imp, rch in pts:                       # log-log 최소제곱
+        x, y = math.log(imp), math.log(rch)
+        sx += x; sy += y; sxx += x * x; sxy += x * y
+    den = n * sxx - sx * sx
+    if den == 0:
+        return None
+    b = (n * sxy - sx * sy) / den
+    a = math.exp((sy - b * sx) / n)
+    mean = sum(p[1] for p in pts) / n
+    ss_res = sum((a * p[0] ** b - p[1]) ** 2 for p in pts)
+    ss_tot = sum((p[1] - mean) ** 2 for p in pts) or 1.0
+    return (a, b, n, max(0.0, 1.0 - ss_res / ss_tot))
+
+
 class FittedReachProvider(Provider):
     name = "fitted"
-    label = "실측 적합 (Meta lifetime reach)"
+    label = "실측 적합 (Meta 캠페인 누적 도달)"
     fitted = True
 
     def available(self):
-        # 캠페인×전기간 reach 재수집이 들어오면 활성. 일자별 reach 로는 적합 불가.
-        try:
-            c = _client()
-            c.get_table(f"{PROJECT}.apac_kr_ops.v_meta_reach_lifetime")
-            return True, "사용 가능"
-        except Exception:
-            return False, ("Meta lifetime reach(캠페인×전기간) 재수집 대기 중. "
-                           "현재 있는 v_meta_reach_daily 는 일자 단위라 합산이 불가해 적합에 쓸 수 없습니다.")
+        if not _view_exists(REACH_VIEW):
+            return False, ("Meta 캠페인 누적 도달 뷰(v_meta_campaign_reach) 대기 중. "
+                           "일자별 reach 는 합산이 불가해 적합에 쓸 수 없습니다.")
+        import datetime
+        if _fit("", datetime.date.today().isoformat()) is None:
+            return False, f"적합 표본 부족(캠페인 {FIT_MIN_CAMPAIGNS}개 미만)"
+        return True, "사용 가능 (Meta 캠페인 누적 도달로 적합)"
 
-    def curve(self, **kw):
-        raise RuntimeError(self.available()[1])
+    def curve(self, budget, media, market, universe, points, k=None):
+        import datetime
+        day = datetime.date.today().isoformat()
+        fit = _fit(market or "", day)
+        scope = f"{market} 시장" if market else "전체 시장"
+        if fit is None and market:                 # 그 시장 표본이 적으면 전체로 후퇴
+            fit, scope = _fit("", day), "전체 시장(해당 시장 표본 부족)"
+        if fit is None:
+            raise RuntimeError("적합 표본이 부족합니다")
+        a, b, n_fit, r2 = fit
+        cpm, cpm_src = _cpm(media or "M", market or "", day)
+        cap = float(universe) if universe else None   # 사용자가 상한(모집단)을 주면 그 위로 안 올라간다
+        pts = []
+        n = max(int(points), 2)
+        for i in range(1, n + 1):
+            cost = budget * i / n
+            imps = cost / cpm * 1000.0
+            reach = a * (imps ** b)
+            if cap:
+                reach = min(reach, cap)
+            pts.append({"cost": round(cost), "imps": round(imps), "reach": round(reach),
+                        "reach_pct": round(reach / cap * 100, 2) if cap else None,
+                        "frequency": round(imps / reach, 2) if reach > 0 else None})
+        return {
+            "provider": self.name, "provider_label": self.label,
+            "fitted": True,
+            "estimate_badge": f"실측 적합 — Meta 캠페인 {n_fit:,}개로 적합 (R²={r2:.2f})",
+            "points": pts,
+            "measured": {"cpm": round(cpm, 2), "cpm_source": cpm_src,
+                         "note": "예산→노출은 실측 CPM, 노출→도달은 실측 캠페인 적합입니다."},
+            "fit": {"scope": scope, "n_campaigns": n_fit, "r2": round(r2, 3),
+                    "model": "reach = a · imps^b (로그-로그 최소제곱)",
+                    "a": round(a, 4), "b": round(b, 4),
+                    "interpretation": (f"노출을 2배로 늘리면 도달은 약 {2**b:.2f}배가 됩니다"
+                                       f" (b={b:.3f} < 1 이므로 수확체감)."),
+                    "source": "apac_kr_unified.v_meta_campaign_reach (캠페인 기간 전체 누적 유니크 도달)"},
+            "assumptions": [
+                {"key": "universe", "label": "도달 상한(모집단) — 선택", "value": round(cap) if cap else 0,
+                 "editable": True,
+                 "note": "비워 두면 상한 없이 적합식 그대로 그립니다. 값을 넣으면 그 위로 올라가지 않도록 자릅니다."},
+            ],
+            "caveats": ([
+                (f"🔴 **매체가 섞여 있습니다** — 도달 곡선은 **Meta** 캠페인으로 적합했는데 "
+                 f"예산→노출 환산 CPM 은 **{media}** 의 실측값({cpm_src})입니다. "
+                 f"매체가 다르면 도달 특성도 다르므로, 이 조합은 «Meta 의 도달 패턴을 "
+                 f"{media} 단가에 적용하면» 이라는 가정으로만 읽으십시오. "
+                 f"Meta 를 선택하면 이 경고가 사라집니다.")
+            ] if not _is_meta(media) else []) + [
+                f"**Meta 캠페인 {n_fit:,}개**({scope})로 적합했습니다. 다른 매체에는 그대로 적용되지 않습니다.",
+                "🔴 이 곡선은 **«캠페인 사이»의 관계**입니다 — «이 정도 노출을 산 캠페인들은 평균 이만큼 도달했다». "
+                "**«지금 이 캠페인에 돈을 더 쓰면»** 의 답이 아닙니다. 한 캠페인 안의 포화는 같은 사람에게 반복 노출되며 "
+                "훨씬 빨리 꺾이므로, 이 곡선보다 보수적으로 보셔야 합니다.",
+                "NBD(단일 모집단 포화) 모형은 이 자료에 맞지 않아 쓰지 않았습니다 — 캠페인마다 타겟 모집단이 달라 "
+                "R² 가 0 으로 붕괴합니다. «가정 기반 추정» 제공자가 그 형태를 대신 보여 줍니다.",
+                "DV360 은 reach 를 수집하지 않아 포함되지 않았습니다.",
+                "디바이스별(TV/PC/Mobile) 도달은 원천에 reach 가 없어 제공하지 않습니다.",
+            ],
+        }
 
 
 class NetflixReachProvider(Provider):
