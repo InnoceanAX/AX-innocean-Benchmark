@@ -29,7 +29,7 @@ RUNTIME_SA = f"perf-data-analyst@{PROJECT}.iam.gserviceaccount.com"
 SERVICE_SA = f"benchmark-app@{PROJECT}.iam.gserviceaccount.com"
 REPO = "cloud-run-source-deploy"                           # 기존 AR repo 재사용
 IMAGE = "innocean-benchmark"
-TAG = "backend-v71"
+TAG = "backend-v72"
 IMG_URI = f"{REGION}-docker.pkg.dev/{PROJECT}/{REPO}/{IMAGE}:{TAG}"
 STAGE_BUCKET = "innocean-perf-apac-kr-cloudbuild-source"
 SRC_OBJECT = "benchmark/source.tar.gz"
@@ -243,6 +243,49 @@ def run_mart_job_now_wait():
     return False
 
 
+def check_frontend():
+    """index.html 의 모든 <script> 블록을 node --check 로 파싱한다.
+
+    ★ 왜 — 2026-09-22 에 툴팁 문자열 안에 실제 줄바꿈이 들어가 JS 문법 오류가 났고,
+      **그 블록 전체(기간비교·분포폭·업종배지·경고배너)가 통째로 죽은 채 배포됐다.**
+      화면은 나머지 블록이 그려서 «대충 도는 것처럼» 보였고, 콘솔 에러 하나만 남았다.
+      오늘 하루 배운 것 그대로다 — 조용한 실패는 사람이 아니라 기계가 잡아야 한다.
+    node 가 없으면 건너뛴다(경고만). 있으면 오류 시 배포를 멈춘다.
+    """
+    import re
+    import shutil
+    import subprocess
+    import tempfile
+    node = shutil.which("node")
+    idx = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "index.html")
+    if not node:
+        print("· [경고] node 없음 → 프론트 문법 검사 생략")
+        return True
+    src = io.open(idx, encoding="utf-8").read()
+    bad = []
+    for i, m in enumerate(re.finditer(r"<script>", src), 1):
+        end = src.find("</script>", m.start())
+        js = src[m.start() + 8:end]
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+            f.write(js)
+            tmp = f.name
+        try:
+            r = subprocess.run([node, "--check", tmp], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace")
+            if r.returncode != 0:
+                line = src[:m.start()].count(chr(10)) + 1
+                bad.append((i, line, (r.stderr or "")[:400]))
+        finally:
+            os.unlink(tmp)
+    if bad:
+        print(f"🔴 프론트 문법 오류 {len(bad)}건 — 배포를 중단합니다")
+        for i, line, err in bad:
+            print(f"   블록{i} (index.html line {line}):"); print(err)
+        return False
+    print("· 프론트 문법 검사 통과 (script 블록 전부)")
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--build", action="store_true")
@@ -253,6 +296,8 @@ def main():
     print(f"배포 대상: {PROJECT}/{REGION}/{SERVICE}  (deployer={creds.service_account_email})")
     if a.verify:
         verify(); return
+    if not check_frontend():
+        raise SystemExit("프론트 문법 오류로 배포를 중단했습니다")
     ensure_repo()
     has_secret = ensure_secret()
     build_image()
