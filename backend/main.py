@@ -10,6 +10,8 @@ from pydantic import BaseModel
 
 import bq
 import ai
+import dplan
+import reach
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 INDEX = os.path.join(ROOT, "index.html")
@@ -92,6 +94,90 @@ def ai_chat(req: ChatReq):
         ko = f"(오류) {e}"
         en = f"(Error) {e}"
         return JSONResponse({"reply": ko, "reply_ko": ko, "reply_en": en}, status_code=500)
+
+
+@app.get("/api/v1/percentile")
+def percentile(metric: str = "cpm", value: float = 0.0, media: str = "G",
+               date_from: str = "2025-06-01", date_to: str = "2026-12-31",
+               market: str = "", objective: str = "", brand: str = "",
+               industry: str = "", agency: str = "", channel: str = ""):
+    """'내 캠페인이 벤치마크 어디쯤인가' — 입력 값의 분포 내 위치."""
+    try:
+        return JSONResponse(bq.percentile_rank(
+            metric=metric, value=value, media=media, date_from=date_from, date_to=date_to,
+            market=market, objective=objective, brand=brand, industry=industry,
+            agency=agency, channel=channel))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"available": False, "error": str(e)}, status_code=500)
+
+
+# ── 디플랜 NAS (소재 grain) ─────────────────────────────────────────
+# ⚠️ 별도 엔드포인트로 분리. v_perf_unified 계열과 같은 캠페인이 양쪽에 있어 합산 금지.
+#    프론트도 이 응답을 /api/v1/benchmark 결과와 섞어 더하지 않는다.
+
+@app.get("/api/v1/dplan/summary")
+def dplan_summary(date_from: str = "2026-01", date_to: str = "2026-12"):
+    """디플랜 매체별 요약 — 넷플릭스·티빙·토스 등 NAS 전용 매체 포함."""
+    try:
+        return JSONResponse(dplan.get_summary(date_from, date_to))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e), "media": []}, status_code=500)
+
+
+@app.get("/api/v1/dplan/creatives")
+def dplan_creatives(date_from: str = "2026-01", date_to: str = "2026-12",
+                    media: str = "", industry: str = "", advertiser: str = "",
+                    brand: str = "", product: str = "", format: str = "",
+                    ratio: str = "", device: str = "", goal: str = "",
+                    objective: str = "", sec: str = "", q: str = "",
+                    sort: str = "imp", desc: int = 1,
+                    limit: int = 200, offset: int = 0):
+    """소재 단위 나열 표 + 필터링된 데이터의 합계·평균 행."""
+    try:
+        f = {"media": media, "industry": industry, "advertiser": advertiser, "brand": brand,
+             "product": product, "format": format, "ratio": ratio, "device": device,
+             "goal": goal, "objective": objective, "sec": sec, "q": q}
+        return JSONResponse(dplan.get_creatives(
+            date_from, date_to, filters=f, sort=sort, desc=bool(desc),
+            limit=min(max(int(limit), 1), 1000), offset=max(int(offset), 0)))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e), "rows": [], "columns": []}, status_code=500)
+
+
+@app.get("/api/v1/dplan/options")
+def dplan_options(date_from: str = "2026-01", date_to: str = "2026-12"):
+    """디플랜 표 필터 드롭다운 + 검색 자동완성 사전."""
+    try:
+        return JSONResponse(dplan.get_options(date_from, date_to))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ── 도달 시뮬레이터 (PPT (c)) ────────────────────────────────────────
+
+@app.get("/api/v1/reach/curve")
+def reach_curve(budget: float = 2_000_000_000, media: str = "", market: str = "KR",
+                universe: int = 0, points: int = 20, provider: str = ""):
+    """예산 대비 도달(Reach 1+) 곡선.
+
+    ⚠️ 기본 제공자는 '가정 기반 추정'이다 — 실측 적합이 아니다.
+       응답의 fitted=False / assumptions 를 화면에 반드시 노출할 것.
+    """
+    try:
+        return JSONResponse(reach.curve(budget=budget, media=media, market=market,
+                                        universe=universe or None, points=points,
+                                        provider=provider or None))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e), "points": []}, status_code=500)
+
+
+@app.get("/api/v1/reach/providers")
+def reach_providers():
+    """사용 가능한 도달 추정 제공자 목록 + 각각의 준비 상태."""
+    try:
+        return JSONResponse(reach.providers())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 if __name__ == "__main__":

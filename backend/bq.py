@@ -57,6 +57,11 @@ EXTRA_COLS = ("vimp", "vviews", "vcost", "vp25", "vp50", "vp75", "vp100", "veng"
               "mlclk", "mv3s", "meng", "mcmt", "mrct", "mlead", "mshare")
 KPIS = KPIS_DEFAULT   # 하위호환(타 모듈 참조)
 
+# 벤치마크로 신뢰할 수 있는 최소 표본(비교군 캠페인 수).
+# 이보다 적으면 중앙값·상위25%/10% 가 캠페인 한둘에 흔들린다 → 화면에 경고를 붙인다.
+# 30은 분포 통계의 관행적 하한이다(정확한 임계가 아니라 '이 아래는 읽지 말라'는 신호).
+N_MIN_RELIABLE = 30
+
 
 def _agg_kpi(k, imp, clk, cost, conv, rev, vv, vp, vimp=0, vcost=0.0):
     """합계 지표로부터 KPI 집계값(표시용). 영상지표는 영상 분모(vimp/vcost) 사용."""
@@ -377,6 +382,8 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             for c in EXTRA_COLS:
                 tex[c] += ex[c]
         row = {"dim": r["dim"], "name": dim_name(dim, r["dim"]), "n": r["n"],
+               # 표본이 적으면 중앙값·분위수가 흔들린다. 화면에서 경고 표시를 붙이기 위한 플래그.
+               "n_low": (r["n"] or 0) < N_MIN_RELIABLE,
                "imp": _num(imp), "clicks": _num(clk), "spend": money(cost), "conv": _num(conv)}
         for k in calc_kpis:
             row[k] = qf(k, _kval(k, imp, clk, cost, conv, rev, ex))
@@ -405,7 +412,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     # 2) detail (월 × 기준차원)
     detail = []
     det_sql = f"""
-      SELECT period, {dim} AS dim, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost,
+      SELECT period, {dim} AS dim, COUNT(*) n, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost,
              SUM(conv) conv, SUM(rev) rev{vcols_sel}
       FROM {src} WHERE {where} GROUP BY period, dim HAVING imp > 0
       ORDER BY period DESC, cost DESC
@@ -415,6 +422,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         conv, rev = r.get("conv") or 0.0, r.get("rev") or 0.0
         ex = _ex(r)
         d = {"period": r["period"], "name": dim_name(dim, r["dim"]),
+             "n": r["n"], "n_low": (r["n"] or 0) < N_MIN_RELIABLE,
              "spend": money(cost), "imps": _num(imp), "clicks": _num(clk),
              "cpm": money2(cost / imp * 1000 if imp else 0),
              "cpc": money2(cost / clk if clk else 0),
@@ -495,6 +503,17 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             "video_bases": video_bases,
             "roas_coverage": round(tot_nrev / n_all, 3), "conv_coverage": round(tot_nconv / n_all, 3),
             "video_coverage": round(tot_nvid / n_all, 3), "is_video": False,
+            # 표본 신뢰도 — 화면이 소표본 경고를 붙일 수 있게 임계와 집계를 함께 준다.
+            "n_min_reliable": N_MIN_RELIABLE,
+            "n_total": tot["n"],
+            "n_low_dims": sum(1 for b in benchmark if b.get("n_low")),
+            # 데이터 신선도 — '조회는 되는데 낡은' 상태를 막는다(14_STALE_MARTS 와 같은 사고 방지).
+            "freshness": _freshness(),
+            # 지표 정의 주의 — 화면이 각주로 띄운다. DB 사전(dictionary_column_notes) 근거.
+            "metric_caveats": ({"cvr": "전환수는 매체별 정의가 섞여 있습니다"
+                                       "(google_ads 는 구매·리드·참여를 같은 전환으로 더함). "
+                                       "매체 간 CVR 직접 비교는 피하십시오."} if cvr_avail else {}),
+            "roas_basis": "revenue_purchase_krw (구매 계층 전환가치)",
             "fx": {"asof": fx_asof, "USD": round(fx_rates.get("USD", 0), 2),
                    "EUR": round(fx_rates.get("EUR", 0), 2), "JPY": round(fx_rates.get("JPY", 0), 2),
                    "CNY": round(fx_rates.get("CNY", 0), 2), "INR": round(fx_rates.get("INR", 0), 2)},
@@ -570,6 +589,87 @@ def get_filter_options(media="G"):
     except Exception:
         pass
     return out
+
+
+@lru_cache(maxsize=4)
+def _freshness_cached(day):
+    """마트 최신 집행월 · 빌드 시각. day = 날짜키(일일 캐시 무효화)."""
+    try:
+        r = list(_client().query(
+            f"SELECT MAX(period) latest, MIN(period) earliest, MAX(_built_at) built FROM {TBL}"
+        ).result())[0]
+        return {"latest_period": r["latest"], "earliest_period": r["earliest"],
+                "built_at": r["built"].isoformat() if r["built"] else None}
+    except Exception:   # 신선도 조회 실패가 본 응답을 깨지 않도록
+        return {"latest_period": None, "earliest_period": None, "built_at": None}
+
+
+def _freshness():
+    import datetime
+    return _freshness_cached(datetime.date.today().isoformat())
+
+
+def percentile_rank(metric="cpm", value=0.0, media="G", date_from="2025-01-01",
+                    date_to="2026-12-31", market="", objective="", brand="",
+                    industry="", agency="", channel=""):
+    """'내 캠페인이 벤치마크 어디쯤인가' — 벤치마크 도구의 핵심 기능.
+
+    입력한 지표 값이 같은 조건 캠페인 분포에서 몇 번째인지 돌려준다.
+    CPM·CPC 처럼 낮을수록 좋은 지표는 방향을 뒤집어 '상위 %'를 계산한다.
+    """
+    if metric not in KPI_EXPR:
+        raise ValueError(f"지원하지 않는 지표: {metric}")
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("value 는 숫자여야 합니다")
+    cl = _client()
+    p0, p1 = date_from[:7], date_to[:7]
+    filters = {"market": market, "objective": objective, "brand": brand,
+               "industry": industry, "agency": agency, "channel": channel}
+    where, params = _filter_clauses(media, p0, p1, filters)
+    expr = KPI_EXPR[metric]
+    lower_better = KPI_LOWER_BETTER.get(metric, False)
+    # 분모는 '그 지표가 계산되는 캠페인'만 — 0/NULL 캠페인이 섞이면 순위가 부풀려진다.
+    better = "<" if lower_better else ">"
+    q = f"""
+      WITH b AS (SELECT {expr} v FROM {TBL} WHERE {where})
+      SELECT COUNT(*) n,
+             COUNTIF(v {better} @val) n_better,
+             APPROX_QUANTILES(v,100)[OFFSET(50)] p50,
+             APPROX_QUANTILES(v,100)[OFFSET({75 if lower_better else 25})] p_top25,
+             APPROX_QUANTILES(v,100)[OFFSET({90 if lower_better else 10})] p_top10
+      FROM b WHERE v IS NOT NULL AND NOT IS_NAN(v) AND v > 0
+    """
+    params = list(params) + [bigquery.ScalarQueryParameter("val", "FLOAT64", value)]
+    r = list(cl.query(q, job_config=bigquery.QueryJobConfig(query_parameters=params)).result())[0]
+    n = r["n"] or 0
+    if n == 0:
+        return {"available": False, "reason": "해당 조건에 비교군 캠페인이 없습니다.",
+                "metric": metric, "value": value}
+    # '상위 X%' = 나보다 나은 캠페인 비율
+    top_pct = round((r["n_better"] or 0) / n * 100, 1)
+    if top_pct <= 10:
+        grade, grade_label = "top10", "상위 10% 이내"
+    elif top_pct <= 25:
+        grade, grade_label = "top25", "상위 25% 이내"
+    elif top_pct <= 50:
+        grade, grade_label = "above", "중앙값 이상"
+    else:
+        grade, grade_label = "below", "중앙값 미만"
+    sym, rate = _currency(None)[0], 1.0
+    return {
+        "available": True, "metric": metric, "value": value,
+        "n": n, "n_low": n < N_MIN_RELIABLE,
+        "n_min_reliable": N_MIN_RELIABLE,
+        "top_pct": top_pct, "grade": grade, "grade_label": grade_label,
+        "lower_better": lower_better,
+        "median": r["p50"], "top25": r["p_top25"], "top10": r["p_top10"],
+        "note": ("표본이 적어 순위가 흔들릴 수 있습니다." if n < N_MIN_RELIABLE
+                 else None),
+        "media": media, "media_name": MEDIA_NAME.get(media, media),
+        "date_from": date_from, "date_to": date_to,
+    }
 
 
 def get_media_summary(date_from="2025-01-01", date_to="2026-12-31", currency="KRW"):

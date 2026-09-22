@@ -34,3 +34,6 @@ __pycache__/
 node_modules/
 dist/
 build/
+
+# 참고자료(2차 설계 산출물·디자인 PDF 등) — 용량이 커서 git 추적 제외. Dropbox 로 공유됨.
+ref/
