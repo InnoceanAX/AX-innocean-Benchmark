@@ -30,7 +30,12 @@ MEDIA_GROUP_OF = {m: g for g, ms in MEDIA_GROUP.items() for m in ms}
 # KPI 정의: alias → (캠페인단위 SQL식, 낮을수록좋음, 표시포맷)
 KPI_EXPR = {
     "cpm": "SAFE_DIVIDE(cost,imp)*1000", "cpc": "SAFE_DIVIDE(cost,clk)",
-    "ctr": "SAFE_DIVIDE(clk,imp)*100", "cvr": "SAFE_DIVIDE(conv,clk)*100",
+    "ctr": "SAFE_DIVIDE(clk,imp)*100",
+    # CVR 은 '구매 계층' 전환 기준이다. 혼합 conv 로 계산하면 Google 42%·TikTok 76% 처럼
+    # 전환율로 읽힐 수 없는 값이 나온다(google 전환의 92.7%가 참여, tiktok 은 목표달성 수).
+    # 혼합값은 cvr_all 로 이름을 갈라 참고용으로만 둔다.
+    "cvr": "SAFE_DIVIDE(conv_pur,clk)*100",
+    "cvr_all": "SAFE_DIVIDE(conv,clk)*100",
     "roas": "SAFE_DIVIDE(rev,cost)",
     # 영상(YouTube) 지표 — 영상 캠페인 분모(vimp=영상노출, vcost=영상비용)로 산출 → 비영상 캠페인 희석 없음.
     "vtr": "SAFE_DIVIDE(vviews,vimp)*100", "cpv": "SAFE_DIVIDE(vcost,vviews)",
@@ -40,10 +45,10 @@ KPI_EXPR = {
     "vtrthru": "SAFE_DIVIDE(vthru,vimp)*100", "cpvthru": "SAFE_DIVIDE(vcost,vthru)",  # ThruPlay 기준(Meta영상)
     "ctrlk": "SAFE_DIVIDE(mlclk,imp)*100", "cpclk": "SAFE_DIVIDE(cost,mlclk)",  # 링크클릭 기준 CTR/CPC(Meta)
 }
-KPI_LOWER_BETTER = {"cpm": True, "cpc": True, "ctr": False, "cvr": False, "roas": False,
+KPI_LOWER_BETTER = {"cpm": True, "cpc": True, "ctr": False, "cvr": False, "cvr_all": False, "roas": False,
                     "vtr": False, "cpv": True, "cr": False, "cpv100": True,
                     "vtr3s": False, "cpv3s": True, "vtrthru": False, "cpvthru": True, "ctrlk": False, "cpclk": True}
-KPI_FMT = {"cpm": "money2", "cpc": "money2", "ctr": "pct", "cvr": "pct", "roas": "x",
+KPI_FMT = {"cpm": "money2", "cpc": "money2", "ctr": "pct", "cvr": "pct", "cvr_all": "pct", "roas": "x",
            "vtr": "pct", "cpv": "money2", "cr": "pct", "cpv100": "money2",
            "vtr3s": "pct", "cpv3s": "money2", "vtrthru": "pct", "cpvthru": "money2", "ctrlk": "pct", "cpclk": "money2"}
 KPIS_DEFAULT = ("cpm", "cpc", "ctr", "cvr", "roas")
@@ -51,7 +56,7 @@ KPIS_DEFAULT = ("cpm", "cpc", "ctr", "cvr", "roas")
 VIDEO_KPIS = ("vtr", "cpv")
 # 차트 '기준 지표(basis)' 전용 — 4분위/트렌드/비교 시리즈는 계산하되 표·Rate/KPI토글엔 미노출.
 # cr=100%조회VTR, vtr3s/cpv3s=Meta 3초조회 기준, ctrlk/cpclk=링크클릭 기준.
-CHART_ONLY_KPIS = ("cpv100", "cr", "vtr3s", "cpv3s", "vtrthru", "cpvthru", "ctrlk", "cpclk")
+CHART_ONLY_KPIS = ("cpv100", "cr", "vtr3s", "cpv3s", "vtrthru", "cpvthru", "ctrlk", "cpclk", "cvr_all")
 # 캠페인 마트(TBL)에만 존재하는 보강 집계 컬럼(영상=v*, Meta=m*) — 세그먼트 마트엔 없음.
 EXTRA_COLS = ("vimp", "vviews", "vcost", "vp25", "vp50", "vp75", "vp100", "veng", "vthru",
               "mlclk", "mv3s", "meng", "mcmt", "mrct", "mlead", "mshare")
@@ -74,12 +79,14 @@ N_MIN_RELIABLE = 20
 COVER_MIN_ROW = 0.10
 
 
-def _agg_kpi(k, imp, clk, cost, conv, rev, vv, vp, vimp=0, vcost=0.0):
-    """합계 지표로부터 KPI 집계값(표시용). 영상지표는 영상 분모(vimp/vcost) 사용."""
+def _agg_kpi(k, imp, clk, cost, conv, rev, vv, vp, vimp=0, vcost=0.0, conv_pur=0):
+    """합계 지표로부터 KPI 집계값(표시용). 영상지표는 영상 분모(vimp/vcost) 사용.
+    cvr 은 구매 계층(conv_pur), cvr_all 은 혼합(conv) 기준이다."""
     if k == "cpm":  return cost / imp * 1000 if imp else 0
     if k == "cpc":  return cost / clk if clk else 0
     if k == "ctr":  return clk / imp * 100 if imp else 0
-    if k == "cvr":  return conv / clk * 100 if clk else 0
+    if k == "cvr":  return (conv_pur or 0) / clk * 100 if clk else 0
+    if k == "cvr_all": return conv / clk * 100 if clk else 0
     if k == "roas": return rev / cost if cost else 0
     if k == "vtr":  return vv / vimp * 100 if vimp else 0
     if k == "cpv":  return vcost / vv if vv else 0
@@ -338,15 +345,15 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     bench_sql = f"""
     WITH camp AS (
       SELECT {dim} AS dim, campaign_id,
-        SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv, SUM(rev) rev{vcols_sel}
+        SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv, SUM(conv_pur) conv_pur, SUM(rev) rev{vcols_sel}
       FROM {src} WHERE {where}
       GROUP BY dim, campaign_id HAVING {camp_having}
     ),
     ck AS (
-      SELECT dim, imp, clk, cost, conv, rev{vcols_pass}, {ck_exprs}
+      SELECT dim, imp, clk, cost, conv, conv_pur, rev{vcols_pass}, {ck_exprs}
       FROM camp
     )
-    SELECT dim, COUNT(*) n, COUNTIF(rev>0) nrev, COUNTIF(conv>0) nconv, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv, SUM(rev) rev{vcols_out},
+    SELECT dim, COUNT(*) n, COUNTIF(rev>0) nrev, COUNTIF(conv_pur>0) nconv, COUNTIF(conv>0) nconv_all, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv, SUM(conv_pur) conv_pur, SUM(rev) rev{vcols_out},
       {qcols}
     FROM ck WHERE dim IS NOT NULL GROUP BY dim HAVING n >= 3
     ORDER BY cost DESC
@@ -361,10 +368,11 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     def _ex(r):  # EXTRA_COLS 합계 dict (없으면 0)
         return {c: (r.get(c) or 0) for c in EXTRA_COLS}
 
-    def _kval(k, imp, clk, cost, conv, rev, ex):  # KPI 집계값(영상=v*, Meta=m* 분모)
+    def _kval(k, imp, clk, cost, conv, rev, ex, conv_pur=0):  # KPI 집계값(영상=v*, Meta=m* 분모)
         if k in ("vtr3s", "cpv3s", "vtrthru", "cpvthru", "ctrlk", "cpclk"):
             return _agg_extra(k, imp, cost, conv, ex)
-        return _agg_kpi(k, imp, clk, cost, conv, rev, ex["vviews"], ex["vp100"], ex["vimp"], ex["vcost"])
+        return _agg_kpi(k, imp, clk, cost, conv, rev, ex["vviews"], ex["vp100"],
+                        ex["vimp"], ex["vcost"], conv_pur)
 
     def _extra_disp(ex, imp, cost, conv):  # 지표추가 표시(비KPI 컬럼): 조회수·참여·링크·전환비용 등
         imp = imp or 0; vimp = ex["vimp"] or 0; engsum = (ex["veng"] or 0) + (ex["meng"] or 0)
@@ -379,12 +387,14 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
                 "cpa": money2(cost / conv if conv else 0)}
 
     benchmark = []
-    tot = {"imp": 0, "clk": 0, "cost": 0.0, "n": 0, "rev": 0.0, "conv": 0.0}
+    tot = {"imp": 0, "clk": 0, "cost": 0.0, "n": 0, "rev": 0.0, "conv": 0.0, "conv_pur": 0.0}
     tex = {c: 0 for c in EXTRA_COLS}   # EXTRA 컬럼 합계(전체 행)
     tot_nrev = tot_nconv = tot_nvid = tot_nv3s = tot_nthru = tot_nlclk = tot_neng = tot_nmeng = 0
     for r in rows:
         imp, clk, cost, conv, rev = r["imp"] or 0, r["clk"] or 0, r["cost"] or 0.0, r.get("conv") or 0.0, r["rev"] or 0.0
+        conv_pur = r.get("conv_pur") or 0.0
         ex = _ex(r)
+        tot["conv_pur"] += conv_pur
         tot["imp"] += imp; tot["clk"] += clk; tot["cost"] += cost; tot["n"] += r["n"]; tot["rev"] += rev; tot["conv"] += conv
         tot_nrev += (r.get("nrev") or 0); tot_nconv += (r.get("nconv") or 0); tot_nvid += (r.get("nvid") or 0)
         tot_nv3s += (r.get("nv3s") or 0); tot_nthru += (r.get("nthru") or 0); tot_nlclk += (r.get("nlclk") or 0)
@@ -403,7 +413,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         nrev_r, nconv_r = (r.get("nrev") or 0), (r.get("nconv") or 0)
         n_r = r["n"] or 1
         for k in calc_kpis:
-            row[k] = qf(k, _kval(k, imp, clk, cost, conv, rev, ex))
+            row[k] = qf(k, _kval(k, imp, clk, cost, conv, rev, ex, conv_pur))
             row[k + "_q"] = {q: qf(k, r.get(f"{k}_{q}")) for q in ("avg", "median", "top25", "top10")}
             na = None
             if k == "roas":
@@ -430,8 +440,10 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     total = {"dim": "TOTAL", "name": "전체", "n": tot["n"], "imp": _num(tot["imp"]),
              "clicks": _num(tot["clk"]), "spend": money(tot["cost"]), "conv": _num(tot["conv"]), "cls": "ttl"}
     for k in calc_kpis:
-        total[k] = qf(k, _kval(k, tot["imp"], tot["clk"], tot["cost"], tot["conv"], tot["rev"], tex))
-        if (k == "roas" and not tot["rev"]) or (k == "cvr" and not tot["conv"]):
+        total[k] = qf(k, _kval(k, tot["imp"], tot["clk"], tot["cost"], tot["conv"], tot["rev"], tex, tot["conv_pur"]))
+        # cvr 은 구매 계층(conv_pur) 기준이므로 가드도 그 값을 본다. 혼합 conv 를 보면
+        # Meta·TikTok 처럼 혼합 전환은 있고 구매 전환은 0인 매체가 '0.00%' 로 새어 나간다.
+        if (k == "roas" and not tot["rev"]) or (k == "cvr" and not tot["conv_pur"])                 or (k == "cvr_all" and not tot["conv"]):
             total[k] = None
             total[k + "_na"] = ("구매 매출이 기록되지 않았습니다" if k == "roas"
                                 else "전환이 기록되지 않았습니다")
@@ -453,13 +465,14 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     detail = []
     det_sql = f"""
       SELECT period, {dim} AS dim, COUNT(*) n, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost,
-             SUM(conv) conv, SUM(rev) rev{vcols_sel}
+             SUM(conv) conv, SUM(conv_pur) conv_pur, SUM(rev) rev{vcols_sel}
       FROM {src} WHERE {where} GROUP BY period, dim HAVING imp > 0
       ORDER BY period DESC, cost DESC
     """
     for r in cl.query(det_sql, job_config=qcfg).result():
         imp, clk, cost = r["imp"] or 0, r["clk"] or 0, r["cost"] or 0.0
         conv, rev = r.get("conv") or 0.0, r.get("rev") or 0.0
+        conv_pur = r.get("conv_pur") or 0.0
         ex = _ex(r)
         d = {"period": r["period"], "name": dim_name(dim, r["dim"]),
              "n": r["n"], "n_low": (r["n"] or 0) < N_MIN_RELIABLE,
@@ -471,7 +484,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
              "roas": (f"{(rev / cost / gf):.2f}배" if cost else "—")}
         if has_video:
             for k in ("vtr", "cpv", "cr", "cpv100", "vtr3s", "cpv3s", "vtrthru", "cpvthru", "ctrlk", "cpclk"):
-                d[k] = qf(k, _kval(k, imp, clk, cost, conv, rev, ex))
+                d[k] = qf(k, _kval(k, imp, clk, cost, conv, rev, ex, conv_pur))
             d.update(_extra_disp(ex, imp, cost, conv))
         detail.append(d)
 
@@ -482,17 +495,18 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         trend[k] = []
     mt = {m: None for m in months}
     for r in cl.query(f"SELECT period, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, "
-                      f"SUM(conv) conv, SUM(rev) rev{vcols_sel} "
+                      f"SUM(conv) conv, SUM(conv_pur) conv_pur, SUM(rev) rev{vcols_sel} "
                       f"FROM {src} WHERE {where} GROUP BY period", job_config=qcfg).result():
-        mt[r["period"]] = (r["imp"] or 0, r["clk"] or 0, r["cost"] or 0.0, r["conv"] or 0.0, r["rev"] or 0.0, _ex(r))
+        mt[r["period"]] = (r["imp"] or 0, r["clk"] or 0, r["cost"] or 0.0, r["conv"] or 0.0,
+                           r["rev"] or 0.0, _ex(r), r["conv_pur"] or 0.0)
     for m in months:
         if not mt[m]:
             for k in calc_kpis:
                 trend[k].append(0)
             continue
-        imp, clk, cost, conv, rev, ex = mt[m]
+        imp, clk, cost, conv, rev, ex, conv_pur_m = mt[m]
         for k in calc_kpis:
-            v = _kval(k, imp, clk, cost, conv, rev, ex)
+            v = _kval(k, imp, clk, cost, conv, rev, ex, conv_pur_m)
             if KPI_FMT[k].startswith("money"):
                 trend[k].append(round(v * gf / rate, 2))
             elif k == "roas":
