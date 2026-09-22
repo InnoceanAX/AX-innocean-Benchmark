@@ -359,6 +359,11 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     has_channel = bool(_sc and "channel" in _sc)
     chan_sel = " ANY_VALUE(channel) channel," if has_channel else ""
     chan_pass = ", channel" if has_channel else ""
+    # 업종 분류 출처 — rule(이름 기반 추정) / ops_ledger(운영팀 원장) / unresolved(분류 대기)
+    has_isrc = bool(dim == "industry" and _sc and "industry_source" in _sc)
+    isrc_sel = " ANY_VALUE(industry_source) isrc," if has_isrc else ""
+    isrc_pass = ", isrc" if has_isrc else ""
+    isrc_out = ", ANY_VALUE(isrc) isrc" if has_isrc else ""
 
     def _qblock(k):
         lower = KPI_LOWER_BETTER[k]
@@ -402,17 +407,18 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     # 1) 기준차원별 4분위 + 합계 (캠페인 단위 분포)
     bench_sql = f"""
     WITH camp AS (
-      SELECT {dim} AS dim, campaign_id,{chan_sel}
+      SELECT {dim} AS dim, campaign_id,{chan_sel}{isrc_sel}
         SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv, SUM({convc}) conv_pur, SUM({revc}) rev{vcols_sel}
       FROM {src} WHERE {where}
       GROUP BY dim, campaign_id HAVING {camp_having}
     ),
     ck AS (
-      SELECT dim, imp, clk, cost, conv, conv_pur, rev{chan_pass}{vcols_pass}, {ck_exprs}
+      SELECT dim, imp, clk, cost, conv, conv_pur, rev{chan_pass}{isrc_pass}{vcols_pass}, {ck_exprs}
       FROM camp
     )
     SELECT dim, COUNT(*) n, COUNTIF(rev>0) nrev, COUNTIF(conv_pur>0) nconv, COUNTIF(conv>0) nconv_all, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv, SUM(conv_pur) conv_pur, SUM(rev) rev{vcols_out},
       {qcols}
+{isrc_out}
     FROM ck WHERE dim IS NOT NULL GROUP BY dim HAVING n >= 3
     ORDER BY cost DESC
     """
@@ -464,6 +470,11 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
                # 표본이 적으면 중앙값·분위수가 흔들린다. 화면에서 경고 표시를 붙이기 위한 플래그.
                "n_low": (r["n"] or 0) < N_MIN_RELIABLE,
                "imp": _num(imp), "clicks": _num(clk), "spend": money(cost), "conv": _num(conv)}
+        if r.get("isrc"):
+            row["src"] = r["isrc"]
+            row["src_label"] = {"rule": "추정 분류", "ops_ledger": None,
+                                "unresolved": "분류 대기",
+                                "regex_fallback": "추정 분류"}.get(r["isrc"], None)
         # 행 단위 '미측정' 판정 — 커버리지 게이트는 전체 합계 기준이라 개별 행의 구멍을 못 막는다.
         # 예) media=G·dim=industry 의 '게임' 은 전환커버리지 62.5% 로 게이트를 통과하는데 매출이 0이다.
         #     그대로 두면 'ROAS 0.00배' 가 찍히고, 읽는 사람은 '매출이 전혀 없었다' 로 읽는다.

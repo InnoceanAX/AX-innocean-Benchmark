@@ -56,9 +56,10 @@ def ensure_dataset(c):
         print(f"created dataset {ds_id}")
 
 
-def _media_case():
+def _media_case(alias="u"):
+    """매체 코드 변환. 별칭을 붙인다 — 업종 사전 조인 후 platform 이 양쪽에 생겨 모호해진다."""
     whens = " ".join([f"WHEN '{p}' THEN '{m}'" for p, m in PLATFORM_TO_MEDIA.items()])
-    return f"CASE platform {whens} ELSE NULL END"
+    return f"CASE {alias}.platform {whens} ELSE NULL END"
 
 
 def _plats():
@@ -125,6 +126,7 @@ def _conv_strict(c, view, alias="u"):
 
 
 _NOTES_CACHE = {}
+_CAUTION_SEEN = set()
 
 
 def _col_notes(c):
@@ -145,35 +147,71 @@ def _col_notes(c):
                              FROM `{PROJECT}.apac_kr_ops.dictionary_column_notes`""").result():
             out[(r["mart_name"], r["column_name"])] = (r["severity"], r["ui"])
     except Exception as e:
-        print(f"· [경고] 컬럼 사전 조회 실패(경고 없이 진행): {str(e)[:100]}")
+        print(f"🔴 [경고] 컬럼 사전(dictionary_column_notes)을 읽지 못했습니다 — "
+              f"이번 빌드는 do_not_use 차단 없이 진행합니다: {str(e)[:110]}")
+    else:
+        if not out:
+            print("🔴 [경고] 컬럼 사전이 비어 있습니다 — 이번 빌드는 do_not_use 차단 없이 진행합니다")
+        else:
+            n_block = sum(1 for v in out.values() if v[0] == "do_not_use")
+            print(f"· 컬럼 사전 {len(out)}건 로드(차단 대상 {n_block}건)")
     _NOTES_CACHE["v"] = out
     return out
 
 
 def _col_allowed(c, view, col):
-    """이 컬럼을 써도 되는가. do_not_use 면 (False, 대체컬럼) 을 돌려준다."""
+    """이 컬럼을 써도 되는가. do_not_use 면 (False, [대체후보…]) 를 돌려준다.
+
+    use_instead 계약(DB 확정): 쉼표 구분 목록, 각 항목은 `column` 또는 `dataset.table.column`.
+    첫 항목이 기본 대체값. 점이 있으면 «다른 테이블» 이라 컬럼 교체가 아니라 조인 대상 변경이다
+    → 자동 전환하지 않고 로그만 남긴다(사람이 판단할 일이다).
+    """
     sev, ui = _col_notes(c).get((view, col), ("", ""))
-    if sev == "do_not_use":
-        return False, (ui.split(",")[0].strip() if ui else None)
-    return True, None
+    if sev != "do_not_use":
+        # caution 은 막지 않지만 조용히 지나가지도 않는다 — 빌드 기록에 남긴다.
+        # (오늘 사고의 본질이 '경고가 로그에도 안 남아 아무도 모른 채 후퇴한 것'이었다)
+        if sev == "caution" and (view, col) not in _CAUTION_SEEN:
+            _CAUTION_SEEN.add((view, col))
+            hint = f" (권장: {ui.split(',')[0].strip()})" if ui else ""
+            print(f"· [사전·주의] {view}.{col} 사용{hint}")
+        return True, []
+    alts = [a.strip() for a in (ui or "").split(",") if a.strip()]
+    return False, alts
 
 
-def _pick_col(c, view, candidates, label):
+def _pick_col(c, view, candidates, label, _seen=None):
     """후보 중 '존재하고 사전이 막지 않은' 첫 컬럼. 없으면 None.
 
-    존재 여부만 보지 않는다 — do_not_use 로 등재된 컬럼은 건너뛰고,
-    use_instead 가 가리키는 컬럼이 실재하면 그쪽으로 옮겨탄다.
+    ★ 대체 컬럼도 다시 검증한다 — 사전이 가리키는 대체값이 그 자체로 do_not_use 일 수 있다.
+      실제로 DB 사전에 `revenue_local → revenue_krw` 가 있었는데 revenue_krw 가 do_not_use 였다
+      (2026-09-22, DB 가 1순위를 revenue_purchase_krw 로 정정). 경고가 경고를 무력화하는 경로다.
+      DB 가 「1순위는 절대 do_not_use 를 가리키지 않는다」를 불변식으로 지키겠다고 했지만,
+      소비 측이 그 불변식에 의존하면 깨졌을 때 조용히 틀린다. 그래서 여기서도 검증한다.
     """
+    _seen = _seen or set()
     for col in candidates:
+        if col in _seen:
+            continue
+        _seen.add(col)
         if not _has_col(c, view, col):
             continue
-        ok, alt = _col_allowed(c, view, col)
+        ok, alts = _col_allowed(c, view, col)
         if ok:
             return col
-        if alt and _has_col(c, view, alt):
-            print(f"· [사전] {view}.{col} 은 do_not_use → {alt} 로 대체({label})")
-            return alt
-        print(f"· [사전] {view}.{col} 은 do_not_use, 대체 컬럼 없음 → {label} 차단")
+        # 같은 테이블 안의 대체 후보만 자동 전환 대상
+        same_table = [a for a in alts if "." not in a]
+        cross_table = [a for a in alts if "." in a]
+        for a in cross_table:
+            print(f"· [사전] {view}.{col} 은 do_not_use. 대체 후보 {a} 는 다른 테이블이라 "
+                  f"자동 전환하지 않습니다 — 조인 대상 변경은 사람이 판단할 일입니다({label})")
+        if same_table:
+            picked = _pick_col(c, view, same_table, label, _seen)   # 대체값도 다시 검증
+            if picked:
+                print(f"· [사전] {view}.{col} 은 do_not_use → {picked} 로 대체({label})")
+                return picked
+            print(f"· [사전] {view}.{col} 의 대체 후보가 전부 막혔거나 없습니다 → {label} 차단")
+        else:
+            print(f"· [사전] {view}.{col} 은 do_not_use, 같은 테이블 내 대체 없음 → {label} 차단")
     return None
 
 
@@ -217,11 +255,24 @@ def build_campaign(c):
     """캠페인 × 월 grain 다차원 테이블. google 캠페인명은 raw에서 보강(P0 자동수정)."""
     # 보강된 캠페인명 텍스트 (google: raw, 그 외: v_perf_unified)
     name_expr = "COALESCE(NULLIF(u.campaign_name,''), g.nm, '')"
-    # DB 사전(advertiser_dim.industry → v_perf_unified.industry)이 오면 자동 전환된다.
-    _has_ind = _has_col(c, "v_perf_unified", "industry")
-    if _has_ind:
-        print("· v_perf_unified.industry 감지 → 사전 기반 업종 분류 사용(정규식은 폴백)")
-    ind = industry_expr(_has_ind, f"CONCAT(IFNULL(u.advertiser_name,''),' ',{name_expr})")
+    # 업종 — DB 사전 `apac_kr_ops.advertiser_industry` (platform × advertiser_id, 100% 매칭) 우선.
+    # 없으면 v_perf_unified.industry, 그것도 없으면 정규식 폴백.
+    # 2026-09-22 DB 신설(656행). 「기타」 54% → 24.4%. 크게 기여한 두 가지:
+    #   ① 현대 해외 법인 코드(HMB·HMPH·HMTH·HMCA 등)를 수송/항공으로
+    #   ② 보험 규칙을 자동차보다 '먼저' 걸리게 — 현대해상이 '현대'에 걸려 자동차로 잡히던 문제
+    ijoin, isrc = "", "CAST(NULL AS STRING)"
+    _fallback = f"CONCAT(IFNULL(u.advertiser_name,''),' ',{name_expr})"
+    if _table_exists(c, "apac_kr_ops", "advertiser_industry"):
+        ijoin = (f"LEFT JOIN `{PROJECT}.apac_kr_ops.advertiser_industry` ai "
+                 f"ON u.platform = ai.platform "
+                 f"AND CAST(u.advertiser_id AS STRING) = CAST(ai.advertiser_id AS STRING)")
+        ind = f"COALESCE(NULLIF(ai.industry,''), {industry_case_sql(_fallback)})"
+        # 'rule'(이름 기반 추정) vs 'ops_ledger'(운영팀 원장) — 화면에서 «추정 분류» 배지에 쓴다
+        isrc = "ANY_VALUE(IFNULL(ai.industry_source,'regex_fallback'))"
+        print("· apac_kr_ops.advertiser_industry 감지 → 사전 기반 업종 분류(정규식은 폴백)")
+    else:
+        _has_ind = _has_col(c, "v_perf_unified", "industry")
+        ind = industry_expr(_has_ind, _fallback)
     obj = objective_case_sql(name_expr)
     gmap = _gname_union(c)
     join = f"LEFT JOIN ({gmap}) g ON CAST(u.campaign_id AS STRING)=g.cid" if gmap else "LEFT JOIN (SELECT '' cid, '' nm) g ON FALSE"
@@ -275,6 +326,7 @@ def build_campaign(c):
       -- → '(미상)' 버킷으로 남겨 총계는 맞추고, 국가 축에서 눈에 보이게 한다.
       IFNULL(NULLIF(u.market,''),'(미상)') AS market,
       {ind} AS industry,
+      {isrc} AS industry_source,
       {obj} AS objective,
       u.brand AS brand,
       IFNULL(NULLIF(u.agency,''),'(미상)') AS agency,
@@ -295,6 +347,7 @@ def build_campaign(c):
       CURRENT_TIMESTAMP() AS _built_at
     FROM {SOURCE} u
     {join}
+    {ijoin}
     {cjoin}
     {vjoin}
     {mjoin}

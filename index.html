@@ -426,6 +426,15 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       return Number(r.n).toLocaleString()+(r.n_low
         ? ' <span class="nlow" title="비교군이 적어 중앙값·상위25%/10% 가 캠페인 한둘에 흔들릴 수 있습니다">표본적음</span>' : '');
     }
+    // 업종명 옆에 분류 출처 — 'rule'은 광고주명 기반 추정, 'unresolved'는 아직 분류 안 된 것.
+    // 운영팀 원장(ops_ledger)이 들어오면 배지가 자동으로 사라진다.
+    if(key==='name' && r.src_label){
+      var t = r.src==='unresolved'
+        ? '아직 업종이 분류되지 않은 광고주입니다. 내부 코드명이라 이름으로 판단이 안 되는 건이 포함돼 있습니다.'
+        : '광고주명 기반 추정 분류입니다. 운영팀 원장이 들어오면 확정값으로 바뀝니다.';
+      return String(r[key]==null?'':r[key])+
+        ' <span class="isrc isrc-'+r.src+'" title="'+t+'">'+r.src_label+'</span>';
+    }
     if(key==='imp')return (r.imp!=null?r.imp:(r.imps!=null?r.imps:'—'));
     var v=r[key];
     if(v==null||v===''){
@@ -2131,6 +2140,8 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
 .subnav span.arrow{color:var(--tm);font-size:12px}
 .subnav a{font-size:13px;color:var(--tm);cursor:pointer;text-decoration:none;padding:4px 0;border-bottom:2px solid transparent}
 .subnav a.on{color:#000;font-weight:700;border-bottom-color:#000}
+.isrc{display:inline-block;font-size:10px;padding:0 4px;margin-left:5px;border:1px solid currentColor;cursor:help;vertical-align:middle;font-weight:400}
+.isrc-rule{color:var(--tm)}.isrc-regex_fallback{color:var(--tm)}.isrc-unresolved{color:#B45309}
 .spr{display:inline-block;font-size:10px;padding:0 4px;margin-left:4px;border:1px solid currentColor;cursor:help;vertical-align:middle}
 .spr-caution{color:#B45309}.spr-wide{color:#B91C1C}
 .dltg{font-size:11px;color:#1F7A3D;margin-left:3px}
