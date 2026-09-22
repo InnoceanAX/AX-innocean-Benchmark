@@ -419,8 +419,34 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   function metricAvail(key){ if(!key||!window.BM_DATA)return false; var meta=BM_DATA.meta||{};
     var av=meta.avail_metrics; if(av) return av.indexOf(key)>=0;   // 백엔드가 매체별 커버리지로 산출한 가용 지표
     var f=_dataFields(); if(key==='imp')return !!(f.imp||f.imps); return !!f[key]; }   // 폴백
-  function cellVal(r,key){ if(key==='imp')return (r.imp!=null?r.imp:(r.imps!=null?r.imps:'—')); return (r[key]!=null?r[key]:'—'); }
-  function mLabel(k){ return k==='name'?dimLabel():(k==='period'?'기간':(METRIC_LBL[k]||k)); }
+  function cellVal(r,key){
+    // 표본수 — 비교군 캠페인 수. 적으면 중앙값·분위수가 한둘에 흔들리므로 배지를 붙인다.
+    if(key==='n'){
+      if(r.n==null) return '—';
+      return Number(r.n).toLocaleString()+(r.n_low
+        ? ' <span class="nlow" title="비교군이 적어 중앙값·상위25%/10% 가 캠페인 한둘에 흔들릴 수 있습니다">표본적음</span>' : '');
+    }
+    if(key==='imp')return (r.imp!=null?r.imp:(r.imps!=null?r.imps:'—'));
+    var v=r[key];
+    if(v==null||v===''){
+      // '0'이 아니라 '못 견줬다'로 그린다. 데이터에서 막아도 화면이 0 으로 되돌리면 무의미하다.
+      var na=r[key+'_na'];
+      if(na) return '<span class="nocmp" title="'+String(na).replace(/"/g,'&quot;')+'">견줄 수 없음</span>';
+      return '—';
+    }
+    // 기간 비교가 켜져 있으면 증감을 값 옆에 붙인다.
+    var d=r[key+'_d'];
+    if(d && d.pct!=null){
+      // 낮을수록 좋은 지표(CPM·CPC)는 '증가'가 나쁨 → 색을 뒤집는다
+      var good = d.lower_better ? (d.pct<0) : (d.pct>0);
+      var arrow = d.pct>0?'▲':(d.pct<0?'▼':'');
+      var cls = d.pct===0?'dlt0':(good?'dltg':'dltb');
+      var warn = d.n_shift?' <span class="nshift" title="비교군 수가 2배 이상 달라졌습니다 — 실제 변화가 아니라 모집단 변화일 수 있습니다">비교군 변동</span>':'';
+      v = v + ' <span class="'+cls+'" title="'+(d.prev_label||'')+'">'+arrow+Math.abs(d.pct).toFixed(1)+'%</span>'+warn;
+    }
+    return v;
+  }
+  function mLabel(k){ return k==='name'?dimLabel():(k==='n'?'표본수':(k==='period'?'기간':(METRIC_LBL[k]||k))); }
   // 매체별 기본 컬럼(원안 표시 지표). video↔비디오 전환 시 리셋.
   function defaultCols(which,isV){
     if(which==='sum') return isV?['imp','cpm','vtr','cpv','cr','spend']:['imp','cpm','ctr','cpc','spend'];
@@ -433,11 +459,12 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   }
 
   // 원안 업종별 Summary 표 — 지표추가(curSumCols)로 켠 컬럼만, 5분류 순서로 표시
+  // (기간 비교 모듈이 데이터를 덧붙인 뒤 다시 그릴 수 있도록 window 에 노출)
   function renderBench(){
     var tbl=document.querySelector('#pgBM .twrap table'); if(!tbl||!window.BM_DATA) return;
     var thead=tbl.querySelector('thead tr'), tbody=tbl.querySelector('tbody'); if(!thead||!tbody) return;
     ensureCols();
-    var keys=['name'].concat(METRIC_ORDER.filter(function(k){ return curSumCols.indexOf(k)>=0 && metricAvail(k); }));
+    var keys=['name','n'].concat(METRIC_ORDER.filter(function(k){ return curSumCols.indexOf(k)>=0 && metricAvail(k); }));
     thead.innerHTML=''; keys.forEach(function(k){ var th=document.createElement('th'); th.textContent=mLabel(k); thead.appendChild(th); });
     tbody.innerHTML='';
     (BM_DATA.benchmark||[]).forEach(function(r){
@@ -446,12 +473,13 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       tbody.appendChild(tr);
     });
   }
+  window.renderBench=function(){ return renderBench(); };
   // 월×차원 상세 — 기간·차원 고정 + 지표추가(curDetCols) 컬럼
   function renderDet(){
     if(!window.BM_DATA) return;
     var thead=document.getElementById('detHead'), tbody=document.getElementById('detBody'); if(!thead||!tbody) return;
     ensureCols();
-    var cols=['period','name'].concat(METRIC_ORDER.filter(function(k){ return curDetCols.indexOf(k)>=0 && metricAvail(k); }));
+    var cols=['period','name','n'].concat(METRIC_ORDER.filter(function(k){ return curDetCols.indexOf(k)>=0 && metricAvail(k); }));
     thead.innerHTML='';
     cols.forEach(function(k){ var th=document.createElement('th'); th.style.cursor='pointer';
       th.textContent=mLabel(k)+(detSort.k===k?(detSort.asc?' ▲':' ▼'):'');
@@ -499,7 +527,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   window.bmCSV=function(){
     if(!window.BM_DATA||!(BM_DATA.detail||[]).length){ if(window.toast)toast('내보낼 데이터가 없습니다.','ℹ'); return; }
     ensureCols();
-    var cols=['period','name'].concat(METRIC_ORDER.filter(function(k){ return curDetCols.indexOf(k)>=0 && metricAvail(k); }));
+    var cols=['period','name','n'].concat(METRIC_ORDER.filter(function(k){ return curDetCols.indexOf(k)>=0 && metricAvail(k); }));
     var head=cols.map(mLabel);
     var lines=[head.join(',')];
     (BM_DATA.detail||[]).forEach(function(r){ lines.push(cols.map(function(k){ var v=(cellVal(r,k)); v=(v==null?'':String(v)); if(v==='—')v=''; if(v.indexOf(',')>=0||v.indexOf('"')>=0)v='"'+v.split('"').join('""')+'"'; return v; }).join(',')); });
@@ -2092,6 +2120,15 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
 .subnav span.arrow{color:var(--tm);font-size:12px}
 .subnav a{font-size:13px;color:var(--tm);cursor:pointer;text-decoration:none;padding:4px 0;border-bottom:2px solid transparent}
 .subnav a.on{color:#000;font-weight:700;border-bottom-color:#000}
+.dltg{font-size:11px;color:#1F7A3D;margin-left:3px}
+.dltb{font-size:11px;color:#B91C1C;margin-left:3px}
+.dlt0{font-size:11px;color:var(--tm);margin-left:3px}
+.nshift{display:inline-block;font-size:10px;color:#B45309;border:1px solid currentColor;padding:0 3px;margin-left:3px;cursor:help}
+.cmpbar{display:flex;align-items:center;gap:10px;margin:0 0 12px;font-size:13px}
+.cmpbar select{font-size:13px;padding:5px 8px;border:1px solid var(--bdr);border-radius:0;background:#fff;font-family:inherit}
+.cmpbar .hint{font-size:11px;color:var(--tm)}
+.nlow{display:inline-block;font-size:10px;font-weight:700;color:#B45309;border:1px solid currentColor;padding:0 4px;margin-left:4px;vertical-align:middle}
+.nocmp{display:inline-block;font-size:11px;color:var(--tm);border-bottom:1px dotted var(--tm);cursor:help}
 .mtab.nas{position:relative}
 .mtab.nas::after{content:'NAS';font-size:9px;color:var(--ind);margin-left:4px;vertical-align:super}
 </style>
@@ -2099,6 +2136,9 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
 /* PPT 원안 반영 — 기존 벤치마크 화면의 매체 탭 확장 + '벤치마크 / 도달 시뮬레이터' 서브메뉴 */
 (function(){
   function el(id){ return document.getElementById(id); }
+  var API=(window.API_CONFIG&&window.API_CONFIG.baseUrl)||'/api/v1';
+  function qs(o){ return Object.keys(o).filter(function(k){return o[k]!==''&&o[k]!=null;})
+    .map(function(k){return k+'='+encodeURIComponent(o[k]);}).join('&'); }
   var NAS_TABS=['넷플릭스','티빙','토스'];
 
   /* 매체 탭: 틱톡(API 수집 있음) + 디플랜 NAS 매체.
@@ -2156,6 +2196,60 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
 
   // 기존 tidyMediaTabs() 가 언제 도는지 알 수 없어(데이터 로드 뒤에도 돈다) 타이머로는 못 따라잡는다.
   // .mtabs 를 관찰해 순서가 흐트러질 때마다 다시 맞춘다. 재정렬 중에는 관찰을 꺼 루프를 막는다.
+  /* ── 기간 비교(전기·전년) ──────────────────────────────────────
+     CPM·CPC 는 계절성이 커서 한 기간만 보면 '지금 어디쯤인가'를 잘못 읽는다.
+     비교군 수(n)가 크게 달라진 항목에는 '비교군 변동' 배지를 붙인다 —
+     증감이 실제 변화가 아니라 모집단 변화일 수 있기 때문이다. */
+  var CMP={mode:''};
+  function bmState2(){
+    var S=window.STATE||{};
+    return {media:S.media||'G', dim:(S.dim||'industry'),
+            date_from:S.date_from||S.from||'2026-01-01',
+            date_to:S.date_to||S.to||'2026-12-31',
+            market:S.market||'', objective:S.objective||'', brand:S.brand||'',
+            industry:S.industry||''};
+  }
+  function mountCmpBar(){
+    var pg=document.getElementById('pgBM'); if(!pg || pg.querySelector('.cmpbar')) return;
+    var tw=pg.querySelector('.twrap'); if(!tw) return;
+    var bar=document.createElement('div'); bar.className='cmpbar';
+    bar.innerHTML='<span>기간 비교</span>'+
+      '<select id="cmpSel"><option value="">사용 안 함</option>'+
+      '<option value="prev">전기 대비</option><option value="yoy">전년 동기 대비</option></select>'+
+      '<span class="hint" id="cmpHint">계절성 확인용. 비교군 수가 달라지면 증감이 뜻을 잃으므로 함께 표기합니다.</span>';
+    tw.parentNode.insertBefore(bar, tw);
+    document.getElementById('cmpSel').onchange=function(){ CMP.mode=this.value; applyCompare(); };
+  }
+  function clearCompare(){
+    var rows=(window.BM_DATA&&BM_DATA.benchmark)||[];
+    rows.forEach(function(r){ Object.keys(r).forEach(function(k){ if(/_d$/.test(k)) delete r[k]; }); });
+  }
+  function applyCompare(){
+    var hint=document.getElementById('cmpHint');
+    if(!CMP.mode){ clearCompare(); if(window.renderBench)window.renderBench();
+      if(hint)hint.textContent='계절성 확인용. 비교군 수가 달라지면 증감이 뜻을 잃으므로 함께 표기합니다.'; return; }
+    if(hint) hint.textContent='불러오는 중…';
+    var st=bmState2();
+    fetch(API+'/compare?'+qs(Object.assign({mode:CMP.mode},st)))
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(d.error){ if(hint)hint.textContent='비교 실패: '+d.error; return; }
+        var rows=(window.BM_DATA&&BM_DATA.benchmark)||[];
+        clearCompare();
+        rows.forEach(function(r){
+          var c=d.rows[r.name]; if(!c) return;
+          ['cpm','cpc','ctr','cvr','roas'].forEach(function(k){
+            var m=c[k]; if(!m || m.pct==null) return;
+            r[k+'_d']={pct:m.pct, lower_better:m.lower_better, n_shift:c.n_shift,
+                       prev_label:'이전 기간 '+d.compare.from+'~'+d.compare.to+' · 비교군 '+c.n_prev+'개'};
+          });
+        });
+        if(window.renderBench) window.renderBench();
+        if(hint) hint.textContent=(CMP.mode==='yoy'?'전년 동기':'전기')+' '+d.compare.from+'~'+d.compare.to+
+          ' 대비 · 비교군 수가 2배 이상 달라진 항목에는 «비교군 변동» 표시';
+      }).catch(function(e){ if(hint)hint.textContent='비교 실패'; });
+  }
+
   var reorderObs=null;
   function watchTabs(){
     var tabs=document.querySelector('#pgBM .mtabs'); if(!tabs || reorderObs) return;
@@ -2170,7 +2264,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   window.goPg=function(p){
     _go(p);
     if(p==='B') [200,700,1600].forEach(function(ms){
-      setTimeout(function(){ extendMediaTabs(); mountSubnav('pgBM','B','.mtabs'); watchTabs(); },ms); });
+      setTimeout(function(){ extendMediaTabs(); mountSubnav('pgBM','B','.mtabs'); watchTabs(); mountCmpBar(); },ms); });
     if(p==='R') setTimeout(function(){ mountSubnav('pgRS','R','h2'); },60);
   };
 })();

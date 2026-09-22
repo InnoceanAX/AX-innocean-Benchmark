@@ -111,6 +111,22 @@ def percentile(metric: str = "cpm", value: float = 0.0, media: str = "G",
         return JSONResponse({"available": False, "error": str(e)}, status_code=500)
 
 
+@app.get("/api/v1/compare")
+def compare(media: str = "G", dim: str = "industry", mode: str = "prev",
+            date_from: str = "2025-06-01", date_to: str = "2026-12-31",
+            market: str = "", objective: str = "", brand: str = "",
+            industry: str = "", agency: str = "", channel: str = ""):
+    """기간 비교 — 전기(prev) / 전년 동기(yoy) 대비 증감 + 각 기간의 비교군 수."""
+    try:
+        return JSONResponse(bq.period_compare(
+            media=media, dim=dim, date_from=date_from, date_to=date_to,
+            mode=("yoy" if mode == "yoy" else "prev"),
+            market=market, objective=objective, brand=brand, industry=industry,
+            agency=agency, channel=channel))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e), "rows": {}}, status_code=500)
+
+
 # ── 디플랜 NAS (소재 grain) ─────────────────────────────────────────
 # ⚠️ 별도 엔드포인트로 분리. v_perf_unified 계열과 같은 캠페인이 양쪽에 있어 합산 금지.
 #    프론트도 이 응답을 /api/v1/benchmark 결과와 섞어 더하지 않는다.

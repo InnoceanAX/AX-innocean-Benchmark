@@ -686,14 +686,24 @@ def percentile_rank(metric="cpm", value=0.0, media="G", date_from="2025-01-01",
     lower_better = KPI_LOWER_BETTER.get(metric, False)
     # 분모는 '그 지표가 계산되는 캠페인'만 — 0/NULL 캠페인이 섞이면 순위가 부풀려진다.
     better = "<" if lower_better else ">"
+    # 중앙값 95% 신뢰구간 — 순서통계량 기반(분포 가정 없음).
+    # 표본 n 에서 중앙값의 백분위 위치는 50 ± 1.96*50/sqrt(n) 안에 들어간다.
+    #   n=20  → p28~p72 (매우 넓다)   n=100 → p40~p60   n=500 → p46~p54
+    # 이것이 N_MIN_RELIABLE 과 커버리지 게이트의 '관행값'을 대체할 실제 근거다.
     q = f"""
-      WITH b AS (SELECT {expr} v FROM {TBL} WHERE {where})
-      SELECT COUNT(*) n,
-             COUNTIF(v {better} @val) n_better,
+      WITH b AS (SELECT {expr} v FROM {TBL} WHERE {where}),
+           c AS (SELECT v FROM b WHERE v IS NOT NULL AND NOT IS_NAN(v) AND v > 0),
+           k AS (SELECT COUNT(*) n FROM c)
+      SELECT (SELECT n FROM k) n,
+             (SELECT COUNTIF(v {better} @val) FROM c) n_better,
              APPROX_QUANTILES(v,100)[OFFSET(50)] p50,
              APPROX_QUANTILES(v,100)[OFFSET({75 if lower_better else 25})] p_top25,
-             APPROX_QUANTILES(v,100)[OFFSET({90 if lower_better else 10})] p_top10
-      FROM b WHERE v IS NOT NULL AND NOT IS_NAN(v) AND v > 0
+             APPROX_QUANTILES(v,100)[OFFSET({90 if lower_better else 10})] p_top10,
+             APPROX_QUANTILES(v,100)[OFFSET(
+               GREATEST(1, CAST(ROUND(50 - 98/SQRT((SELECT n FROM k))) AS INT64)))] ci_lo,
+             APPROX_QUANTILES(v,100)[OFFSET(
+               LEAST(99, CAST(ROUND(50 + 98/SQRT((SELECT n FROM k))) AS INT64)))] ci_hi
+      FROM c
     """
     params = list(params) + [bigquery.ScalarQueryParameter("val", "FLOAT64", value)]
     r = list(cl.query(q, job_config=bigquery.QueryJobConfig(query_parameters=params)).result())[0]
@@ -719,11 +729,94 @@ def percentile_rank(metric="cpm", value=0.0, media="G", date_from="2025-01-01",
         "top_pct": top_pct, "grade": grade, "grade_label": grade_label,
         "lower_better": lower_better,
         "median": r["p50"], "top25": r["p_top25"], "top10": r["p_top10"],
+        # 중앙값이 표본 때문에 얼마나 흔들리는지 — '이 아래는 읽지 말라'를 숫자로 보여준다
+        "median_ci": {"lo": r["ci_lo"], "hi": r["ci_hi"],
+                      "pct_band": round(2 * 98 / (n ** 0.5), 1),
+                      "wobble_pct": (round(abs(r["ci_hi"] - r["ci_lo"]) / r["p50"] * 100, 1)
+                                     if r["p50"] else None),
+                      "method": "순서통계량 95% 신뢰구간 (분포 가정 없음)"},
         "note": ("표본이 적어 순위가 흔들릴 수 있습니다." if n < N_MIN_RELIABLE
                  else None),
         "media": media, "media_name": MEDIA_NAME.get(media, media),
         "date_from": date_from, "date_to": date_to,
     }
+
+
+def _shift_ym(ym, months):
+    y, m = int(ym[:4]), int(ym[5:7])
+    t = (y * 12 + (m - 1)) - months
+    return f"{t // 12:04d}-{t % 12 + 1:02d}"
+
+
+def period_compare(media="G", dim="industry", date_from="2025-01-01", date_to="2026-12-31",
+                   mode="prev", **filters):
+    """기간 간 비교 — 전기(prev) 또는 전년 동기(yoy) 대비 증감.
+
+    CPM·CPC 는 계절성이 커서 한 기간만 보면 '지금 어디쯤인가'를 잘못 읽는다.
+    (A1 이 14_STALE_MARTS 에서 지적한 그 위험 — 6월 값으로 9월을 판단하는 것.)
+
+    ★ 비교군 수(n)를 함께 낸다. 비교군이 달라지면 증감이 뜻을 잃기 때문이다.
+      예) 전기 n=12 → 이번 n=480 이면 'CPM 40% 상승'은 모집단이 바뀐 결과일 수 있다.
+    """
+    if dim not in DIMS:
+        dim = "industry"
+    src = SEGMENT_TBL.get(dim, TBL)
+    p0, p1 = date_from[:7], date_to[:7]
+    span = (int(p1[:4]) * 12 + int(p1[5:7])) - (int(p0[:4]) * 12 + int(p0[5:7])) + 1
+    back = 12 if mode == "yoy" else span
+    q0, q1 = _shift_ym(p0, back), _shift_ym(p1, back)
+    if src != TBL:
+        filters = {k: v for k, v in filters.items() if k not in CAMPAIGN_ONLY_FILTERS}
+    cl = _client()
+
+    def snap(a, b):
+        where, params = _filter_clauses(media, a, b, filters)
+        rows = list(cl.query(f"""
+          WITH camp AS (
+            SELECT {dim} AS dim, campaign_id, SUM(imp) imp, SUM(clk) clk,
+                   SUM(cost) cost, SUM(conv_pur) conv_pur, SUM(rev) rev
+            FROM {src} WHERE {where}
+            GROUP BY dim, campaign_id HAVING imp >= 1000 AND clk > 0
+          )
+          SELECT dim, COUNT(*) n, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost,
+                 SUM(conv_pur) conv_pur, SUM(rev) rev,
+                 COUNTIF(rev>0) nrev, COUNTIF(conv_pur>0) nconv
+          FROM camp WHERE dim IS NOT NULL GROUP BY dim
+        """, job_config=bigquery.QueryJobConfig(query_parameters=list(params))).result())
+        out = {}
+        for r in rows:
+            imp, clk, cost = (r["imp"] or 0), (r["clk"] or 0), (r["cost"] or 0.0)
+            n = r["n"] or 0
+            m = {"n": n,
+                 "cpm": (cost / imp * 1000) if imp else None,
+                 "cpc": (cost / clk) if clk else None,
+                 "ctr": (clk / imp * 100) if imp else None}
+            # 커버리지가 얕으면 증감을 내지 않는다 — 본 응답과 같은 규칙
+            m["cvr"] = ((r["conv_pur"] or 0) / clk * 100) if (clk and n and (r["nconv"] or 0) / n >= COVER_MIN_ROW) else None
+            m["roas"] = ((r["rev"] or 0) / cost) if (cost and n and (r["nrev"] or 0) / n >= COVER_MIN_ROW) else None
+            out[r["dim"]] = m
+        return out
+
+    cur, prev = snap(p0, p1), snap(q0, q1)
+    res = {}
+    for code, c in cur.items():
+        pv = prev.get(code)
+        row = {"n": c["n"], "n_prev": (pv or {}).get("n", 0)}
+        for k in ("cpm", "cpc", "ctr", "cvr", "roas"):
+            a, bq_ = c.get(k), (pv or {}).get(k)
+            row[k] = {"cur": a, "prev": bq_,
+                      "pct": (round((a - bq_) / abs(bq_) * 100, 1) if (a is not None and bq_) else None),
+                      "lower_better": KPI_LOWER_BETTER.get(k, False)}
+        # 비교군이 크게 달라지면 증감 해석이 위험하다 → 경고 플래그
+        n_now, n_bef = c["n"], row["n_prev"]
+        row["n_shift"] = (n_bef == 0 or n_now == 0 or
+                          max(n_now, n_bef) / max(1, min(n_now, n_bef)) >= 2.0)
+        res[code] = row
+    return {"mode": mode, "dim": dim, "dim_label": DIMS[dim],
+            "current": {"from": p0, "to": p1}, "compare": {"from": q0, "to": q1},
+            "rows": {dim_name(dim, k): v for k, v in res.items()},
+            "note": ("비교군 수가 2배 이상 달라진 항목은 n_shift=true 입니다 — "
+                     "증감이 실제 변화가 아니라 모집단 변화일 수 있습니다.")}
 
 
 def get_media_summary(date_from="2025-01-01", date_to="2026-12-31", currency="KRW"):
