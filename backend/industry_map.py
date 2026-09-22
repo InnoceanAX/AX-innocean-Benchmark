@@ -125,17 +125,34 @@ EXTENDED_INDUSTRIES = [
 #   상위 150 광고주가 광고비의 95.3% 를 덮으므로 매핑은 150개 선에서 끊는 것이 합리적.
 
 
-def industry_expr(has_dim_column: bool, text_expr: str, alias: str = "u") -> str:
+def industry_expr(has_dim_column: bool, text_expr: str, alias: str = "u",
+                  brand_expr: str = "") -> str:
     """업종 표현식 — **DB 사전(advertiser_dim.industry)이 있으면 그것을 쓴다.**
 
     정규식은 광고주가 늘 때마다 코드를 고쳐야 하고, 실제로 2026-06 부터 3개월간
     방치되면서 '기타'가 전체 행의 54.3%·광고비의 32.5%까지 커졌다.
     DB 가 v_perf_unified 에 industry 를 노출하면(승인 완료, 작업 대기) 여기서 자동 전환되고
     정규식은 그 값이 비었을 때만 쓰이는 폴백으로 내려간다.
+
+    ★ 폴백의 «입력» 순서 — 광고주/브랜드가 먼저, 캠페인명은 최후 (2026-09-22)
+      업종은 «누가 광고하는가» 의 속성이지 «그 캠페인을 뭐라 불렀는가» 가 아니다.
+      캠페인명을 먼저 읽으면 이런 일이 난다(실측):
+        `hmb | creta | lead | conversion | whatsapp`  ← 현대차 브라질 리드 캠페인
+        → 'app' 토큰이 whats«app» 에 걸려 업종이 '앱/사이트' 로 잡힘. 자동차 ₩6.2억이
+          앱 업종 벤치마크의 분모로 들어가 CPM·CPC 를 같이 흔들었다.
+      DB(d9) 가 정확히 이 함정을 예고했다: "구분자 변형과 붙여쓰기는 같은 함정의 양면."
+      토큰에 경계를 덧대는 대신 «틀릴 수 있는 입력» 을 뒤로 뺐다 — 정규식을 또 만들지
+      않는다는 원칙(위 🔴)을 지키면서 같은 오분류를 막는 방법이다.
+      실측 효과: 갈리는 ₩11.4억 전부가 수송/항공으로 교정(기타였던 ₩4.9억 포함),
+      브랜드 기준이 더 뭉뚱그려지는 사례는 0건.
     """
+    order = []
     if has_dim_column:
-        return f"COALESCE(NULLIF({alias}.industry,''), {industry_case_sql(text_expr)})"
-    return industry_case_sql(text_expr)
+        order.append(f"NULLIF({alias}.industry,'')")
+    if brand_expr:
+        order.append(f"NULLIF({industry_case_sql(brand_expr)},'기타')")
+    order.append(industry_case_sql(text_expr))
+    return f"COALESCE({', '.join(order)})"
 
 
 def industry_case_sql(text_expr: str) -> str:

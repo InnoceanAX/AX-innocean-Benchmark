@@ -19,7 +19,11 @@ INDEX = os.path.join(ROOT, "index.html")
 app = FastAPI(title="INNOCEAN Benchmark API", version="0.1.0")
 
 
+# ⚠️ `/healthz` 는 Google 프런트엔드가 가로채 컨테이너까지 오지 않는다(404 HTML 반환).
+#    라우트는 등록돼 있는데 밖에서는 죽어 보여서 배포 검증에 상시 오탐이 났다.
+#    그래서 실제 확인용 경로는 /api/v1/healthz 다 — deploy.py 도 이쪽을 본다.
 @app.get("/healthz")
+@app.get("/api/v1/healthz")
 def healthz():
     return {"ok": True}
 

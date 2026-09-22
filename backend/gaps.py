@@ -375,6 +375,31 @@ def snapshot_responses(c=None, keys=None):
         return -1
 
 
+_SIG_RE = __import__("re").compile(r"^\s*\[(relay:\s*)?([A-Za-z0-9_]+)\s*(?:→|->)")
+
+
+def _sign(detail: str) -> str:
+    """본문 머리의 «작성자» 표기를 실제 발신자(AGENT_ID)와 맞춘다.
+
+    ★ 2026-09-22 사고: 내가 쓴 글에 관례를 베껴 `[0f→d9]` 를 달았고,
+      d9 가 requested_by 필드가 아니라 그 머리글을 믿고 회신해 공을 엉뚱한 세션에 돌렸다.
+      d9 가 남긴 교훈: "작성자는 구조화된 필드로 확인한다. 본문과 다르면 필드가 맞다."
+      그 규칙을 상대에게만 맡기지 않고 발신 쪽에서도 틀릴 수 없게 만든다 —
+      본문이 남의 이름을 달고 있으면 여기서 바로잡고, 중계는 [relay: X→Y] 로 남긴다.
+    """
+    m = _SIG_RE.match(detail or "")
+    if m and m.group(1):          # 중계 표기는 의도된 것이므로 그대로 둔다
+        return detail
+    if m and m.group(2) != AGENT_ID:
+        fixed = _SIG_RE.sub(f"[{AGENT_ID}→", detail, count=1)
+        print(f"· [서명 교정] 본문이 '{m.group(2)}' 로 서명돼 있어 실제 발신자 "
+              f"'{AGENT_ID}' 로 고쳤습니다 (중계라면 '[relay: {m.group(2)}→...]' 로 쓰십시오)")
+        return fixed
+    if not m:
+        return f"[{AGENT_ID}] " + (detail or "")
+    return detail
+
+
 def ask_db(c=None, asks=None):
     """자유질의를 같은 큐에 발행(멱등) + 이미 도착한 회신 출력. (발행건수, 회신건수) 반환.
 
@@ -389,6 +414,7 @@ def ask_db(c=None, asks=None):
     try:
         c.query(DDL).result()
         for platform, metric, label, detail in asks:
+            detail = _sign(detail)
             dk = f"{AGENT_ID}|{platform}|{metric}"
             job = bigquery.QueryJobConfig(query_parameters=[
                 bigquery.ScalarQueryParameter(n, "STRING", v) for n, v in

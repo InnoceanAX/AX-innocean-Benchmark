@@ -29,7 +29,7 @@ RUNTIME_SA = f"perf-data-analyst@{PROJECT}.iam.gserviceaccount.com"
 SERVICE_SA = f"benchmark-app@{PROJECT}.iam.gserviceaccount.com"
 REPO = "cloud-run-source-deploy"                           # 기존 AR repo 재사용
 IMAGE = "innocean-benchmark"
-TAG = "backend-v76"
+TAG = "backend-v80"
 IMG_URI = f"{REGION}-docker.pkg.dev/{PROJECT}/{REPO}/{IMAGE}:{TAG}"
 STAGE_BUCKET = "innocean-perf-apac-kr-cloudbuild-source"
 SRC_OBJECT = "benchmark/source.tar.gz"
@@ -212,7 +212,7 @@ def verify():
         except Exception as e:
             return "ERR", str(e)[:120]
     print("\n=== 라이브 검증:", uri, "===")
-    print(" /healthz:", hit("/healthz"))
+    print(" /healthz:", hit("/api/v1/healthz"))
     print(" /:", hit("/")[0], "(index)")
     print(" /api/v1/benchmark?media=M:", hit("/api/v1/benchmark?media=M&date_from=2025-06-01&date_to=2026-06-08")[0])
     return uri

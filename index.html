@@ -419,6 +419,18 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   function metricAvail(key){ if(!key||!window.BM_DATA)return false; var meta=BM_DATA.meta||{};
     var av=meta.avail_metrics; if(av) return av.indexOf(key)>=0;   // 백엔드가 매체별 커버리지로 산출한 가용 지표
     var f=_dataFields(); if(key==='imp')return !!(f.imp||f.imps); return !!f[key]; }   // 폴백
+  // 차원 값의 «표시 이름» — 값 자체는 건드리지 않고 화면에서만 바꾼다.
+  // DB(d9) 판정 2026-09-22:
+  //   brand='other'  는 «분류 실패» 가 아니라 «브랜드 축 밖» 이다. brand 는 우리가 이름 붙인
+  //     소수 계정만 식별하는 필드고 뷰 정의의 마지막이 ELSE 'other' 다(광고주 490개·₩558.9억).
+  //     현대해상·현대백화점은 현대차그룹이 아닌 별개 회사라 여기 있는 게 «맞는 답» 이다.
+  //   ⚠️ 그래서 «미상» 배지를 brand='other' 에 붙이면 안 된다 — 정체가 분명한 광고주
+  //     ₩351억(금융/보험·유통/쇼핑·법률/공공 등)이 «모름» 으로 나간다.
+  //     미상의 기준은 brand 가 아니라 industry='기타' 다(광고주 307·₩207.7억).
+  function dimDisp(dim, v){
+    if(dim==='brand' && v==='other') return '기타 브랜드';
+    return v;
+  }
   function cellVal(r,key){
     // 표본수 — 비교군 캠페인 수. 적으면 중앙값·분위수가 한둘에 흔들리므로 배지를 붙인다.
     if(key==='n'){
@@ -428,12 +440,20 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     }
     // 업종명 옆에 분류 출처 — 'rule'은 광고주명 기반 추정, 'unresolved'는 아직 분류 안 된 것.
     // 운영팀 원장(ops_ledger)이 들어오면 배지가 자동으로 사라진다.
-    if(key==='name' && r.src_label){
-      var t = r.src==='unresolved'
-        ? '아직 업종이 분류되지 않은 광고주입니다. 내부 코드명이라 이름으로 판단이 안 되는 건이 포함돼 있습니다.'
-        : '광고주명 기반 추정 분류입니다. 운영팀 원장이 들어오면 확정값으로 바뀝니다.';
-      return String(r[key]==null?'':r[key])+
-        ' <span class="isrc isrc-'+r.src+'" title="'+t+'">'+r.src_label+'</span>';
+    if(key==='name'){
+      var _v = dimDisp(curDim, String(r[key]==null?'':r[key]));
+      // 업종 '기타' = 아직 분류되지 않은 것(DB 사전 미등재). 브랜드 'other' 와 달리 진짜 미상이다.
+      if(curDim==='industry' && r[key]==='기타'){
+        _v += ' <span class="isrc isrc-unresolved" title="업종이 아직 분류되지 않은 광고주들입니다.'
+            + ' 사전(advertiser_industry)에 등재되면 해당 업종으로 옮겨갑니다.">분류 대기</span>';
+      }
+      if(r.src_label){
+        var t = r.src==='unresolved'
+          ? '아직 업종이 분류되지 않은 광고주입니다. 내부 코드명이라 이름으로 판단이 안 되는 건이 포함돼 있습니다.'
+          : '광고주명 기반 추정 분류입니다. 운영팀 원장이 들어오면 확정값으로 바뀝니다.';
+        _v += ' <span class="isrc isrc-'+r.src+'" title="'+t+'">'+r.src_label+'</span>';
+      }
+      return _v;
     }
     if(key==='imp')return (r.imp!=null?r.imp:(r.imps!=null?r.imps:'—'));
     var v=r[key];
@@ -2075,6 +2095,25 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   }
   // 원천 뷰 경고 — 커버리지 게이트를 통과하더라도 화면에 같이 띄운다.
   // age·gender 는 caution 이라 막히지 않는데 커버리지가 임계와 1.6%p 차이다(8.4% vs 10%).
+  // 브랜드 축의 «기준» 을 화면이 스스로 밝힌다.
+  // 같은 그룹이라도 brand 값이 다르면 다른 행이다 — 현대차와 현대해상은 업종부터 다르다.
+  // 기준을 안 적으면 다음 사람이 «현대가 왜 둘이냐» 를 결함으로 읽는다(DB d9 지적, 2026-09-22).
+  function mountBrandBasis(){
+    var pg=document.getElementById('pgBM'); if(!pg) return;
+    var b=document.getElementById('bmBrandBasis');
+    if(curDim!=='brand'){ if(b) b.remove(); return; }
+    if(!b){
+      b=document.createElement('div'); b.id='bmBrandBasis'; b.className='note';
+      var tw=pg.querySelector('.twrap'); if(!tw) return;
+      tw.parentNode.insertBefore(b, tw);
+    }
+    b.innerHTML='<b>브랜드는 광고주 원장의 brand 값 기준입니다</b>'+
+      '<p style="margin:4px 0 0">같은 그룹 계열사라도 brand 값이 다르면 다른 행으로 섭니다. '+
+      '업종도 각자 따릅니다 — 자동차 계열과 보험 계열이 한 줄로 합쳐지지 않습니다. '+
+      '<b>그룹 단위 집계는 현재 제공되지 않습니다</b> — 업종 축으로 봐도 자동차 계열과 '+
+      '보험 계열은 여전히 갈립니다. 데이터에 그룹 축 자체가 없습니다.</p>';
+  }
+
   function mountCaveats(meta){
     var pg=document.getElementById('pgBM'); if(!pg) return;
     var box=document.getElementById('bmCaveat');
@@ -2102,6 +2141,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       if(!d||!d.meta) return;
       var m=d.meta, rows=(d.benchmark||[]).filter(function(r){return r.dim!=='TOTAL';});
       mountCaveats(m);
+      mountBrandBasis();
       var mx=Math.max.apply(null,rows.map(function(r){return r.n||0;}).concat([1]));
       el('bmRelList').innerHTML=
         (m.freshness?'<div style="font-size:11px;color:var(--tm);margin-bottom:10px">마트 최신 집행월 <b style="color:#000">'+

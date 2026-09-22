@@ -266,13 +266,19 @@ def build_campaign(c):
         ijoin = (f"LEFT JOIN `{PROJECT}.apac_kr_ops.advertiser_industry` ai "
                  f"ON u.platform = ai.platform "
                  f"AND CAST(u.advertiser_id AS STRING) = CAST(ai.advertiser_id AS STRING)")
-        ind = f"COALESCE(NULLIF(ai.industry,''), {industry_case_sql(_fallback)})"
+        # 폴백 순서: 사전 → «광고주/브랜드만» → 캠페인명.
+        # 캠페인명을 먼저 보면 whats«app» 이 'app' 토큰에 걸려 현대차가 '앱/사이트'가 된다
+        # (실측 ₩6.2억). 자세한 근거는 industry_map.industry_expr() 주석 참조.
+        _brand_only = "LOWER(CONCAT(IFNULL(u.advertiser_name,''),' ',IFNULL(u.brand,'')))"
+        ind = (f"COALESCE(NULLIF(ai.industry,''), "
+               f"NULLIF({industry_case_sql(_brand_only)},'기타'), "
+               f"{industry_case_sql(_fallback)})")
         # 'rule'(이름 기반 추정) vs 'ops_ledger'(운영팀 원장) — 화면에서 «추정 분류» 배지에 쓴다
         isrc = "ANY_VALUE(IFNULL(ai.industry_source,'regex_fallback'))"
         print("· apac_kr_ops.advertiser_industry 감지 → 사전 기반 업종 분류(정규식은 폴백)")
     else:
         _has_ind = _has_col(c, "v_perf_unified", "industry")
-        ind = industry_expr(_has_ind, _fallback)
+        ind = industry_expr(_has_ind, _fallback, brand_expr="LOWER(CONCAT(IFNULL(u.advertiser_name,''),' ',IFNULL(u.brand,'')))")
     # 캠페인 목표 — DB 사전 v_perf_unified.objective_layer 우선(2026-09-22 전 매체 확대, 집행 98.4%).
     # ★ 벤치마크에 중요한 이유: 인지(awareness) 캠페인과 리드(lead) 캠페인을 같은 표에 놓으면
     #   CPA·ROAS 가 목적이 달라서 벌어진 것을 성과 차이로 읽는다. 같은 목표끼리 견줘야 한다.
@@ -398,7 +404,8 @@ def build_segment(c, dim, view, col):
         return False
     dsrc = f"`{PROJECT}.apac_kr_unified.{view}`"
     name_expr = "COALESCE(g.nm,'')"
-    ind = industry_expr(_has_col(c, view, 'industry'), name_expr)
+    ind = industry_expr(_has_col(c, view, 'industry'), name_expr,
+                        brand_expr=_brand_expr(c, view))
     obj = objective_case_sql(name_expr)
     gmap = _gname_union(c)
     join = (f"LEFT JOIN ({gmap}) g ON CAST(u.campaign_id AS STRING)=g.cid"
@@ -434,7 +441,8 @@ def build_video(c):
         return False
     dsrc = f"`{PROJECT}.apac_kr_unified.{view}`"
     name_expr = "COALESCE(g.nm,'')"
-    ind = industry_expr(_has_col(c, view, 'industry'), name_expr)
+    ind = industry_expr(_has_col(c, view, 'industry'), name_expr,
+                        brand_expr=_brand_expr(c, view))
     obj = objective_case_sql(name_expr)
     gmap = _gname_union(c)
     join = (f"LEFT JOIN ({gmap}) g ON CAST(u.campaign_id AS STRING)=g.cid"
@@ -674,6 +682,54 @@ def check_upstream_freshness(c):
         print(f"· [경고] 업스트림 신선도 확인 스킵: {str(e)[:120]}")
 
 
+def _brand_expr(c, view, alias="u"):
+    """업종 폴백이 먼저 볼 «광고주/브랜드» 텍스트. 없으면 빈 문자열 → 폴백은 캠페인명만 본다."""
+    parts = [f"IFNULL({alias}.{col},'')" for col in ("advertiser_name", "brand")
+             if _has_col(c, view, col)]
+    if not parts:
+        return ""
+    return "LOWER(CONCAT(" + ", ' ', ".join(parts) + "))"
+
+
+def report_fallback_usage(c):
+    """정규식 폴백이 실제로 도는 행이 있는지 알린다.
+
+    ★ 왜 폴백을 «고치지» 않고 «알리기» 만 하는가 —
+      DB 지적: "정규식을 사전으로 옮기자는 게 요지인데 옮기면서 또 정규식을 만들면
+      3개월 뒤 같은 대화를 한다." 폴백에 손대면 유지보수 대상이 생기고, 그러면
+      사전이 늦어도 아프지 않아서 결국 사전이 안 온다.
+      대신 폴백이 «도는 순간» 을 드러낸다 — 그게 사전에 빠진 광고주가 생겼다는 신호다.
+
+    ⚠️ 내 폴백 토큰에도 알려진 함정이 있다(2026-09-22 DB 가 양쪽에서 겪은 것):
+      ' air' · ' game' · ' 앱'  앞뒤 공백을 요구해 붙여쓴 이름을 놓친다(YouTube·Awareness 류)
+      'kia' · 'app' · 'hmb'     짧은 약어라 부분매칭 오탐이 난다(Nokia·happy 류)
+      사전이 덮는 동안은 드러나지 않지만, 폴백이 도는 행이 생기면 이 함정이 같이 산다.
+    """
+    tbl = f"`{PROJECT}.{MART_DS}.bm_campaign_monthly`"
+    try:
+        r = list(c.query(f"""
+            SELECT COUNTIF(industry_source='regex_fallback') ind_fb,
+                   COUNTIF(objective_source='regex_fallback') obj_fb,
+                   ROUND(SUM(IF(industry_source='regex_fallback', cost, 0))) ind_cost,
+                   ROUND(SUM(IF(objective_source='regex_fallback', cost, 0))) obj_cost,
+                   COUNT(*) n
+            FROM {tbl}""").result())[0]
+    except Exception as e:
+        print(f"· [경고] 폴백 사용량 확인 스킵: {str(e)[:100]}")
+        return
+    if r["ind_fb"] or r["obj_fb"]:
+        print(f"· [주의] 정규식 폴백이 돌고 있습니다 — 사전에 빠진 대상이 있습니다:")
+        if r["ind_fb"]:
+            print(f"    업종 {r['ind_fb']:,}행 (₩{int(r['ind_cost'] or 0):,}) "
+                  f"→ apac_kr_ops.advertiser_industry 에 추가 요청 대상")
+        if r["obj_fb"]:
+            print(f"    캠페인목표 {r['obj_fb']:,}행 (₩{int(r['obj_cost'] or 0):,}) "
+                  f"→ v_perf_unified.objective_layer 미분류")
+        print("    ⚠️ 폴백 토큰에는 구분자·붙여쓰기 함정이 있습니다(코드 주석 참조).")
+    else:
+        print("· 정규식 폴백 미사용 — 업종·목표 전부 사전에서 왔습니다")
+
+
 def build():
     c = _client()
     ensure_dataset(c)
@@ -692,6 +748,7 @@ def build():
     except Exception as _e:
         print(f"· [경고] 데이터-갭 요청 스킵: {str(_e)[:120]}")
     check_upstream_freshness(c)
+    report_fallback_usage(c)
     n = list(c.query(
         f"SELECT COUNT(*) n, COUNT(DISTINCT campaign_id) camps, COUNT(DISTINCT media) media, "
         f"COUNT(DISTINCT market) markets, COUNT(DISTINCT objective) objs "
