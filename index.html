@@ -434,6 +434,17 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       if(na) return '<span class="nocmp" title="'+String(na).replace(/"/g,'&quot;')+'">견줄 수 없음</span>';
       return '—';
     }
+    // 분포 폭 — 중앙값 하나를 대푯값으로 쓸 수 있는지. n 으로는 설명되지 않는 부분이다.
+    // (실측: n 이 큰 업종일수록 IQR비도 크다 — 표본이 적어서가 아니라 모집단이 한 덩어리가 아니어서)
+    var sp=r[key+'_spread'];
+    if(sp && sp.iqr_ratio){
+      // 배지는 'wide'(IQR비>6)일 때만 — 모든 칸에 달면 신호가 묻힌다.
+      // 그 외에는 값에 마우스만 올려도 p25~p75 가 보이게 title 을 단다.
+      var tip='p25~p75 '+sp.p25+'~'+sp.p75+' (IQR비 '+sp.iqr_ratio+')'+(sp.note?' · '+sp.note:'');
+      v = '<span title="'+tip.replace(/"/g,'&quot;')+'">'+v+'</span>';
+      if(sp.grade==='wide')
+        v = v + ' <span class="spr spr-wide" title="'+tip.replace(/"/g,'&quot;')+'">분포 넓음</span>';
+    }
     // 기간 비교가 켜져 있으면 증감을 값 옆에 붙인다.
     var d=r[key+'_d'];
     if(d && d.pct!=null){
@@ -2120,6 +2131,8 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
 .subnav span.arrow{color:var(--tm);font-size:12px}
 .subnav a{font-size:13px;color:var(--tm);cursor:pointer;text-decoration:none;padding:4px 0;border-bottom:2px solid transparent}
 .subnav a.on{color:#000;font-weight:700;border-bottom-color:#000}
+.spr{display:inline-block;font-size:10px;padding:0 4px;margin-left:4px;border:1px solid currentColor;cursor:help;vertical-align:middle}
+.spr-caution{color:#B45309}.spr-wide{color:#B91C1C}
 .dltg{font-size:11px;color:#1F7A3D;margin-left:3px}
 .dltb{font-size:11px;color:#B91C1C;margin-left:3px}
 .dlt0{font-size:11px;color:var(--tm);margin-left:3px}
@@ -2216,7 +2229,10 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     bar.innerHTML='<span>기간 비교</span>'+
       '<select id="cmpSel"><option value="">사용 안 함</option>'+
       '<option value="prev">전기 대비</option><option value="yoy">전년 동기 대비</option></select>'+
-      '<span class="hint" id="cmpHint">계절성 확인용. 비교군 수가 달라지면 증감이 뜻을 잃으므로 함께 표기합니다.</span>';
+      '<span class="hint" id="cmpHint">계절성 확인용. 비교군 수가 달라지면 증감이 뜻을 잃으므로 함께 표기합니다.</span>'+
+      '<span style="flex:1"></span>'+
+      '<span class="hint" title="검색광고는 CPC 과금이라 CPM 이 지표가 아닙니다. 같은 분포에 넣으면 중앙값이 왜곡됩니다 — 실측상 업종에 따라 최대 63% 부풀려졌습니다.">'+
+      'CPM·CPV 분포에서 검색광고 제외 <b>ⓘ</b></span>';
     tw.parentNode.insertBefore(bar, tw);
     document.getElementById('cmpSel').onchange=function(){ CMP.mode=this.value; applyCompare(); };
   }

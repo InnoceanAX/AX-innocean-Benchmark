@@ -78,6 +78,28 @@ N_MIN_RELIABLE = 20
 # '성과가 0' 이 아니라 '견줄 수 없음' 으로 낸다 — 「없다」와 「0이다」는 다른 말이다.
 COVER_MIN_ROW = 0.10
 
+# 노출 과금 지표(CPM·CPV)에서 제외할 채널 — 과금 방식이 달라 같은 분포에 넣으면 안 된다.
+# 검색광고는 CPC 과금이라 CPM 이 지표가 아니다. DB 실측(2026-09-22):
+#   G/SEARCH 중앙값 CPM ₩66,359 vs 다른 채널 ₩1,489~₩8,032 (8~45배)
+#   제외 시 금융/보험 업종 CPM 중앙값 ₩13,103 → ₩4,856 (-63%), IQR비 26.38 → 7.09
+# CPC·CTR·CVR 은 검색에서도 유효한 지표이므로 제외하지 않는다.
+IMPRESSION_PRICED_KPIS = ("cpm", "cpv", "cpv100", "cpv3s", "cpvthru")
+NON_CPM_CHANNELS = ("SEARCH",)
+
+# 분포 폭 게이트 — IQR비(p75/p25). n 으로는 신뢰도를 다 말할 수 없다는 실측 결과에 따른 것.
+#   DB 실측: n 이 큰 업종일수록 IQR비도 크다(수송/항공 n=14,219 IQR비 9.99).
+#   표본이 적어서가 아니라 모집단이 한 덩어리가 아니어서다.
+#
+# ★ 임계는 지표마다 다르다. CPM 기준(3/6)을 CTR·CPC 에 그대로 쓰면 전부 걸려 신호가 묻힌다.
+#   업종×매체 조합(n≥30)의 실제 IQR비 분포를 재서 (p75, p90) 을 임계로 삼았다 —
+#   즉 '이 지표에서 유난히 넓은 상위 10%' 만 «분포 넓음» 으로 표시한다.
+#   측정값(2026-09-22, 조합 13~18개):
+#     cpm 중앙 4.59 p75 5.23 p90 7.68 | cpc 7.98/10.97/22.07 | ctr 6.61/8.21/17.87
+#     cpv 4.85/6.98/12.82            | vtr 6.23/9.17/26.17
+IQR_TH = {"cpm": (5.2, 7.7), "cpc": (11.0, 22.1), "ctr": (8.2, 17.9),
+          "cpv": (7.0, 12.8), "vtr": (9.2, 26.2)}
+IQR_TH_DEFAULT = (6.0, 12.0)
+
 
 def _agg_kpi(k, imp, clk, cost, conv, rev, vv, vp, vimp=0, vcost=0.0, conv_pur=0):
     """합계 지표로부터 KPI 집계값(표시용). 영상지표는 영상 분모(vimp/vcost) 사용.
@@ -333,6 +355,10 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     # 영상 KPI는 영상캠페인 보유 매체(캠페인 마트=Google)에서만 계산. 노출은 커버리지 게이트로 결정.
     table_kpis = list(KPIS_DEFAULT) + (list(VIDEO_KPIS) if has_video else [])
     calc_kpis = list(table_kpis) + (list(CHART_ONLY_KPIS) if has_video else [])
+    _sc = _table_cols(src)
+    has_channel = bool(_sc and "channel" in _sc)
+    chan_sel = " ANY_VALUE(channel) channel," if has_channel else ""
+    chan_pass = ", channel" if has_channel else ""
 
     def _qblock(k):
         lower = KPI_LOWER_BETTER[k]
@@ -349,9 +375,16 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             e = f"IF(mlclk>0,{k},NULL)"     # 링크클릭 있는 캠페인만
         else:
             e = k
+        # 노출 과금 지표는 CPC 과금 채널(검색)을 분포에서 뺀다 — NULL 은 분위수에서 무시된다.
+        if k in IMPRESSION_PRICED_KPIS and has_channel:
+            chs = ",".join(f"'{c}'" for c in NON_CPM_CHANNELS)
+            e = f"IF(channel IN ({chs}), NULL, {e})"
+        # p25·p75 를 같이 낸다 — 중앙값 하나보다 '분포'를 보여주는 쪽이 오해를 덜 만든다.
         return (f"AVG({e}) {k}_avg, APPROX_QUANTILES({e},100)[OFFSET(50)] {k}_median, "
                 f"APPROX_QUANTILES({e},100)[OFFSET({o25})] {k}_top25, "
-                f"APPROX_QUANTILES({e},100)[OFFSET({o10})] {k}_top10")
+                f"APPROX_QUANTILES({e},100)[OFFSET({o10})] {k}_top10, "
+                f"APPROX_QUANTILES({e},100)[OFFSET(25)] {k}_p25, "
+                f"APPROX_QUANTILES({e},100)[OFFSET(75)] {k}_p75")
 
     cl = _client()
     where, params = _filter_clauses(media, p0, p1, filters)
@@ -369,13 +402,13 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     # 1) 기준차원별 4분위 + 합계 (캠페인 단위 분포)
     bench_sql = f"""
     WITH camp AS (
-      SELECT {dim} AS dim, campaign_id,
+      SELECT {dim} AS dim, campaign_id,{chan_sel}
         SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv, SUM({convc}) conv_pur, SUM({revc}) rev{vcols_sel}
       FROM {src} WHERE {where}
       GROUP BY dim, campaign_id HAVING {camp_having}
     ),
     ck AS (
-      SELECT dim, imp, clk, cost, conv, conv_pur, rev{vcols_pass}, {ck_exprs}
+      SELECT dim, imp, clk, cost, conv, conv_pur, rev{chan_pass}{vcols_pass}, {ck_exprs}
       FROM camp
     )
     SELECT dim, COUNT(*) n, COUNTIF(rev>0) nrev, COUNTIF(conv_pur>0) nconv, COUNTIF(conv>0) nconv_all, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv, SUM(conv_pur) conv_pur, SUM(rev) rev{vcols_out},
@@ -440,6 +473,20 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         for k in calc_kpis:
             row[k] = qf(k, _kval(k, imp, clk, cost, conv, rev, ex, conv_pur))
             row[k + "_q"] = {q: qf(k, r.get(f"{k}_{q}")) for q in ("avg", "median", "top25", "top10")}
+            # 분포 폭 — 중앙값 하나를 대푯값으로 쓸 수 있는지 판단할 근거
+            p25, p75 = r.get(f"{k}_p25"), r.get(f"{k}_p75")
+            if p25 and p75 and p25 > 0:
+                iqr = round(p75 / p25, 2)
+                t_ok, t_caut = IQR_TH.get(k, IQR_TH_DEFAULT)
+                grade = "ok" if iqr <= t_ok else ("caution" if iqr <= t_caut else "wide")
+                row[k + "_spread"] = {
+                    "p25": qf(k, p25), "p75": qf(k, p75), "iqr_ratio": iqr,
+                    "grade": grade, "threshold": {"ok": t_ok, "caution": t_caut},
+                    "note": (None if grade == "ok" else
+                             ("이 지표 치고 분포가 넓습니다 — 중앙값과 함께 p25~p75 를 보십시오"
+                              if grade == "caution" else
+                              "분포가 매우 넓어 중앙값 하나로 비교하기 어렵습니다 — p25~p75 를 보십시오")),
+                }
             na = None
             if k == "roas":
                 if nrev_r == 0 or not rev:
