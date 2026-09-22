@@ -78,6 +78,10 @@ N_MIN_RELIABLE = 20
 # '성과가 0' 이 아니라 '견줄 수 없음' 으로 낸다 — 「없다」와 「0이다」는 다른 말이다.
 COVER_MIN_ROW = 0.10
 
+# 비율 지표의 분모 중 '분자를 낼 수 있는' 모집단이 차지해야 할 최소 비중.
+# 이보다 낮으면 SUM(분자)/SUM(분모) 가 구조적으로 낮게 나온다(2026-09-22 전매체 ROAS 138.5% 사례).
+DENOM_MIN_SHARE = 0.95
+
 # 노출 과금 지표(CPM·CPV)에서 제외할 채널 — 과금 방식이 달라 같은 분포에 넣으면 안 된다.
 # 검색광고는 CPC 과금이라 CPM 이 지표가 아니다. DB 실측(2026-09-22):
 #   G/SEARCH 중앙값 CPM ₩66,359 vs 다른 채널 ₩1,489~₩8,032 (8~45배)
@@ -347,6 +351,45 @@ def _conv_src(tbl_ref):
     """
     cols = _table_cols(tbl_ref)
     return "conv_pur" if (cols and "conv_pur" in cols) else "conv"
+
+
+def _denominator_ok(cl, src, where, params, revc, convc):
+    """분자와 분모의 모집단이 같은가 — 비율 지표의 구조적 함정을 잡는다.
+
+    ★ 오늘(2026-09-22) DB 에이전트가 낸 전매체 ROAS 138.5% 가 이 함정이었다:
+        분자 = google_ads 구매매출 1,128억  ·  분모 = 6개 매체 지출 816억
+        분자를 낼 수 없는 매체(dv360·tiktok·naver·kakao)가 분모의 34.1% 였다.
+      같은 날 그쪽이 내게 「device 는 분모 100% 인데 분자만 빠져 ROAS 가 그럴듯하게 낮다」고
+      경고한 것과 **정확히 같은 구조**다. 차원이 기기냐 매체냐만 다르다.
+
+    행 단위 커버리지 게이트(COUNTIF(rev>0)/COUNT(*))로는 안 잡힌다 — 이건 «합계 단위» 문제다.
+    그래서 매체별로 분자 생성 가능 여부를 보고, 분자를 낼 수 없는 매체가 분모에서 차지하는
+    비중을 잰다.
+    반환: {metric: {"ok": bool, "capable_share": float, "note": str|None}}
+    """
+    out = {}
+    try:
+        rows = list(cl.query(
+            f"SELECT media, SUM(cost) cost, SUM(clk) clk, SUM({revc}) rev, SUM({convc}) conv "
+            f"FROM {src} WHERE {where} GROUP BY media",
+            job_config=bigquery.QueryJobConfig(query_parameters=list(params))).result())
+    except Exception:
+        return out
+    for metric, num, den in (("roas", "rev", "cost"), ("cvr", "conv", "clk")):
+        tot = sum((r[den] or 0) for r in rows)
+        cap = sum((r[den] or 0) for r in rows if (r[num] or 0) > 0)
+        if not tot:
+            continue
+        share = cap / tot
+        ok = share >= DENOM_MIN_SHARE
+        bad = sorted([r["media"] for r in rows if (r[num] or 0) <= 0 and (r[den] or 0) > 0])
+        out[metric] = {
+            "ok": ok, "capable_share": round(share, 3),
+            "note": (None if ok else
+                     (f"분자를 낼 수 없는 매체({', '.join(MEDIA_NAME.get(m, m) for m in bad)})가 "
+                      f"분모의 {100*(1-share):.0f}% 를 차지합니다 — 합산 값이 실제보다 낮게 나옵니다")),
+        }
+    return out
 
 
 def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026-12-31",
@@ -655,8 +698,14 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     #    실제로 device 차원이 roas_available=False 인데 행에는 ROAS 1.86배 가 실려 나갔다.
     #    (DB 판정: device 는 분모가 캠페인 100% 인데 구매 계층 원천은 전환의 12.1% 뿐이라
     #     붙이면 ROAS 가 '그럴듯하게' 8분의 1로 나온다. video 는 6.8%.)
-    _gated = {"cvr": (cvr_avail, "전환 추적 커버리지가 낮아 비교할 수 없습니다"),
-              "roas": (roas_avail, "구매 매출 추적 커버리지가 낮아 비교할 수 없습니다")}
+    # 분자/분모 모집단 일치 검사 — 행 단위 커버리지로는 안 잡히는 '합계 단위' 함정
+    denom = _denominator_ok(cl, src, where, params, revc, convc)
+    _gated = {"cvr": (cvr_avail and denom.get("cvr", {}).get("ok", True),
+                      (denom.get("cvr", {}).get("note")
+                       or "전환 추적 커버리지가 낮아 비교할 수 없습니다")),
+              "roas": (roas_avail and denom.get("roas", {}).get("ok", True),
+                       (denom.get("roas", {}).get("note")
+                        or "구매 매출 추적 커버리지가 낮아 비교할 수 없습니다"))}
     for _k, (_ok, _why) in _gated.items():
         if _ok or _k not in calc_kpis:
             continue
@@ -703,6 +752,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
             "coverage_basis": ("측정된 캠페인 수 비율 = COUNTIF(지표>0) / 전체 캠페인. "
                                "매출 금액 비중이 아니라 '몇 개 캠페인이 그 지표를 기록했나'입니다."),
             "coverage_threshold": COVER_MIN_ROW,
+            "denominator_check": denom,
             "video_coverage": round(tot_nvid / n_all, 3), "is_video": False,
             # 표본 신뢰도 — 화면이 소표본 경고를 붙일 수 있게 임계와 집계를 함께 준다.
             "n_min_reliable": N_MIN_RELIABLE,
