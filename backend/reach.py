@@ -30,6 +30,11 @@ DV360 은 reach 컬럼 자체가 없어(수집 안 함) 포함되지 않는다. 
 """
 import math
 import os
+
+try:
+    from bq import MARKET_NAME
+except Exception:
+    MARKET_NAME = {}
 from functools import lru_cache
 from google.cloud import bigquery
 
@@ -341,6 +346,27 @@ def providers():
     return {"providers": out,
             "default": "assumption",
             "note": "fitted=true 인 제공자가 활성화되면 기본값을 그쪽으로 옮기세요."}
+
+
+@lru_cache(maxsize=2)
+def _markets_cached(day):
+    """적합 가능한 시장 목록 — 화면 '국가' 셀렉터용. 표본이 하한 미만인 시장은 뺀다."""
+    if not _view_exists(REACH_VIEW):
+        return []
+    c = _client()
+    rows = list(c.query(
+        f"SELECT market, COUNT(*) n FROM {REACH_VIEW} "
+        f"WHERE unique_reach > 0 AND impressions > 0 AND market IS NOT NULL "
+        f"GROUP BY market HAVING n >= {FIT_MIN_CAMPAIGNS} ORDER BY n DESC").result())
+    return [{"market": r["market"], "n": r["n"],
+             "name": MARKET_NAME.get(r["market"], r["market"])} for r in rows]
+
+
+def markets():
+    import datetime
+    return {"markets": _markets_cached(datetime.date.today().isoformat()),
+            "min_campaigns": FIT_MIN_CAMPAIGNS,
+            "note": "표본이 적은 시장은 적합이 흔들려 목록에서 제외했습니다."}
 
 
 def curve(budget=2_000_000_000, media="", market="KR", universe=None, points=20,

@@ -171,6 +171,15 @@ def reach_curve(budget: float = 2_000_000_000, media: str = "", market: str = "K
         return JSONResponse({"error": str(e), "points": []}, status_code=500)
 
 
+@app.get("/api/v1/reach/markets")
+def reach_markets():
+    """도달 곡선을 적합할 수 있는 시장 목록(표본 하한 이상)."""
+    try:
+        return JSONResponse(reach.markets())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e), "markets": []}, status_code=500)
+
+
 @app.get("/api/v1/reach/providers")
 def reach_providers():
     """사용 가능한 도달 추정 제공자 목록 + 각각의 준비 상태."""
