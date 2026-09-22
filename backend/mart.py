@@ -111,17 +111,70 @@ def _rev_strict(c, view, alias="u"):
     0 으로 두면 커버리지 게이트가 그 차원의 ROAS 를 «측정 불가» 로 자동 차단한다.
     DB 가 age·gender 에 컬럼을 추가하면(작업 중) 여기서 자동으로 살아난다.
     """
-    if _has_col(c, view, "revenue_purchase_krw"):
-        return f"SUM({alias}.revenue_purchase_krw)"
+    col = _pick_col(c, view, ["revenue_purchase_krw"], "ROAS 분자(세그먼트)")
+    if col:
+        return f"SUM({alias}.{col})"
     print(f"· {view}: revenue_purchase_krw 없음 → 해당 차원 ROAS 차단(0)")
     return "0"
 
 
 def _conv_strict(c, view, alias="u"):
     """구매 계층 전환만. 없으면 0 → CVR 도 자동 차단(혼합 conv 로 후퇴하지 않는다)."""
-    if _has_col(c, view, "conversions_purchase"):
-        return f"SUM({alias}.conversions_purchase)"
-    return "0"
+    col = _pick_col(c, view, ["conversions_purchase"], "CVR 분자(세그먼트)")
+    return f"SUM({alias}.{col})" if col else "0"
+
+
+_NOTES_CACHE = {}
+
+
+def _col_notes(c):
+    """DB 사전의 컬럼 경고를 한 번 읽어 캐시. {(mart, col): (severity, use_instead)}
+
+    ★ 왜 코드가 사전을 읽는가 —
+      2026-09-22 에 `_rev_expr` 이 revenue_purchase_krw 가 없으면 revenue_krw 로 '후퇴'했다.
+      사전에는 그 컬럼이 do_not_use 로 등재돼 있었는데(ROAS 1,782% 부풀림), 코드가 사전을
+      읽지 않고 '컬럼 존재 여부'만 봤기 때문에 경고가 무력했다.
+      DB 에이전트 말대로 «경고는 읽는 쪽이 볼 때만 작동한다». 그래서 읽는다.
+    """
+    if "v" in _NOTES_CACHE:
+        return _NOTES_CACHE["v"]
+    out = {}
+    try:
+        for r in c.query(f"""SELECT mart_name, column_name, severity,
+                                    IFNULL(CAST(use_instead AS STRING),'') ui
+                             FROM `{PROJECT}.apac_kr_ops.dictionary_column_notes`""").result():
+            out[(r["mart_name"], r["column_name"])] = (r["severity"], r["ui"])
+    except Exception as e:
+        print(f"· [경고] 컬럼 사전 조회 실패(경고 없이 진행): {str(e)[:100]}")
+    _NOTES_CACHE["v"] = out
+    return out
+
+
+def _col_allowed(c, view, col):
+    """이 컬럼을 써도 되는가. do_not_use 면 (False, 대체컬럼) 을 돌려준다."""
+    sev, ui = _col_notes(c).get((view, col), ("", ""))
+    if sev == "do_not_use":
+        return False, (ui.split(",")[0].strip() if ui else None)
+    return True, None
+
+
+def _pick_col(c, view, candidates, label):
+    """후보 중 '존재하고 사전이 막지 않은' 첫 컬럼. 없으면 None.
+
+    존재 여부만 보지 않는다 — do_not_use 로 등재된 컬럼은 건너뛰고,
+    use_instead 가 가리키는 컬럼이 실재하면 그쪽으로 옮겨탄다.
+    """
+    for col in candidates:
+        if not _has_col(c, view, col):
+            continue
+        ok, alt = _col_allowed(c, view, col)
+        if ok:
+            return col
+        if alt and _has_col(c, view, alt):
+            print(f"· [사전] {view}.{col} 은 do_not_use → {alt} 로 대체({label})")
+            return alt
+        print(f"· [사전] {view}.{col} 은 do_not_use, 대체 컬럼 없음 → {label} 차단")
+    return None
 
 
 def _rev_expr(c, view, alias="u"):
@@ -136,12 +189,8 @@ def _rev_expr(c, view, alias="u"):
     구매 전환가치가 없는 매체는 0 이 되고, 커버리지 게이트가 ROAS 를 자동으로 숨긴다
     (= '0배' 가 아니라 '미측정'으로 처리된다).
     """
-    if _has_col(c, view, "revenue_purchase_krw"):
-        return f"SUM({alias}.revenue_purchase_krw)"
-    if _has_col(c, view, "revenue_krw"):
-        print(f"· [경고] {view}: revenue_purchase_krw 없음 → revenue_krw 사용(ROAS 과대계상 위험)")
-        return f"SUM({alias}.revenue_krw)"
-    return "0"
+    col = _pick_col(c, view, ["revenue_purchase_krw", "revenue_krw"], "ROAS 분자")
+    return f"SUM({alias}.{col})" if col else "0"
 
 
 def _rev_all_expr(c, view, alias="u"):
