@@ -322,6 +322,8 @@ FIT_EXCLUDE = ("delivery_days_actual IS NOT NULL AND delivery_within_reach_windo
 #   바로 전체 혼합으로 가면 10일 캠페인까지 같은 선에 올라 기간 효과가 다시 섞인다.
 FIT_WIDE = (36, 100000, "36일+ 묶음")
 BUCKET_N_THIN = 30   # 이보다 적으면 «표본 적음» 을 붙인다
+# 광고주별 b 를 낼 때 요구하는 최소 «노출 범위»(최대/최소). 아래는 판단이다 — 주석 참조.
+ADV_RANGE_MIN = 20
 
 
 def _bucket_for(days):
@@ -391,30 +393,47 @@ def _fit(market, day, bucket=None):
         k = r.get("adv") if hasattr(r, "get") else None
         if k:
             byadv.setdefault(k, []).append((float(r["imp"]), float(r["rch"])))
-    sub = []
+    sub, narrow = [], []
     for k, v in byadv.items():
         if len(v) < FIT_MIN_CAMPAIGNS:
             continue
         m = len(v)
+        rng = max(x[0] for x in v) / max(min(x[0] for x in v), 1.0)
         qx = qy = qxx = qxy = 0.0
         for imp, rch in v:
             x, y = math.log(imp), math.log(rch)
             qx += x; qy += y; qxx += x * x; qxy += x * y
         d2 = m * qxx - qx * qx
-        if d2:
-            sub.append((k, (m * qxy - qx * qy) / d2, m))
+        if not d2:
+            continue
+        bi = (m * qxy - qx * qy) / d2
+        # ⚠️ 설명변수(노출) 범위가 좁으면 지수 추정이 날뛴다 (DB f5 지적 + 제 실측으로 확인).
+        #   실측: b 가 튄 두 광고주가 정확히 범위가 가장 좁은 둘이었다 —
+        #     HMMY ~35일 범위 9.2배 → b 0.736 · Hyundai KSA 36일+ 9.4배 → 0.743
+        #   범위가 넓은 쪽은 154~216배에서 0.935~0.969 로 모여 있다.
+        #   이 b 들을 같은 범위에 섞으면 «0.74~0.97» 처럼 실제보다 넓게 보인다.
+        #   ⚠️ 20배라는 선은 위 관찰에 근거한 «판단» 이고 측정된 임계가 아니다.
+        (sub if rng >= ADV_RANGE_MIN else narrow).append((k, bi, m, rng))
     within = None
     if len(sub) >= 2:
         bs = sorted(x[1] for x in sub)
+        note = (f"광고주 {len(sub)}곳을 각각 따로 적합하면 b 가 {bs[0]:.2f}~{bs[-1]:.2f} "
+                f"입니다(노출 범위 {min(x[3] for x in sub):.0f}~"
+                f"{max(x[3] for x in sub):.0f}배)")
+        note += (f" — 합산값 {b:.2f} 보다 전부 낮습니다. 광고주를 섞으면 b 가 올라가므로, "
+                 "이 화면의 포화가 실제보다 약하게 보일 수 있습니다."
+                 if bs[-1] < b else
+                 f". 합산값 {b:.2f} 는 이 범위 안입니다.")
+        if narrow:
+            note += (f" 노출 범위가 {ADV_RANGE_MIN}배 미만인 광고주 {len(narrow)}곳은 "
+                     "지수 추정이 불안정해 이 범위에서 뺐습니다"
+                     f"(최소 {min(x[3] for x in narrow):.0f}배).")
         within = {"n_advertisers": len(sub), "b_min": round(bs[0], 3),
-                  "b_max": round(bs[-1], 3),
-                  "all_below_pooled": bs[-1] < b,
-                  "note": (f"광고주 {len(sub)}곳을 각각 따로 적합하면 b 가 "
-                           f"{bs[0]:.2f}~{bs[-1]:.2f} 입니다"
-                           + (f" — 합산값 {b:.2f} 보다 전부 낮습니다. 광고주를 섞으면 "
-                              "b 가 올라가므로, 이 화면의 포화가 실제보다 약하게 "
-                              "보일 수 있습니다."
-                              if bs[-1] < b else "."))}
+                  "b_max": round(bs[-1], 3), "all_below_pooled": bs[-1] < b,
+                  "n_narrow_excluded": len(narrow),
+                  "range_min": round(min(x[3] for x in sub), 1),
+                  "range_max": round(max(x[3] for x in sub), 1),
+                  "note": note}
     return (a, b, n, r2, within)
 
 
