@@ -2088,7 +2088,8 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     var fit=d&&d.fit; if(!fit) return;
     var pb=fit.period_basis, bk=fit.bucket; if(!pb&&!bk) return;
     var box=document.createElement('div'); box.id='rsPeriod'; box.className='note';
-    var warn = (bk&&bk.thin) || fit.fit_weak || (bk&&bk.label==='전체 기간 혼합');
+    var warn = (bk&&bk.thin) || fit.fit_weak || (bk&&bk.extrapolated) ||
+               (bk&&bk.label==='전체 기간 혼합');
     box.style.borderLeftColor=warn?'#B45309':'var(--bdr)';
     box.style.background=warn?'#FFFBEB':'transparent';
     var h = bk
@@ -2096,6 +2097,11 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       : '<b>이 곡선의 기간 기준</b>';
     var body = pb?('<p style="margin:4px 0 0">'+esc(pb.caveat)+'</p>'):'';
     var extra='';
+    // 적합 구간 밖으로 늘려 읽은 값이면 말한다 — 안 적으면 그 기간에서 «재어진» 값으로 받는다.
+    if(bk&&bk.extrapolated&&bk.extrapolate_note){
+      extra+='<p style="margin:6px 0 0;color:#B45309"><b>적합 구간 밖입니다.</b> '+
+        esc(bk.extrapolate_note)+'</p>';
+    }
     if(bk&&bk.thin){
       extra+='<p style="margin:6px 0 0;color:#B45309"><b>표본 '+bk.n+'개로 적습니다.</b> '+
         '이 구간의 곡선은 캠페인 몇 개에 흔들립니다. 더 짧은 기간을 고르면 표본이 많습니다.</p>';
