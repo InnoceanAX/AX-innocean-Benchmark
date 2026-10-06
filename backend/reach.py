@@ -164,7 +164,7 @@ class AssumptionProvider(Provider):
     def available(self):
         return True, "사용 가능 (실측 적합 아님)"
 
-    def curve(self, budget, media, market, universe, points, k=DEFAULT_K):
+    def curve(self, budget, media, market, universe, points, k=DEFAULT_K, flight_days=30):
         import datetime
         universe = int(universe or DEFAULT_UNIVERSE)
         cpm, cpm_src = _cpm(media or "ALL", market or "", datetime.date.today().isoformat())
@@ -246,11 +246,14 @@ def _fit_period_basis(day, market):
     params = [bigquery.ScalarQueryParameter("mk", "STRING", market)] if market else []
     try:
         r = list(c.query(
-            f"SELECT COUNT(*) n, MIN(period_days) d_min, MAX(period_days) d_max, "
-            f"APPROX_QUANTILES(period_days,100)[OFFSET(50)] d_med, "
-            f"ROUND(AVG(period_days)) d_avg, COUNTIF(period_days <= 30) le30, "
-            f"COUNTIF(period_days <= 90) le90 FROM {REACH_VIEW} "
-            f"WHERE period_days > 0 AND unique_reach > 0 AND impressions > 0 {mf}",
+            f"SELECT COUNT(*) n, MIN(delivery_days_actual) d_min, "
+            f"MAX(delivery_days_actual) d_max, "
+            f"APPROX_QUANTILES(delivery_days_actual,100)[OFFSET(50)] d_med, "
+            f"ROUND(AVG(delivery_days_actual)) d_avg, "
+            f"COUNTIF(delivery_days_actual <= 30) le30, "
+            f"COUNTIF(delivery_days_actual <= 90) le90 FROM {REACH_VIEW} "
+            f"WHERE delivery_days_actual > 0 AND unique_reach > 0 AND impressions > 0 "
+            f"AND {FIT_EXCLUDE} {mf}",
             job_config=bigquery.QueryJobConfig(query_parameters=params)).result())[0]
     except Exception:
         return None
@@ -259,10 +262,9 @@ def _fit_period_basis(day, market):
     return {"n": r["n"], "days_min": r["d_min"], "days_median": r["d_med"],
             "days_max": r["d_max"], "days_avg": int(r["d_avg"] or 0),
             "n_le_30d": r["le30"], "n_le_90d": r["le90"],
-            "caveat": (f"이 곡선은 집행기간 중위 {r['d_med']}일(최소 {r['d_min']}일) 캠페인들로 "
-                       f"적합했습니다. 30일 이하 캠페인은 {r['le30']}건으로 기간별로 가를 "
-                       "표본이 없습니다. 짧은 플라이트에 그대로 읽으면 도달을 과대평가합니다 "
-                       "— 같은 노출을 짧게 몰아 넣으면 덜 닿습니다.")}
+            "caveat": (f"실제 집행일수(노출이 있던 날) 기준입니다 — 중위 {r['d_med']}일 · "
+                       f"30일 이하 {r['le30']:,}건 · 90일 이하 {r['le90']:,}건. "
+                       "고른 집행기간에 해당하는 캠페인들로만 적합합니다.")}
 
 
 @lru_cache(maxsize=2)
@@ -291,7 +293,34 @@ def _netflix_cpm_cached(day):
             "is_assumption": (r["advertisers"] or 0) < 2 or not r["api_cross_checked"]}
 
 
-def _fit(market, day):
+# ── 집행기간 버킷 (DB f5 2026-10-06 제공 컬럼으로 가능해졌다) ────────
+# 🔑 period_days 를 적합에 쓰면 안 된다 — period_source='collection_window' 가 말해주듯
+#   그것은 «그 캠페인을 마지막으로 건드린 수집 실행» 의 함수다. 1,136행 전부 요청 창과
+#   같았다. delivery_days_actual 이 insights 에서 «노출이 있던 날» 을 센 진짜 집행일수다.
+#
+# ⚠️ 적합에서 빼는 두 가지 (실측 영향: 1,106 → 948)
+#   delivery_days_actual IS NULL (101캠)
+#     전부 한 계정(Hyundai N Project)이고, 2026-08-30 에 수집에 추가되며 과거가 백필되지
+#     않았다. 약 ₩7.66억이 없다. 기간 이름표를 붙일 수 없어 제외한다.
+#   reach_window_exceeds_delivery = FALSE (158캠)
+#     집행이 요청 창을 벗어난 쪽이다. 도달이 «깎여» 있어 섞으면 긴 집행 구간이
+#     과소평가된다. (DB f5 가 처음엔 «부풀림» 이라 했다가 재서 방향을 정정했다)
+FIT_BUCKETS = [(1, 10, "~10일"), (11, 20, "~20일"), (21, 35, "~35일"),
+               (36, 70, "~70일"), (71, 120, "~120일"), (121, 100000, "120일+")]
+FIT_EXCLUDE = ("delivery_days_actual IS NOT NULL AND reach_window_exceeds_delivery")
+BUCKET_N_THIN = 30   # 이보다 적으면 «표본 적음» 을 붙인다(~120일 25 · 120일+ 26)
+
+
+def _bucket_for(days):
+    """플래너가 고른 집행기간 → 버킷. 범위를 벗어나면 가장 가까운 쪽."""
+    d = int(days or 30)
+    for lo, hi, lb in FIT_BUCKETS:
+        if lo <= d <= hi:
+            return (lo, hi, lb)
+    return FIT_BUCKETS[-1] if d > FIT_BUCKETS[-1][0] else FIT_BUCKETS[0]
+
+
+def _fit(market, day, bucket=None):
     """캠페인 누적 unique reach 로 도달–노출 관계를 적합.
 
     자료  apac_kr_unified.v_meta_campaign_reach — 캠페인당 1행(기간 전체 누적 유니크 도달).
@@ -313,9 +342,12 @@ def _fit(market, day):
     c = _client()
     mf = "AND market = @mk" if market else ""
     params = [bigquery.ScalarQueryParameter("mk", "STRING", market)] if market else []
+    bf = ""
+    if bucket:
+        bf = f"AND delivery_days_actual BETWEEN {int(bucket[0])} AND {int(bucket[1])}"
     rows = list(c.query(
         f"SELECT impressions imp, unique_reach rch FROM {REACH_VIEW} "
-        f"WHERE unique_reach > 0 AND impressions > 0 {mf}",
+        f"WHERE unique_reach > 0 AND impressions > 0 AND {FIT_EXCLUDE} {bf} {mf}",
         job_config=bigquery.QueryJobConfig(query_parameters=params)).result())
     pts = [(float(r["imp"]), float(r["rch"])) for r in rows]
     if len(pts) < FIT_MIN_CAMPAIGNS:
@@ -350,13 +382,21 @@ class FittedReachProvider(Provider):
             return False, f"적합 표본 부족(캠페인 {FIT_MIN_CAMPAIGNS}개 미만)"
         return True, "사용 가능 (Meta 캠페인 누적 도달로 적합)"
 
-    def curve(self, budget, media, market, universe, points, k=None):
+    def curve(self, budget, media, market, universe, points, k=None, flight_days=30):
         import datetime
         day = datetime.date.today().isoformat()
-        fit = _fit(market or "", day)
-        scope = f"{market} 시장" if market else "전체 시장"
-        if fit is None and market:                 # 그 시장 표본이 적으면 전체로 후퇴
-            fit, scope = _fit("", day), "전체 시장(해당 시장 표본 부족)"
+        # 🔑 집행기간 버킷 안에서 적합한다 — 기간을 섞으면 «수확체감» 이 기간 효과와
+        #   뒤섞인다(실측: 섞으면 b=0.939, ~35일 버킷만 보면 b=0.991).
+        bk = _bucket_for(flight_days)
+        fit = _fit(market or "", day, bucket=bk)
+        scope = f"{market} 시장 · 집행 {bk[2]}" if market else f"전체 시장 · 집행 {bk[2]}"
+        if fit is None:                            # 그 시장×버킷 표본이 적으면 전체 시장으로
+            fit, scope = _fit("", day, bucket=bk), f"전체 시장 · 집행 {bk[2]}(해당 시장 표본 부족)"
+        if fit is None:                            # 버킷도 얇으면 기간 섞은 적합으로 후퇴
+            fit = _fit(market or "", day)
+            scope = ("전체 기간 혼합(해당 집행기간 표본 부족 — 기간 효과가 "
+                     "수확체감으로 섞여 보입니다)")
+            bk = None
         if fit is None:
             raise RuntimeError("적합 표본이 부족합니다")
         a, b, n_fit, r2 = fit
@@ -383,11 +423,32 @@ class FittedReachProvider(Provider):
             "fit": {"scope": scope, "n_campaigns": n_fit, "r2": round(r2, 3),
                     "model": "reach = a · imps^b (로그-로그 최소제곱)",
                     "a": round(a, 4), "b": round(b, 4),
-                    "interpretation": (f"노출을 2배로 늘리면 도달은 약 {2**b:.2f}배가 됩니다"
-                                       f" (b={b:.3f} < 1 이므로 수확체감)."),
+                    # 🔴 «수확체감» 이라고 단정하던 문구를 고쳤다(2026-10-06).
+                    #   기간을 섞은 적합은 b=0.939 였는데, 집행기간 버킷 안에서 다시 재면
+                    #   b=0.991(~35일·362캠) 로 거의 비례다. 즉 그 수확체감의 상당 부분은
+                    #   «기간이 짧은 캠페인과 긴 캠페인을 같은 선에 올린» 탓이었다.
+                    #   b 를 보고 말을 고르게 한다 — 없는 포화를 있다고 말하지 않는다.
+                    "interpretation": (
+                        f"노출을 2배로 늘리면 도달은 약 {2**b:.2f}배가 됩니다 (b={b:.3f}). "
+                        + ("이 구간에서는 거의 비례합니다 — 뚜렷한 포화는 보이지 않습니다."
+                           if b >= 0.97 else
+                           "노출을 늘릴수록 도달 증가분이 줄어듭니다(수확체감).")),
                     "source": "apac_kr_unified.v_meta_campaign_reach (캠페인 기간 전체 누적 유니크 도달)",
                     # 🔴 기간은 «안 적힌 가정» 이 되기 쉽다 — 반드시 응답에 실어 화면이 숨길 수 없게 한다
-                    "period_basis": _fit_period_basis(day, market or "")},
+                    "period_basis": _fit_period_basis(day, market or ""),
+                    # 적합이 약한 구간을 화면이 말해야 한다 — R² 가 낮으면 그 버킷의
+                    # 캠페인들이 노출만으로 설명되지 않는다는 뜻이다(브랜드·타겟 차이).
+                    "fit_weak": r2 < 0.70,
+                    "fit_weak_note": ("이 집행기간 구간은 적합이 약합니다(R²="
+                                      f"{r2:.2f}) — 노출 말고 다른 요인이 도달을 크게 "
+                                      "가릅니다. 구간 안 캠페인들의 타겟 범위가 서로 "
+                                      "달라서일 수 있습니다. 중앙값으로 읽으십시오."
+                                      if r2 < 0.70 else ""),
+                    "bucket": ({"label": bk[2], "days_from": bk[0], "days_to": bk[1],
+                                "n": n_fit, "thin": n_fit < BUCKET_N_THIN,
+                                "requested_days": int(flight_days)} if bk else
+                               {"label": "전체 기간 혼합", "n": n_fit, "thin": False,
+                                "requested_days": int(flight_days)})},
             "assumptions": [
                 {"key": "universe", "label": "도달 상한(모집단) — 선택", "value": round(cap) if cap else 0,
                  "editable": True,
@@ -641,7 +702,7 @@ def markets():
 
 
 def curve(budget=2_000_000_000, media="", market="KR", universe=None, points=20,
-          provider=None, k=DEFAULT_K):
+          provider=None, k=DEFAULT_K, flight_days=30):
     """요청한 제공자(없으면 사용 가능한 것 중 fitted 우선)로 도달 곡선 반환."""
     chosen = None
     if provider:
@@ -653,7 +714,8 @@ def curve(budget=2_000_000_000, media="", market="KR", universe=None, points=20,
         chosen = next((p for p in _PROVIDERS if p.fitted and p.available()[0]),
                       _PROVIDERS[0])
     res = chosen.curve(budget=budget, media=media, market=market,
-                       universe=universe, points=points, k=k)
+                       universe=universe, points=points, k=k,
+                       flight_days=flight_days)
     res["providers"] = providers()["providers"]
     return res
 

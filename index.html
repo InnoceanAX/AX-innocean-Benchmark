@@ -2085,19 +2085,30 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   function rsPeriodNote(d){
     var host=el('rsBadge'); if(!host) return;
     var old=el('rsPeriod'); if(old) old.remove();
-    var pb=d&&d.fit&&d.fit.period_basis; if(!pb) return;
-    var want=parseInt((el('rsDays')||{}).value)||30;
+    var fit=d&&d.fit; if(!fit) return;
+    var pb=fit.period_basis, bk=fit.bucket; if(!pb&&!bk) return;
     var box=document.createElement('div'); box.id='rsPeriod'; box.className='note';
-    var mismatch = pb.days_median && want < pb.days_median*0.5;
-    box.style.borderLeftColor=mismatch?'#B45309':'var(--bdr)';
-    box.style.background=mismatch?'#FFFBEB':'transparent';
-    box.innerHTML='<b>이 곡선의 기간 기준</b><p style="margin:4px 0 0">'+esc(pb.caveat)+'</p>'+
-      (mismatch
-        ? '<p style="margin:6px 0 0;color:#B45309"><b>지금 고른 '+want+'일과 어긋납니다.</b> '+
-          '기간별로 가를 표본이 없어 보정하지 않았습니다 — 이 곡선은 '+want+'일 '+
-          '플라이트의 도달보다 높게 나옵니다. 기간에 따른 차이는 넷플릭스 공식 곡선이 '+
-          '들어오면 그쪽에서 답합니다.</p>'
-        : '');
+    var warn = (bk&&bk.thin) || fit.fit_weak || (bk&&bk.label==='전체 기간 혼합');
+    box.style.borderLeftColor=warn?'#B45309':'var(--bdr)';
+    box.style.background=warn?'#FFFBEB':'transparent';
+    var h = bk
+      ? '<b>집행 '+esc(bk.label)+' 캠페인 '+(bk.n||0).toLocaleString()+'개로 적합</b>'
+      : '<b>이 곡선의 기간 기준</b>';
+    var body = pb?('<p style="margin:4px 0 0">'+esc(pb.caveat)+'</p>'):'';
+    var extra='';
+    if(bk&&bk.thin){
+      extra+='<p style="margin:6px 0 0;color:#B45309"><b>표본 '+bk.n+'개로 적습니다.</b> '+
+        '이 구간의 곡선은 캠페인 몇 개에 흔들립니다. 더 짧은 기간을 고르면 표본이 많습니다.</p>';
+    }
+    if(bk&&bk.label==='전체 기간 혼합'){
+      extra+='<p style="margin:6px 0 0;color:#B45309">고른 집행기간의 표본이 부족해 '+
+        '<b>기간을 섞은 적합</b>으로 물러났습니다. 짧은 캠페인과 긴 캠페인이 같은 선에 올라 '+
+        '있어, 기간 효과가 수확체감처럼 섞여 보입니다.</p>';
+    }
+    if(fit.fit_weak&&fit.fit_weak_note){
+      extra+='<p style="margin:6px 0 0;color:#B45309">'+esc(fit.fit_weak_note)+'</p>';
+    }
+    box.innerHTML=h+body+extra;
     host.parentNode.insertBefore(box, host.nextSibling);
   }
   function rsRun(){

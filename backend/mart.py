@@ -596,6 +596,11 @@ def build_reach(c):
     CREATE OR REPLACE TABLE {tbl} CLUSTER BY market AS
     SELECT campaign_id, campaign_name, market, brand, advertiser_name,
            period_start, period_end, period_days,
+           -- 🔑 2026-10-06 DB 추가 — period_days 는 «수집 창» 이고 집행일수가 아니다.
+           --   delivery_days_actual 이 insights 에서 «노출이 있던 날» 을 센 진짜 집행일수다.
+           --   reach_window_exceeds_delivery=FALSE 는 집행이 창을 벗어나 도달이 «깎인» 쪽이다.
+           delivery_days_actual, delivery_first_date, delivery_last_date,
+           reach_window_exceeds_delivery, period_source,
            impressions, unique_reach, frequency, spend_krw,
            cost_per_1k_reach_krw, source_snapshot_date,
            CURRENT_TIMESTAMP() AS _built_at

@@ -190,7 +190,7 @@ def reach_curve(budget: float = 2_000_000_000, media: str = "", market: str = "K
     try:
         d = reach.curve(budget=budget, media=media, market=market,
                         universe=universe or None, points=points,
-                        provider=provider or None)
+                        provider=provider or None, flight_days=flight_days)
         if isinstance(d, dict):
             d["flight_days_requested"] = int(flight_days)
         return JSONResponse(d)
