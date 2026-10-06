@@ -2113,10 +2113,26 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     // 광고주 합산이 b 를 올리는지 — 교란을 하나 걷어내면 다음 교란이 드러난다.
     // 2026-10-06: ~35일 합산 b=0.99 인데 광고주별로는 0.74~0.97 로 전부 낮았다.
     // 어느 쪽이 맞다고 단정하지 않고 범위를 적는다.
+    // 광고주별 b 를 «점추정끼리» 비교하지 않는다 — n=12~13 에서 0.85 와 0.94 를 나란히
+    // 쓰면 읽는 사람이 그 차이를 실재로 받는다. 표준오차로 «구분되는가» 를 말한다.
+    // ⚠️ 한때 노출 범위 20배 미만을 뺐는데, 그 컷오프의 전제가 틀렸다 —
+    //   R=9 인 HMMY 가 ±0.09 로 R=60 인 Hyundai_IND(±0.14) 보다 오히려 촘촘하다.
     var wa=fit.within_advertiser;
     if(wa&&wa.note){
-      extra+='<p style="margin:6px 0 0'+(wa.all_below_pooled?';color:#B45309':'')+'">'+
-        esc(wa.note)+'</p>';
+      var tr=(wa.rows||[]).map(function(x){
+        return '<tr'+(x.differs_from_pooled?' style="color:#B45309;font-weight:700"':'')+'>'+
+          '<td style="padding:1px 6px 1px 0">'+esc(String(x.advertiser).slice(0,18))+'</td>'+
+          '<td style="padding:1px 6px;text-align:right">'+x.b.toFixed(2)+' ±'+x.se.toFixed(2)+'</td>'+
+          '<td style="padding:1px 6px;text-align:right">'+x.n+'</td>'+
+          '<td style="padding:1px 0;text-align:right">'+Math.round(x.imp_range)+'x</td></tr>'; }).join('');
+      extra+='<div style="margin:8px 0 0;padding-top:6px;border-top:1px dotted var(--bdr)">'+
+        '<div style="font-size:11px;font-weight:700;margin-bottom:3px">광고주별로 다시 적합</div>'+
+        '<table style="font-size:11px;border-collapse:collapse"><thead><tr style="color:var(--tm)">'+
+        '<th style="text-align:left;padding-right:6px">광고주</th>'+
+        '<th style="text-align:right;padding:0 6px">b ±표준오차</th>'+
+        '<th style="text-align:right;padding:0 6px">표본</th>'+
+        '<th style="text-align:right">노출범위</th></tr></thead><tbody>'+tr+'</tbody></table>'+
+        '<p style="margin:5px 0 0'+(wa.inconclusive?';color:#B45309':'')+'">'+esc(wa.note)+'</p></div>';
     }
     if(fit.measures){
       extra+='<p style="margin:6px 0 0;padding-top:6px;border-top:1px dotted var(--bdr)">'+

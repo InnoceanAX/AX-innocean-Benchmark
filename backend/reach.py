@@ -322,8 +322,6 @@ FIT_EXCLUDE = ("delivery_days_actual IS NOT NULL AND delivery_within_reach_windo
 #   바로 전체 혼합으로 가면 10일 캠페인까지 같은 선에 올라 기간 효과가 다시 섞인다.
 FIT_WIDE = (36, 100000, "36일+ 묶음")
 BUCKET_N_THIN = 30   # 이보다 적으면 «표본 적음» 을 붙인다
-# 광고주별 b 를 낼 때 요구하는 최소 «노출 범위»(최대/최소). 아래는 판단이다 — 주석 참조.
-ADV_RANGE_MIN = 20
 
 
 def _bucket_for(days):
@@ -381,6 +379,11 @@ def _fit(market, day, bucket=None):
     ss_res = sum((a * p[0] ** b - p[1]) ** 2 for p in pts)
     ss_tot = sum((p[1] - mean) ** 2 for p in pts) or 1.0
     r2 = max(0.0, 1.0 - ss_res / ss_tot)
+    # 합산 기울기의 표준오차 — 점추정만 내면 자리수가 정밀도로 읽힌다
+    _mx = sx / n
+    _sxx2 = sum((math.log(p0) - _mx) ** 2 for p0, _ in pts)
+    _res = sum((math.log(p1) - (math.log(a) + b * math.log(p0))) ** 2 for p0, p1 in pts)
+    b_se = math.sqrt(_res / (n - 2) / _sxx2) if (n > 2 and _sxx2 > 0) else float("inf")
 
     # 🔴 광고주 합산이 b 를 올릴 수 있다 — 같은 쿼리의 행으로 «광고주 안에서만» 다시 잰다.
     #   실측(2026-10-06): ~35일 합산 b=0.992 인데 광고주별로는 0.736(HMMY n=17) ·
@@ -393,48 +396,57 @@ def _fit(market, day, bucket=None):
         k = r.get("adv") if hasattr(r, "get") else None
         if k:
             byadv.setdefault(k, []).append((float(r["imp"]), float(r["rch"])))
-    sub, narrow = [], []
+    # 🔑 컷오프를 두지 않는다 — 대신 «구분되는가» 를 표준오차로 답한다.
+    #   한때 노출 범위 20배 미만 광고주를 뺐다. DB f5 가 21칸을 재 보니 그 선이 의도한
+    #   일을 하지 않았다: 내 주장을 만들던 칸(R 9.2·9.4)은 빼면서 가장 극단적인 추정
+    #   (R=78 · b=0.587 · n=10)은 남긴다. 퍼짐이 R 과 단조로 줄지 않는다 —
+    #   말이 안 되는 값은 R≈3 에서만 났고, R 이 10을 넘으면 이질성과 n 이 지배한다.
+    #   ⚠️ 주석에 «판단이다» 라고 적어도 다음 사람은 코드의 20 을 측정값으로 읽는다.
+    #     임계는 아예 세우지 않는 편이 낫다(f5).
+    #
+    #   그래서 점추정끼리 크기를 비교하지 않고, 기울기의 표준오차로
+    #   «합산값과 구분되는가» 를 묻는다. n=10~13 에서 0.845 와 0.942 를 나란히 쓰면
+    #   읽는 사람이 그 차이를 실재로 받는다 — 구분 가능 여부를 말해야 한다.
+    sub = []
     for k, v in byadv.items():
-        if len(v) < FIT_MIN_CAMPAIGNS:
-            continue
         m = len(v)
-        rng = max(x[0] for x in v) / max(min(x[0] for x in v), 1.0)
-        qx = qy = qxx = qxy = 0.0
-        for imp, rch in v:
-            x, y = math.log(imp), math.log(rch)
-            qx += x; qy += y; qxx += x * x; qxy += x * y
-        d2 = m * qxx - qx * qx
-        if not d2:
+        if m < FIT_MIN_CAMPAIGNS:
             continue
-        bi = (m * qxy - qx * qy) / d2
-        # ⚠️ 설명변수(노출) 범위가 좁으면 지수 추정이 날뛴다 (DB f5 지적 + 제 실측으로 확인).
-        #   실측: b 가 튄 두 광고주가 정확히 범위가 가장 좁은 둘이었다 —
-        #     HMMY ~35일 범위 9.2배 → b 0.736 · Hyundai KSA 36일+ 9.4배 → 0.743
-        #   범위가 넓은 쪽은 154~216배에서 0.935~0.969 로 모여 있다.
-        #   이 b 들을 같은 범위에 섞으면 «0.74~0.97» 처럼 실제보다 넓게 보인다.
-        #   ⚠️ 20배라는 선은 위 관찰에 근거한 «판단» 이고 측정된 임계가 아니다.
-        (sub if rng >= ADV_RANGE_MIN else narrow).append((k, bi, m, rng))
+        xs = [math.log(p0) for p0, _ in v]
+        ys = [math.log(p1) for _, p1 in v]
+        mx = sum(xs) / m
+        sxx2 = sum((x - mx) ** 2 for x in xs)
+        if sxx2 <= 0:
+            continue
+        my = sum(ys) / m
+        bi = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx2
+        ai = my - bi * mx
+        resid = sum((y - (ai + bi * x)) ** 2 for x, y in zip(xs, ys))
+        se = math.sqrt(resid / (m - 2) / sxx2) if m > 2 else float("inf")
+        rng = max(p0 for p0, _ in v) / max(min(p0 for p0, _ in v), 1.0)
+        sub.append({"advertiser": k, "b": round(bi, 2), "se": round(se, 2),
+                    "n": m, "imp_range": round(rng, 1),
+                    # 합산값이 이 광고주의 ±2SE 밖인가 = 구분되는가
+                    "differs_from_pooled": abs(bi - b) > 2 * se})
+
     within = None
     if len(sub) >= 2:
-        bs = sorted(x[1] for x in sub)
-        note = (f"광고주 {len(sub)}곳을 각각 따로 적합하면 b 가 {bs[0]:.2f}~{bs[-1]:.2f} "
-                f"입니다(노출 범위 {min(x[3] for x in sub):.0f}~"
-                f"{max(x[3] for x in sub):.0f}배)")
-        note += (f" — 합산값 {b:.2f} 보다 전부 낮습니다. 광고주를 섞으면 b 가 올라가므로, "
-                 "이 화면의 포화가 실제보다 약하게 보일 수 있습니다."
-                 if bs[-1] < b else
-                 f". 합산값 {b:.2f} 는 이 범위 안입니다.")
-        if narrow:
-            note += (f" 노출 범위가 {ADV_RANGE_MIN}배 미만인 광고주 {len(narrow)}곳은 "
-                     "지수 추정이 불안정해 이 범위에서 뺐습니다"
-                     f"(최소 {min(x[3] for x in narrow):.0f}배).")
-        within = {"n_advertisers": len(sub), "b_min": round(bs[0], 3),
-                  "b_max": round(bs[-1], 3), "all_below_pooled": bs[-1] < b,
-                  "n_narrow_excluded": len(narrow),
-                  "range_min": round(min(x[3] for x in sub), 1),
-                  "range_max": round(max(x[3] for x in sub), 1),
-                  "note": note}
-    return (a, b, n, r2, within)
+        sub.sort(key=lambda d: d["b"])
+        n_diff = sum(1 for d in sub if d["differs_from_pooled"])
+        lo_s, hi_s = sub[0], sub[-1]
+        note = (f"광고주 {len(sub)}곳을 각각 따로 적합하면 b 가 {lo_s['b']:.2f}~{hi_s['b']:.2f} "
+                f"입니다(표본 {min(d['n'] for d in sub)}~{max(d['n'] for d in sub)}개 · "
+                f"노출 범위 {min(d['imp_range'] for d in sub):.0f}~"
+                f"{max(d['imp_range'] for d in sub):.0f}배). ")
+        note += (f"그중 {n_diff}곳이 합산값 {b:.2f} 와 구분됩니다(±2표준오차 기준)."
+                 if n_diff else
+                 f"다만 합산값 {b:.2f} 와 «구분되는» 곳은 없습니다 — 표본이 적어 "
+                 "광고주를 섞은 것이 b 를 올리는지 지금 자료로는 말할 수 없습니다. "
+                 "«차이가 없다» 는 뜻이 아니라 «가릴 수 없다» 는 뜻입니다.")
+        within = {"n_advertisers": len(sub), "b_min": lo_s["b"], "b_max": hi_s["b"],
+                  "n_differs": n_diff, "pooled_b": round(b, 2),
+                  "inconclusive": n_diff == 0, "rows": sub, "note": note}
+    return (a, b, n, r2, within, b_se)
 
 
 class FittedReachProvider(Provider):
@@ -479,7 +491,7 @@ class FittedReachProvider(Provider):
             bk = None
         if fit is None:
             raise RuntimeError("적합 표본이 부족합니다")
-        a, b, n_fit, r2, within = fit
+        a, b, n_fit, r2, within, b_se = fit
         cpm, cpm_src = _cpm(media or "M", market or "", day)
         cap = float(universe) if universe else None   # 사용자가 상한(모집단)을 주면 그 위로 안 올라간다
         pts = []
@@ -508,17 +520,27 @@ class FittedReachProvider(Provider):
                     "measures": ("캠페인 사이 — 예산 규모가 다른 캠페인들을 가로질러 본 "
                                  "관계입니다. 「한 조건 안에서 노출만 늘리면」 어떻게 되는지는 "
                                  "이 자료가 답하지 못합니다(예산이 큰 캠페인은 타겟도 넓게 잡습니다)."),
-                    "a": round(a, 4), "b": round(b, 4),
+                    "a": round(a, 4),
+                    # 두 자리로 줄인다 — 광고주별 n=12~13 에서 넷째 자리는
+                    # 의미가 없고, 자리수가 정밀도로 읽힌다.
+                    "b": round(b, 2), "b_se": round(b_se, 2),
                     # 🔴 «수확체감» 이라고 단정하던 문구를 고쳤다(2026-10-06).
                     #   기간을 섞은 적합은 b=0.939 였는데, 집행기간 버킷 안에서 다시 재면
                     #   b=0.991(~35일·362캠) 로 거의 비례다. 즉 그 수확체감의 상당 부분은
                     #   «기간이 짧은 캠페인과 긴 캠페인을 같은 선에 올린» 탓이었다.
                     #   b 를 보고 말을 고르게 한다 — 없는 포화를 있다고 말하지 않는다.
+                    # 🔴 «포화인가» 를 내 임의 기준(b>=0.97)으로 가르지 않는다 —
+                    #   표준오차로 «1 과 구분되는가» 를 묻는다. 안 그러면 b=0.94 를
+                    #   포화라고 쓰는데, ±0.03 이면 1 이 아직 구간 안이다.
+                    #   «구분되지 않는다» 와 «포화가 없다» 는 다른 말이다(f5 가 자기
+                    #   「~35일 포화 없음」을 바로 그 이유로 정정했다).
                     "interpretation": (
-                        f"노출을 2배로 늘리면 도달은 약 {2**b:.2f}배가 됩니다 (b={b:.3f}). "
-                        + ("이 구간에서는 거의 비례합니다 — 뚜렷한 포화는 보이지 않습니다."
-                           if b >= 0.97 else
-                           "노출을 늘릴수록 도달 증가분이 줄어듭니다(수확체감).")),
+                        f"노출을 2배로 늘리면 도달은 약 {2**b:.2f}배입니다 (b={b:.2f}±{b_se:.2f}). "
+                        + ("노출을 늘릴수록 도달 증가분이 줄어듭니다(수확체감) — "
+                           "b 가 1 보다 낮은 것이 표준오차로 구분됩니다."
+                           if b + 2 * b_se < 1.0 else
+                           "b 가 1 과 «구분되지 않습니다» — 이 표본으로는 포화가 있는지 "
+                           "가릴 수 없습니다. 포화가 없다는 뜻이 아닙니다.")),
                     "source": "apac_kr_unified.v_meta_campaign_reach (캠페인 기간 전체 누적 유니크 도달)",
                     # 🔴 기간은 «안 적힌 가정» 이 되기 쉽다 — 반드시 응답에 실어 화면이 숨길 수 없게 한다
                     "period_basis": _fit_period_basis(day, market or ""),
