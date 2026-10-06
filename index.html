@@ -1671,6 +1671,10 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
           <h4>제공자 상태</h4>
           <div id="rsProv"></div>
         </div>
+        <div class="pvbox" style="margin-top:16px">
+          <h4>넷플릭스 타게팅 조건</h4>
+          <div id="rsNfx"></div>
+        </div>
       </div>
       <div>
         <div style="border:2px solid var(--bdr);padding:16px;margin-bottom:16px">
@@ -2005,10 +2009,52 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
             return '<option value="'+esc(x.market)+'"'+(x.market==='KR'?' selected':'')+'>'+
                    esc(x.name||x.market)+' ('+x.n+'개 캠페인)</option>'; }).join('');
         }).catch(function(){ el('rsMarket').innerHTML='<option value="">전체 시장</option>'; })
-         .then(rsRun);
+         .then(function(){ rsRun(); rsNetflix();
+            var mo=el('rsMarket'); if(mo) mo.addEventListener('change', rsNetflix); });
       }).catch(rsRun);
     } else rsRun();
   }
+  // 넷플릭스 타게팅 조건 — 사전은 BQ 에서 읽는다(총 개수를 화면에 박지 않는다).
+  // DB(f5) 2026-10-06: 일일 훅이 원천 시트를 읽어 갱신하므로 251 같은 숫자는 바뀐다.
+  // ★ 이 패널은 «선택» 만 보여 준다. 조건을 바꿀 때마다 API 를 부르지 않는다 —
+  //   도달 곡선 API 한도가 일 50회·분 5회라 실시간 조회가 불가능하고,
+  //   야간 선계산 캐시가 전제다. 캐시가 생기면 제공자 상태에서 자동으로 켜진다.
+  function rsNetflix(){
+    var box=el('rsNfx'); if(!box) return;
+    var mk=(el('rsMarket')&&el('rsMarket').value)||'';
+    j(API+'/reach/targeting'+(mk?'?market='+encodeURIComponent(mk):'')).then(function(d){
+      if(!d||!d.available){
+        box.innerHTML='<p style="font-size:12px;color:var(--tm);margin:0">'+
+          esc((d&&(d.note||d.error))||'사전을 읽을 수 없습니다.')+'</p>';
+        return;
+      }
+      var cnt=d.counts||{}, keys=Object.keys(cnt).sort(function(a,b){return cnt[b]-cnt[a];});
+      var mks=(d.markets||[]), here=null, top=null;
+      mks.forEach(function(m){ if(m.market===(d.market||'KR')) here=m; if(!top||m.n>top.n) top=m; });
+      var rows=keys.map(function(k){
+        return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0">'+
+               '<span>'+esc(NFX_DIM[k]||k)+'</span><b>'+cnt[k]+'</b></div>'; }).join('');
+      var gap='';
+      if(here&&top&&top.market!==here.market){
+        gap='<p style="font-size:11px;color:#B45309;margin:8px 0 0">'+
+            esc(here.name||here.market)+' 에서 쓸 수 있는 조건은 '+here.n+'개로, '+
+            '가장 많은 '+esc(top.name||top.market)+'('+top.n+'개)보다 적습니다. '+
+            '다국가 플랜이라면 국가별로 확인하십시오 — 한 나라에서 고른 조건이 '+
+            '다른 나라에서는 없을 수 있습니다.</p>';
+      }
+      box.innerHTML='<p style="font-size:12px;color:var(--tm);margin:0 0 8px">'+
+        (d.market?esc(d.market)+' 기준 ':'전 국가 ')+'<b>'+d.total+'</b>개 조건</p>'+rows+gap+
+        '<p style="font-size:11px;color:var(--tm);margin:8px 0 0;padding-top:8px;'+
+        'border-top:1px solid var(--bdr)">조건을 고르는 즉시 도달이 계산되지는 않습니다. '+
+        '넷플릭스 도달 API 는 호출 한도가 있어 야간에 미리 계산한 값만 조회합니다 — '+
+        '준비되면 위 «제공자 상태» 에서 켜집니다.</p>';
+    }).catch(function(){
+      box.innerHTML='<p style="font-size:12px;color:var(--tm);margin:0">사전을 읽을 수 없습니다.</p>';
+    });
+  }
+  var NFX_DIM={'Age':'연령','Gender':'성별','Device':'기기','Genre':'장르',
+    'Language':'언어','Region':'지역','City':'도시','Metro':'광역권',
+    'Netflix Interests':'관심사','Viewing Moods':'시청 분위기'};
   function rsRun(){
     var q=qs({budget:el('rsBudget').value||2000000000, media:el('rsMedia').value||'',
               market:(el('rsMarket')&&el('rsMarket').value)||'',

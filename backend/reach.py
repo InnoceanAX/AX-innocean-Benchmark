@@ -321,19 +321,122 @@ class FittedReachProvider(Provider):
         }
 
 
+# ── 넷플릭스 타게팅 사전 + 도달 곡선 캐시 ───────────────────────────
+# DB(f5) 2026-10-06 지침을 코드로 못박는다. 전문: QA/37_DB_NOTICE_NETFLIX_TARGETING.md
+TARGET_TBL = f"`{PROJECT}.{MART_DS}.bm_netflix_targeting`"
+CURVE_CACHE_TBL = f"`{PROJECT}.{MART_DS}.bm_netflix_reach_curve`"
+
+# 🔴 도달 곡선 API 호출 한도 — «사용자가 조건 바꿀 때마다 호출» 은 불가능하다.
+#    한국만 연령 6 × 성별 2 × 기기 3 = 36가지이고 장르 22 · 관심사 115 를 곱하면 수만 가지라
+#    몇 번만 조작해도 하루 50회를 넘긴다. 유일한 구조는
+#      야간 격자 선계산 → BQ 캐시(netflix_reach_curve) → UI 는 캐시만 조회
+#    이므로 이 모듈은 «요청 경로에서 넷플릭스 API 를 호출하지 않는다». 캐시가 없으면
+#    없다고 답한다. 토큰이 생겼다는 이유로 여기에 live 호출을 넣으면 하루 만에 막힌다.
+NETFLIX_RATE_LIMITS = {"month": 1500, "day": 50, "hour": 20, "minute": 5}
+
+# ⚠️ «억제» / «수집 실패» / «도달 0» 은 서로 다른 값이다.
+#    넷플릭스가 모집단이 작은 조건(소도시 등)의 출력을 정책상 억제한다.
+#    한 칸에 섞으면 시뮬레이터가 «도달 0» 으로 보여 준다 — 플래너가 «이 조건은 효과 없다» 로
+#    읽는 오해가 바로 여기서 난다. 캐시 스키마의 구분 컬럼을 그대로 끌고 올라간다.
+CURVE_STATUS = {
+    "ok": "곡선 있음",
+    "suppressed": "넷플릭스가 출력을 억제한 조건입니다(모집단이 작아 공개하지 않음). 도달 0 이 아닙니다.",
+    "error": "수집에 실패한 조건입니다. 값이 없다는 뜻이며 도달 0 이 아닙니다.",
+}
+
+
+@lru_cache(maxsize=8)
+def _targeting_cached(day, market):
+    """넷플릭스 선택 항목 — 차원별 목록. market='' 이면 전 국가.
+
+    ★ 국가는 countries 배열로 건다(country_scope LIKE 는 'KR-SEOUL' 류가 오면 틀린다).
+    ★ 총량을 숫자로 박지 않는다 — 일일 훅이 원천 시트를 읽어 갱신하므로 매번 센다.
+    """
+    if not _view_exists(TARGET_TBL):
+        return None
+    c = _client()
+    where = "WHERE @mk IN UNNEST(countries)" if market else ""
+    job = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ScalarQueryParameter("mk", "STRING", market or "KR")])
+    rows = list(c.query(f"""
+        SELECT targeting_dimension dim, targeting_value_id id,
+               targeting_value_name name, targeting_value_description descr
+        FROM {TARGET_TBL} {where}
+        ORDER BY targeting_dimension, targeting_value_name""", job_config=job).result())
+    dims = {}
+    for r in rows:
+        dims.setdefault(r["dim"], []).append(
+            {"id": r["id"], "name": r["name"], "description": r["descr"] or ""})
+    return dims
+
+
+@lru_cache(maxsize=2)
+def _target_markets_cached(day):
+    """국가별 가용 조건 수. 국가마다 집합이 달라(US 839 · JP 354 · KR 251) 화면이
+    «이 나라에서는 못 쓰는 조건» 을 알려줘야 한다."""
+    if not _view_exists(TARGET_TBL):
+        return []
+    c = _client()
+    rows = list(c.query(f"""
+        SELECT ct market, COUNT(*) n,
+               COUNT(DISTINCT targeting_dimension) dims
+        FROM {TARGET_TBL}, UNNEST(countries) ct
+        GROUP BY ct ORDER BY n DESC""").result())
+    return [{"market": r["market"], "name": MARKET_NAME.get(r["market"], r["market"]),
+             "n": r["n"], "dimensions": r["dims"]} for r in rows]
+
+
+def targeting(market=""):
+    """시뮬레이터 선택 항목. 다국가 플랜이면 market 을 비우고 전체를 받아
+    화면이 국가별 가용 여부를 함께 보여 준다."""
+    from datetime import date
+    day = date.today().isoformat()
+    dims = _targeting_cached(day, (market or "").upper())
+    if dims is None:
+        return {"available": False, "dimensions": {}, "markets": [],
+                "note": ("넷플릭스 타게팅 사전이 아직 마트에 없습니다. "
+                         "mart.build_netflix_targeting() 이 돌면 자동으로 채워집니다.")}
+    mks = _target_markets_cached(day)
+    return {
+        "available": True,
+        "market": (market or "").upper(),
+        "dimensions": dims,
+        "counts": {k: len(v) for k, v in dims.items()},
+        "total": sum(len(v) for v in dims.values()),
+        "markets": mks,
+        "note": ("국가마다 가용 조건이 다릅니다 — 다국가 플랜에서는 국가별로 확인하십시오. "
+                 "조건 ID 는 넷플릭스가 갱신하면 바뀌므로 저장해 두지 말고 매번 조회하십시오."),
+    }
+
+
 class NetflixReachProvider(Provider):
     name = "netflix"
     label = "Netflix Reach Curve API"
     fitted = True
 
+    # 🔴 토큰이 아니라 «캐시» 가 가용 조건이다(DB f5 2026-10-06).
+    #    호출 한도가 일 50 이라 요청 경로에서 부를 수 없다. 토큰만 보고 available=True 를
+    #    돌려주면 화면이 실시간 조회를 전제로 짜이고, 그러면 다시 짜야 한다.
     def available(self):
-        if os.environ.get("NETFLIX_ADS_TOKEN"):
-            return True, "사용 가능"
-        return False, ("넷플릭스 광고 API 토큰 미발급. 이노션 전용 토큰 발급 예정 — "
-                       "발급 후 NETFLIX_ADS_TOKEN 시크릿을 주입하면 자동 활성화됩니다.")
+        if not _view_exists(CURVE_CACHE_TBL):
+            return False, ("넷플릭스 도달 곡선 캐시(bm_netflix_reach_curve)가 아직 없습니다. "
+                           f"API 호출 한도가 일 {NETFLIX_RATE_LIMITS['day']}회·분 "
+                           f"{NETFLIX_RATE_LIMITS['minute']}회라 조건을 바꿀 때마다 부를 수 없고, "
+                           "야간에 격자를 선계산해 캐시에 넣는 구조가 전제입니다. "
+                           "캐시가 생기면 자동 활성화됩니다.")
+        if not os.environ.get("NETFLIX_ADS_TOKEN"):
+            return True, "캐시 조회 가능(토큰 없이도 읽습니다 — 선계산된 격자만 봅니다)"
+        return True, "사용 가능(캐시 조회)"
 
     def curve(self, **kw):
-        raise RuntimeError(self.available()[1])
+        ok, why = self.available()
+        if not ok:
+            raise RuntimeError(why)
+        raise RuntimeError(
+            "캐시 스키마가 확정되면 이 메서드가 캐시를 읽습니다. 어떤 조합을 캐시할지는 "
+            "미디어플래닝 협의 사항으로 올라가 있습니다. "
+            "⚠️ 여기에 넷플릭스 API 직접 호출을 넣지 마십시오 — 한도가 일 "
+            f"{NETFLIX_RATE_LIMITS['day']}회입니다.")
 
 
 _PROVIDERS = [AssumptionProvider(), FittedReachProvider(), NetflixReachProvider()]

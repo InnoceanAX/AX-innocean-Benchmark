@@ -191,6 +191,21 @@ def reach_curve(budget: float = 2_000_000_000, media: str = "", market: str = "K
         return JSONResponse({"error": str(e), "points": []}, status_code=500)
 
 
+@app.get("/api/v1/reach/targeting")
+def reach_targeting(market: str = ""):
+    """넷플릭스 도달 시뮬레이터의 선택 항목(연령·성별·기기·장르·관심사 등).
+
+    market 을 비우면 전 국가 집합 + 국가별 가용 조건 수를 함께 준다 —
+    국가마다 쓸 수 있는 조건이 달라서(US 839 · JP 354 · KR 251) 다국가 플랜에서는
+    «이 나라에서는 못 쓰는 조건» 을 화면이 알려줘야 한다.
+    """
+    try:
+        return JSONResponse(reach.targeting(market=market))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"available": False, "error": str(e),
+                             "dimensions": {}}, status_code=500)
+
+
 @app.get("/api/v1/reach/markets")
 def reach_markets():
     """도달 곡선을 적합할 수 있는 시장 목록(표본 하한 이상)."""

@@ -607,6 +607,46 @@ def build_reach(c):
     return True
 
 
+def build_netflix_targeting(c):
+    """넷플릭스 도달 시뮬레이터의 «선택 항목» 사전을 마트로 복사.
+
+    ⚠️ build_reach() 와 같은 이유 — 서비스 SA 는 apac_kr_benchmark 만 읽는다.
+
+    ★ 국가는 countries 배열로 건다 (DB f5 지침, 2026-10-06)
+      country_scope LIKE '%KR%' 도 지금은 같은 답(둘 다 251)이지만, 장래에
+      'KR-SEOUL' 같은 값이 오면 LIKE 쪽만 틀린다. 지금 맞는 쿼리가 나중에도
+      맞아야 하므로 배열 쪽을 쓴다.
+
+    ★ _kr 뷰는 쓰지 않는다
+      국가마다 가용 집합이 다르다(US 839 · JP 354 · KR 251 — 12개국 중 한국이 가장 적다).
+      기아 글로벌처럼 다국가 플랜에서 한국 집합만 보여주면 «그 나라에서 쓸 수 있는 조건»
+      을 잘못 알려준다. 전체를 복사하고 화면이 국가별로 거른다.
+
+    ★ 251 같은 숫자를 코드·화면에 박지 않는다
+      일일 훅이 원천 시트를 읽어 갱신하므로 총량이 바뀐다. 매번 세서 쓴다.
+    """
+    view = "v_netflix_targeting"
+    if not _table_exists(c, "apac_kr_unified", view):
+        print(f"· {view} 없음 → 넷플릭스 타게팅 사전 skip")
+        return False
+    tbl = f"`{PROJECT}.{MART_DS}.bm_netflix_targeting`"
+    c.query(f"""
+    CREATE OR REPLACE TABLE {tbl} CLUSTER BY targeting_dimension AS
+    SELECT targeting_value_id, targeting_value_name, targeting_dimension,
+           targeting_dimension_id, countries, country_scope,
+           targeting_value_description, source_updated, _snapshot_date,
+           CURRENT_TIMESTAMP() AS _built_at
+    FROM `{PROJECT}.apac_kr_unified.{view}`""").result()
+    r = list(c.query(f"""
+        SELECT COUNT(*) n, COUNT(DISTINCT targeting_dimension) dims,
+               (SELECT COUNT(DISTINCT ct) FROM {tbl}, UNNEST(countries) ct) ctry,
+               (SELECT COUNT(*) FROM {tbl} WHERE 'KR' IN UNNEST(countries)) kr
+        FROM {tbl}""").result())[0]
+    print(f"· bm_netflix_targeting {r['n']:,}행 · 차원 {r['dims']}개 · "
+          f"국가 {r['ctry']}개 (KR 가용 {r['kr']:,})")
+    return True
+
+
 def build_metric_caveats(c):
     """사전 경고를 마트로 복사 — 서비스 SA 는 apac_kr_ops 를 못 읽는다.
 
@@ -740,6 +780,7 @@ def build():
     build_video(c)                                 # 영상(V) — 뷰 있으면 자동 빌드
     build_dplan_creative(c)                        # 디플랜 NAS 소재 grain — raw 있으면 자동 빌드
     build_reach(c)                                 # Meta 캠페인 누적 도달 — 서비스 SA 접근용 복사
+    build_netflix_targeting(c)                     # 넷플릭스 타게팅 사전 — 서비스 SA 접근용 복사
     build_metric_caveats(c)                        # 사전 경고 — 서비스가 화면에 띄울 수 있게 복사
     try:                                            # 값 없는 지표 자동 감지 → DB 에이전트 요청 큐 발행
         import gaps
