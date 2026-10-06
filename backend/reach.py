@@ -359,7 +359,7 @@ def _fit(market, day, bucket=None):
     if bucket:
         bf = f"AND delivery_days_actual BETWEEN {int(bucket[0])} AND {int(bucket[1])}"
     rows = list(c.query(
-        f"SELECT impressions imp, unique_reach rch FROM {REACH_VIEW} "
+        f"SELECT impressions imp, unique_reach rch, advertiser_name adv FROM {REACH_VIEW} "
         f"WHERE unique_reach > 0 AND impressions > 0 AND {FIT_EXCLUDE} {bf} {mf}",
         job_config=bigquery.QueryJobConfig(query_parameters=params)).result())
     pts = [(float(r["imp"]), float(r["rch"])) for r in rows]
@@ -378,7 +378,44 @@ def _fit(market, day, bucket=None):
     mean = sum(p[1] for p in pts) / n
     ss_res = sum((a * p[0] ** b - p[1]) ** 2 for p in pts)
     ss_tot = sum((p[1] - mean) ** 2 for p in pts) or 1.0
-    return (a, b, n, max(0.0, 1.0 - ss_res / ss_tot))
+    r2 = max(0.0, 1.0 - ss_res / ss_tot)
+
+    # 🔴 광고주 합산이 b 를 올릴 수 있다 — 같은 쿼리의 행으로 «광고주 안에서만» 다시 잰다.
+    #   실측(2026-10-06): ~35일 합산 b=0.992 인데 광고주별로는 0.736(HMMY n=17) ·
+    #   0.935(HMTH n=44) · 0.969(HMPH n=184) 로 전부 더 낮았다. 즉 「거의 비례」가
+    #   광고주를 섞은 탓일 수 있다. 심슨 역설과 같은 모양이고, 오늘 기간에서 겪은 것과
+    #   같은 종류다 — 교란을 하나 걷어내면 다음 교란이 드러난다.
+    #   ⚠️ 어느 쪽이 맞다고 단정하지 않는다. 범위를 화면에 적어 사용자가 알게 한다.
+    byadv = {}
+    for r in rows:
+        k = r.get("adv") if hasattr(r, "get") else None
+        if k:
+            byadv.setdefault(k, []).append((float(r["imp"]), float(r["rch"])))
+    sub = []
+    for k, v in byadv.items():
+        if len(v) < FIT_MIN_CAMPAIGNS:
+            continue
+        m = len(v)
+        qx = qy = qxx = qxy = 0.0
+        for imp, rch in v:
+            x, y = math.log(imp), math.log(rch)
+            qx += x; qy += y; qxx += x * x; qxy += x * y
+        d2 = m * qxx - qx * qx
+        if d2:
+            sub.append((k, (m * qxy - qx * qy) / d2, m))
+    within = None
+    if len(sub) >= 2:
+        bs = sorted(x[1] for x in sub)
+        within = {"n_advertisers": len(sub), "b_min": round(bs[0], 3),
+                  "b_max": round(bs[-1], 3),
+                  "all_below_pooled": bs[-1] < b,
+                  "note": (f"광고주 {len(sub)}곳을 각각 따로 적합하면 b 가 "
+                           f"{bs[0]:.2f}~{bs[-1]:.2f} 입니다"
+                           + (f" — 합산값 {b:.2f} 보다 전부 낮습니다. 광고주를 섞으면 "
+                              "b 가 올라가므로, 이 화면의 포화가 실제보다 약하게 "
+                              "보일 수 있습니다."
+                              if bs[-1] < b else "."))}
+    return (a, b, n, r2, within)
 
 
 class FittedReachProvider(Provider):
@@ -423,7 +460,7 @@ class FittedReachProvider(Provider):
             bk = None
         if fit is None:
             raise RuntimeError("적합 표본이 부족합니다")
-        a, b, n_fit, r2 = fit
+        a, b, n_fit, r2, within = fit
         cpm, cpm_src = _cpm(media or "M", market or "", day)
         cap = float(universe) if universe else None   # 사용자가 상한(모집단)을 주면 그 위로 안 올라간다
         pts = []
@@ -468,6 +505,8 @@ class FittedReachProvider(Provider):
                     "period_basis": _fit_period_basis(day, market or ""),
                     # 적합이 약한 구간을 화면이 말해야 한다 — R² 가 낮으면 그 버킷의
                     # 캠페인들이 노출만으로 설명되지 않는다는 뜻이다(브랜드·타겟 차이).
+                    # 광고주 안에서만 다시 잰 b 범위 — 합산이 b 를 올리는지 사용자가 알게 한다
+                    "within_advertiser": within,
                     "fit_weak": r2 < 0.70,
                     "fit_weak_note": ("이 집행기간 구간은 적합이 약합니다(R²="
                                       f"{r2:.2f}) — 노출 말고 다른 요인이 도달을 크게 "

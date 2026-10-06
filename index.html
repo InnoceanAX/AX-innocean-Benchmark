@@ -2110,6 +2110,14 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     }
     // «무엇을 재는가» 를 한 줄로 못 박는다 — 넷플릭스 곡선과 모양이 다를 때
     // 「우리 모델이 틀렸다」로 읽히지 않게 한다. 질문이 다른 것이 결함이 아니다.
+    // 광고주 합산이 b 를 올리는지 — 교란을 하나 걷어내면 다음 교란이 드러난다.
+    // 2026-10-06: ~35일 합산 b=0.99 인데 광고주별로는 0.74~0.97 로 전부 낮았다.
+    // 어느 쪽이 맞다고 단정하지 않고 범위를 적는다.
+    var wa=fit.within_advertiser;
+    if(wa&&wa.note){
+      extra+='<p style="margin:6px 0 0'+(wa.all_below_pooled?';color:#B45309':'')+'">'+
+        esc(wa.note)+'</p>';
+    }
     if(fit.measures){
       extra+='<p style="margin:6px 0 0;padding-top:6px;border-top:1px dotted var(--bdr)">'+
         '<b>이 곡선이 재는 것</b> '+esc(fit.measures)+'</p>';
