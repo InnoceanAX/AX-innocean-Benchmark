@@ -30,6 +30,7 @@ DV360 은 reach 컬럼 자체가 없어(수집 안 함) 포함되지 않는다. 
 """
 import math
 import os
+import random
 
 try:
     from bq import MARKET_NAME
@@ -216,6 +217,9 @@ REACH_VIEW = f"`{PROJECT}.{MART_DS}.bm_meta_campaign_reach`"
 FIT_MIN_CAMPAIGNS = 12   # 이보다 적으면 그 시장은 적합하지 않는다(과적합 방지)
 
 
+# 존재 확인은 조회마다 BQ 메타데이터를 때린다 — 느린 건 통계가 아니라 BQ 왕복이다
+# (실측: 재부표본 600회 15ms vs BQ 쿼리 1.56s).
+@lru_cache(maxsize=16)
 def _view_exists(fq):
     try:
         _client().get_table(fq.strip("`"))
@@ -224,7 +228,6 @@ def _view_exists(fq):
         return False
 
 
-@lru_cache(maxsize=64)
 @lru_cache(maxsize=4)
 def _fit_period_basis(day, market):
     """적합에 쓴 캠페인들의 집행기간 분포.
@@ -347,6 +350,74 @@ def _bucket_for(days):
     return FIT_BUCKETS[-1] if d > FIT_BUCKETS[-1][0] else FIT_BUCKETS[0]
 
 
+def _slope_log(lp):
+    """로그 공간 점들의 기울기. 로그는 호출 전에 한 번만 계산한다 —
+    재부표본 1,000회 × Theil-Sen 쌍마다 log() 를 다시 부르면 조회가 10초를 넘는다."""
+    m = len(lp)
+    if m < 3:
+        return None
+    mx = sum(x for x, _ in lp) / m
+    sxx = sum((x - mx) ** 2 for x, _ in lp)
+    if sxx <= 0:
+        return None
+    my = sum(y for _, y in lp) / m
+    return sum((x - mx) * (y - my) for x, y in lp) / sxx
+
+
+def _boot_ci(lp, reps=600, seed=20261006):
+    """재부표본 95% 구간 (로그 공간 입력).
+
+    ★ 왜 닫힌식 표준오차를 그대로 쓰지 않는가 (2026-10-06)
+      닫힌식 SE 는 잔차가 등분산이라고 가정한다. 실측으로 재 보니 ~35일에서
+      닫힌식 ±0.01 인데 부트 구간은 [0.96, 1.03] 으로 «더 넓다» — 공식이 불확실성을
+      과소평가한다. 판정(«1 과 구분되는가»)을 과소평가된 구간으로 하면 안 된다.
+      DB f5 가 자기 추정량을 재부표본으로 재서 «검정력이 애초에 없었다» 를 찾아냈고,
+      같은 검사를 제 추정량에도 걸었다. ~70일은 세 방법(닫힌식·부트·Theil-Sen)에서
+      모두 1 아래로 살아남았다.
+      ⚠️ 씨앗을 고정한다 — 같은 조회가 화면마다 다른 구간을 내면 읽는 사람이 흔들림을
+        신호로 읽는다.
+    """
+    n = len(lp)
+    if n < 8:
+        return None
+    rr = random.Random(seed).randrange
+    out = []
+    for _ in range(reps):
+        b = _slope_log([lp[rr(n)] for _ in range(n)])
+        if b is not None:
+            out.append(b)
+    if len(out) < reps // 2:
+        return None
+    out.sort()
+    return out[int(0.025 * len(out))], out[int(0.975 * len(out))]
+
+
+def _theil_sen(lp, cap=160, seed=20261006):
+    """쌍별 기울기의 중위값 — 이상점에 끌리지 않는 추정량(분포 가정 없음).
+
+    최소제곱과 «같은 자료, 다른 추정량» 이라 결론이 갈리면 이상점이 끌고 있다는 뜻이다.
+    쌍이 n² 이라 큰 버킷은 표본을 줄여 센다(씨앗 고정 — 조회마다 값이 바뀌면 안 된다).
+    """
+    if len(lp) < 3:
+        return None
+    w = lp if len(lp) <= cap else random.Random(seed).sample(lp, cap)
+    sl = []
+    for i in range(len(w)):
+        xi, yi = w[i]
+        for j in range(i + 1, len(w)):
+            dx = w[j][0] - xi
+            if abs(dx) > 1e-9:
+                sl.append((w[j][1] - yi) / dx)
+    if not sl:
+        return None
+    sl.sort()
+    return sl[len(sl) // 2]
+
+
+# ⚠️ 이 데코레이터를 떼지 말 것. 2026-10-06 에 헬퍼를 «def _fit» 앵커로 끼워 넣으면서
+#   이 줄이 아래 함수 위로 떨어져 나가 _fit 이 캐시 없이 돌았다. 조회마다 BQ 쿼리와
+#   재부표본 600회를 다시 해서 응답이 8~12초가 됐다(day 를 인자로 받는 이유가 캐시다).
+@lru_cache(maxsize=64)
 def _fit(market, day, bucket=None):
     """캠페인 누적 unique reach 로 도달–노출 관계를 적합.
 
@@ -460,7 +531,10 @@ def _fit(market, day, bucket=None):
         within = {"n_advertisers": len(sub), "b_min": lo_s["b"], "b_max": hi_s["b"],
                   "n_differs": n_diff, "pooled_b": round(b, 2),
                   "inconclusive": n_diff == 0, "rows": sub, "note": note}
-    return (a, b, n, r2, within, b_se)
+    _lp = [(math.log(p0), math.log(p1)) for p0, p1 in pts]
+    ci = _boot_ci(_lp)
+    ts = _theil_sen(_lp)
+    return (a, b, n, r2, within, b_se, ci, ts)
 
 
 class FittedReachProvider(Provider):
@@ -505,7 +579,7 @@ class FittedReachProvider(Provider):
             bk = None
         if fit is None:
             raise RuntimeError("적합 표본이 부족합니다")
-        a, b, n_fit, r2, within, b_se = fit
+        a, b, n_fit, r2, within, b_se, b_ci, b_ts = fit
         cpm, cpm_src = _cpm(media or "M", market or "", day)
         cap = float(universe) if universe else None   # 사용자가 상한(모집단)을 주면 그 위로 안 올라간다
         pts = []
@@ -548,13 +622,21 @@ class FittedReachProvider(Provider):
                     #   포화라고 쓰는데, ±0.03 이면 1 이 아직 구간 안이다.
                     #   «구분되지 않는다» 와 «포화가 없다» 는 다른 말이다(f5 가 자기
                     #   「~35일 포화 없음」을 바로 그 이유로 정정했다).
+                    # 판정은 «부트 구간» 으로 한다 — 닫힌식 SE 는 등분산을 가정해
+                    # 불확실성을 과소평가한다(~35일 ±0.01 vs 부트 [0.96,1.03]).
+                    "b_ci": [round(b_ci[0], 2), round(b_ci[1], 2)] if b_ci else None,
+                    "b_theil_sen": round(b_ts, 2) if b_ts is not None else None,
                     "interpretation": (
-                        f"노출을 2배로 늘리면 도달은 약 {2**b:.2f}배입니다 (b={b:.2f}±{b_se:.2f}). "
+                        f"노출을 2배로 늘리면 도달은 약 {2**b:.2f}배입니다 "
+                        + (f"(b={b:.2f} · 95% {b_ci[0]:.2f}~{b_ci[1]:.2f}). " if b_ci
+                           else f"(b={b:.2f}±{b_se:.2f}). ")
                         + ("노출을 늘릴수록 도달 증가분이 줄어듭니다(수확체감) — "
-                           "b 가 1 보다 낮은 것이 표준오차로 구분됩니다."
-                           if b + 2 * b_se < 1.0 else
+                           "95% 구간이 1 아래에 있습니다."
+                           if (b_ci and b_ci[1] < 1.0) else
                            "b 가 1 과 «구분되지 않습니다» — 이 표본으로는 포화가 있는지 "
-                           "가릴 수 없습니다. 포화가 없다는 뜻이 아닙니다.")),
+                           "가릴 수 없습니다. 포화가 없다는 뜻이 아닙니다.")
+                        + (f" 이상점에 끌리지 않는 추정량으로도 {b_ts:.2f} 입니다."
+                           if b_ts is not None else "")),
                     "source": "apac_kr_unified.v_meta_campaign_reach (캠페인 기간 전체 누적 유니크 도달)",
                     # 🔴 기간은 «안 적힌 가정» 이 되기 쉽다 — 반드시 응답에 실어 화면이 숨길 수 없게 한다
                     "period_basis": _fit_period_basis(day, market or ""),
