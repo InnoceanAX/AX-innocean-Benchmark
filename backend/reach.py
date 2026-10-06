@@ -307,8 +307,21 @@ def _netflix_cpm_cached(day):
 #     과소평가된다. (DB f5 가 처음엔 «부풀림» 이라 했다가 재서 방향을 정정했다)
 FIT_BUCKETS = [(1, 10, "~10일"), (11, 20, "~20일"), (21, 35, "~35일"),
                (36, 70, "~70일"), (71, 120, "~120일"), (121, 100000, "120일+")]
-FIT_EXCLUDE = ("delivery_days_actual IS NOT NULL AND reach_window_exceeds_delivery")
-BUCKET_N_THIN = 30   # 이보다 적으면 «표본 적음» 을 붙인다(~120일 25 · 120일+ 26)
+
+# 🔑 «집행 구간이 창 안에 들어갔나» 로 거른다 (DB f5 정정, 2026-10-06)
+#   처음 안내받은 reach_window_exceeds_delivery 는 «창이 집행보다 긴가»(기간 길이)
+#   비교였고, 창이 더 길어도 집행이 앞뒤로 삐져나가면 도달이 깎인다.
+#   948건 중 166건이 그 경우였고, 깎인 채 적합에 들어가 있었다. 진짜 포함은 782건.
+FIT_EXCLUDE = ("delivery_days_actual IS NOT NULL AND delivery_within_reach_window")
+
+# ⚠️ 정정의 대가가 긴 버킷에 쏠린다 — 긴 캠페인이 더 많이 깎인다.
+#   ~10일 176 · ~20일 223 · ~35일 306 · ~70일 66 · ~120일 9 · 120일+ 2
+#   (DB 가 10-05 사고 후 수집 창을 180일로 묶었고, 집행 180일 초과 74건은 구조적으로 깎인다.
+#    창을 넓히면 회복되지만 런타임 위험이 있어 DB 측 사용자 판단 대기 중.)
+#   그래서 긴 플라이트는 «36일+ 묶음»(77캠 · b=0.945 · R² 0.94)으로 한 단계만 넓힌다.
+#   바로 전체 혼합으로 가면 10일 캠페인까지 같은 선에 올라 기간 효과가 다시 섞인다.
+FIT_WIDE = (36, 100000, "36일+ 묶음")
+BUCKET_N_THIN = 30   # 이보다 적으면 «표본 적음» 을 붙인다
 
 
 def _bucket_for(days):
@@ -387,12 +400,23 @@ class FittedReachProvider(Provider):
         day = datetime.date.today().isoformat()
         # 🔑 집행기간 버킷 안에서 적합한다 — 기간을 섞으면 «수확체감» 이 기간 효과와
         #   뒤섞인다(실측: 섞으면 b=0.939, ~35일 버킷만 보면 b=0.991).
+        # 단계적 후퇴 — 한 번에 전체 혼합으로 가지 않는다.
+        #   ① 그 시장 × 그 집행기간 버킷
+        #   ② 전체 시장 × 그 버킷
+        #   ③ 전체 시장 × «36일+ 묶음»  (긴 플라이트만 · 기간을 한 단계만 넓힌다)
+        #   ④ 전체 기간 혼합            (그 사실과 이유를 화면에 쓴다)
         bk = _bucket_for(flight_days)
         fit = _fit(market or "", day, bucket=bk)
         scope = f"{market} 시장 · 집행 {bk[2]}" if market else f"전체 시장 · 집행 {bk[2]}"
-        if fit is None:                            # 그 시장×버킷 표본이 적으면 전체 시장으로
+        if fit is None:
             fit, scope = _fit("", day, bucket=bk), f"전체 시장 · 집행 {bk[2]}(해당 시장 표본 부족)"
-        if fit is None:                            # 버킷도 얇으면 기간 섞은 적합으로 후퇴
+        if fit is None and int(flight_days or 30) >= FIT_WIDE[0]:
+            fit = _fit("", day, bucket=FIT_WIDE)
+            if fit is not None:
+                bk = FIT_WIDE
+                scope = (f"전체 시장 · 집행 {FIT_WIDE[2]}"
+                         f"(고른 {int(flight_days)}일 구간의 표본이 적어 한 단계 넓혔습니다)")
+        if fit is None:
             fit = _fit(market or "", day)
             scope = ("전체 기간 혼합(해당 집행기간 표본 부족 — 기간 효과가 "
                      "수확체감으로 섞여 보입니다)")
@@ -422,6 +446,12 @@ class FittedReachProvider(Provider):
                          "note": "예산→노출은 실측 CPM, 노출→도달은 실측 캠페인 적합입니다."},
             "fit": {"scope": scope, "n_campaigns": n_fit, "r2": round(r2, 3),
                     "model": "reach = a · imps^b (로그-로그 최소제곱)",
+                    # f5 제안 — 비교표에 «무엇을 재는가» 를 한 줄로 못 박는다.
+                    # 안 적으면 넷플릭스 곡선과 모양이 다를 때 다음 사람이
+                    # 「우리 모델이 틀렸다」로 읽는다. 질문이 다른 것이 결함이 아니다.
+                    "measures": ("캠페인 사이 — 예산 규모가 다른 캠페인들을 가로질러 본 "
+                                 "관계입니다. 「한 조건 안에서 노출만 늘리면」 어떻게 되는지는 "
+                                 "이 자료가 답하지 못합니다(예산이 큰 캠페인은 타겟도 넓게 잡습니다)."),
                     "a": round(a, 4), "b": round(b, 4),
                     # 🔴 «수확체감» 이라고 단정하던 문구를 고쳤다(2026-10-06).
                     #   기간을 섞은 적합은 b=0.939 였는데, 집행기간 버킷 안에서 다시 재면

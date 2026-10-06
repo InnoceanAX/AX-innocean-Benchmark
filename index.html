@@ -2108,6 +2108,12 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     if(fit.fit_weak&&fit.fit_weak_note){
       extra+='<p style="margin:6px 0 0;color:#B45309">'+esc(fit.fit_weak_note)+'</p>';
     }
+    // «무엇을 재는가» 를 한 줄로 못 박는다 — 넷플릭스 곡선과 모양이 다를 때
+    // 「우리 모델이 틀렸다」로 읽히지 않게 한다. 질문이 다른 것이 결함이 아니다.
+    if(fit.measures){
+      extra+='<p style="margin:6px 0 0;padding-top:6px;border-top:1px dotted var(--bdr)">'+
+        '<b>이 곡선이 재는 것</b> '+esc(fit.measures)+'</p>';
+    }
     box.innerHTML=h+body+extra;
     host.parentNode.insertBefore(box, host.nextSibling);
   }

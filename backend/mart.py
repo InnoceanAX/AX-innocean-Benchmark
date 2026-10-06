@@ -600,6 +600,10 @@ def build_reach(c):
            --   delivery_days_actual 이 insights 에서 «노출이 있던 날» 을 센 진짜 집행일수다.
            --   reach_window_exceeds_delivery=FALSE 는 집행이 창을 벗어나 도달이 «깎인» 쪽이다.
            delivery_days_actual, delivery_first_date, delivery_last_date,
+           -- 🔑 delivery_within_reach_window = «집행 구간이 창 안에 들어갔나»(구간 포함).
+           --   reach_window_exceeds_delivery 는 «창이 더 긴가»(기간 길이)라서 다른 질문이다.
+           --   창이 더 길어도 집행이 앞뒤로 삐져나가면 도달이 깎인다 — 948 중 166건이 그랬다.
+           delivery_within_reach_window,
            reach_window_exceeds_delivery, period_source,
            impressions, unique_reach, frequency, spend_krw,
            cost_per_1k_reach_krw, source_snapshot_date,
