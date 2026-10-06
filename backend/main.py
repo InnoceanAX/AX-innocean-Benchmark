@@ -206,6 +206,20 @@ def reach_targeting(market: str = ""):
                              "dimensions": {}}, status_code=500)
 
 
+@app.get("/api/v1/reach/curve_status")
+def reach_curve_status(market: str = "KR"):
+    """곡선 캐시 상태 내역 — «불가능» 과 «아직 안 됨» 을 갈라 보여주기 위한 값.
+
+    not_permitted(403, 조건을 바꿔야 함) 와 not_requested(아직 호출 전, 기다리면 생김) 는
+    플래너가 취할 행동이 다르다. 한 칸에 섞으면 둘 다 «안 됨» 으로 읽힌다.
+    """
+    try:
+        return JSONResponse(reach.curve_status(market=market))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"available": False, "error": str(e), "rows": []},
+                            status_code=500)
+
+
 @app.get("/api/v1/reach/markets")
 def reach_markets():
     """도달 곡선을 적합할 수 있는 시장 목록(표본 하한 이상)."""

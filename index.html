@@ -2047,7 +2047,8 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
         '<p style="font-size:11px;color:var(--tm);margin:8px 0 0;padding-top:8px;'+
         'border-top:1px solid var(--bdr)">조건을 고르는 즉시 도달이 계산되지는 않습니다. '+
         '넷플릭스 도달 API 는 호출 한도가 있어 야간에 미리 계산한 값만 조회합니다 — '+
-        '준비되면 위 «제공자 상태» 에서 켜집니다.</p>';
+        '준비되면 위 «제공자 상태» 에서 켜집니다.</p><div id="rsNfxSt"></div>';
+      rsCurveStatus(mk||'KR');
     }).catch(function(){
       box.innerHTML='<p style="font-size:12px;color:var(--tm);margin:0">사전을 읽을 수 없습니다.</p>';
     });
@@ -2055,6 +2056,24 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   var NFX_DIM={'Age':'연령','Gender':'성별','Device':'기기','Genre':'장르',
     'Language':'언어','Region':'지역','City':'도시','Metro':'광역권',
     'Netflix Interests':'관심사','Viewing Moods':'시청 분위기'};
+  // 곡선 캐시 진행 상황 — 다섯 상태를 갈라 보여준다(DB f5 계약).
+  // «사용 불가 조건»(403, 조건을 바꿔야 함) 과 «아직 조회 전»(기다리면 생김) 은
+  // 플래너가 취할 행동이 다르다. 한 칸에 섞으면 둘 다 «안 됨» 으로 읽힌다.
+  // 진행률의 분모는 격자 전체다 — 채워진 것만 세면 늘 100% 가 된다.
+  function rsCurveStatus(mk){
+    var box=el('rsNfxSt'); if(!box) return;
+    j(API+'/reach/curve_status?market='+encodeURIComponent(mk||'KR')).then(function(d){
+      if(!d||!d.available){ box.innerHTML=''; return; }
+      var rows=(d.rows||[]).map(function(r){
+        return '<div title="'+esc(r.note||'')+'" style="display:flex;justify-content:space-between;'+
+          'font-size:11px;padding:2px 0;'+(r.usable?'':'color:#B45309')+'">'+
+          '<span>'+esc(r.label)+'</span><b>'+r.n.toLocaleString()+'</b></div>'; }).join('');
+      box.innerHTML='<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--bdr)">'+
+        '<div style="font-size:11px;font-weight:700;margin-bottom:4px">곡선 캐시 '+
+        d.progress+'% (격자 '+d.n_grid.toLocaleString()+' 중 '+d.n_usable.toLocaleString()+')</div>'+
+        rows+'</div>';
+    }).catch(function(){ box.innerHTML=''; });
+  }
   function rsRun(){
     var q=qs({budget:el('rsBudget').value||2000000000, media:el('rsMedia').value||'',
               market:(el('rsMarket')&&el('rsMarket').value)||'',

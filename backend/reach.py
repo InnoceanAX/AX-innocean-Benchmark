@@ -322,27 +322,96 @@ class FittedReachProvider(Provider):
 
 
 # ── 넷플릭스 타게팅 사전 + 도달 곡선 캐시 ───────────────────────────
-# DB(f5) 2026-10-06 지침을 코드로 못박는다. 전문: QA/37_DB_NOTICE_NETFLIX_TARGETING.md
-TARGET_TBL = f"`{PROJECT}.{MART_DS}.bm_netflix_targeting`"
-CURVE_CACHE_TBL = f"`{PROJECT}.{MART_DS}.bm_netflix_reach_curve`"
+# DB(f5) 계약: QA/38_DB_NETFLIX_CURVE_CACHE_CONTRACT.md
+#
+# ★ 이름 규약 — 접두 없는 것은 DB 가 넣는다. 우리가 만들지도 지우지도 않는다.
+#   한때 bm_netflix_targeting 으로 복사했는데 뺐다. DB 가 apac_kr_benchmark 에 직접
+#   넣어주므로(우리가 OWNER · benchmark-app 이 READER) 복사하면 «DB 훅이 먼저 도는지»
+#   에 의존하게 되고, 먼저 안 돌면 조용히 하루 묵은 값을 쓴다.
+TARGET_TBL = f"`{PROJECT}.{MART_DS}.netflix_targeting`"
 
-# 🔴 도달 곡선 API 호출 한도 — «사용자가 조건 바꿀 때마다 호출» 은 불가능하다.
-#    한국만 연령 6 × 성별 2 × 기기 3 = 36가지이고 장르 22 · 관심사 115 를 곱하면 수만 가지라
-#    몇 번만 조작해도 하루 50회를 넘긴다. 유일한 구조는
-#      야간 격자 선계산 → BQ 캐시(netflix_reach_curve) → UI 는 캐시만 조회
-#    이므로 이 모듈은 «요청 경로에서 넷플릭스 API 를 호출하지 않는다». 캐시가 없으면
-#    없다고 답한다. 토큰이 생겼다는 이유로 여기에 live 호출을 넣으면 하루 만에 막힌다.
+# 🔴 곡선은 이 «뷰» 만 읽는다. 격자 LEFT JOIN 결과라 «아직 안 채운 칸» 도 행으로 나온다.
+#   채워진 것 안에서 커버리지를 재면 늘 100% 다 — 분모가 결과에 따라 줄어드는 함정이다.
+CURVE_VIEW = f"`{PROJECT}.{MART_DS}.v_netflix_reach`"
+
+# 🔴 도달 곡선 API 호출 한도 — 실제 호출은 DB 훅이 한다. 이 상수는 «왜 실시간이 아닌가»
+#    를 코드에 남기는 역할이다. 한국만 연령 6 × 성별 2 × 기기 3 = 36가지이고 장르 22 ·
+#    관심사 115 를 곱하면 수만 가지라, 사용자가 몇 번 조작하면 하루치를 태운다.
+#    구조: 야간 격자 선계산 → BQ 캐시 → UI 는 캐시만 조회.
+#    ⚠️ 이 모듈은 요청 경로에서 넷플릭스 API 를 호출하지 않는다.
 NETFLIX_RATE_LIMITS = {"month": 1500, "day": 50, "hour": 20, "minute": 5}
 
-# ⚠️ «억제» / «수집 실패» / «도달 0» 은 서로 다른 값이다.
-#    넷플릭스가 모집단이 작은 조건(소도시 등)의 출력을 정책상 억제한다.
-#    한 칸에 섞으면 시뮬레이터가 «도달 0» 으로 보여 준다 — 플래너가 «이 조건은 효과 없다» 로
-#    읽는 오해가 바로 여기서 난다. 캐시 스키마의 구분 컬럼을 그대로 끌고 올라간다.
+# ⚠️ curve_status 다섯 값 — «불가능» 과 «아직 안 됨» 을 같게 보여주면 안 된다.
+#    일 50회라 격자가 며칠에 걸쳐 채워진다. not_permitted 는 플래너가 조건을 바꿔야 하고,
+#    not_requested 는 기다리면 생긴다 — 다른 행동이다.
+#    suppressed 를 «도달 0» 으로 그리면 플래너가 «효과 없는 조건» 으로 읽는다.
 CURVE_STATUS = {
-    "ok": "곡선 있음",
-    "suppressed": "넷플릭스가 출력을 억제한 조건입니다(모집단이 작아 공개하지 않음). 도달 0 이 아닙니다.",
-    "error": "수집에 실패한 조건입니다. 값이 없다는 뜻이며 도달 0 이 아닙니다.",
+    "ok":            {"label": "곡선 있음", "usable": True,  "note": ""},
+    "suppressed":    {"label": "넷플릭스 미공개", "usable": False,
+                      "note": "모집단이 작아 넷플릭스가 출력을 억제한 조건입니다(422). "
+                              "도달이 0 이라는 뜻이 아닙니다."},
+    "not_permitted": {"label": "사용 불가 조건", "usable": False,
+                      "note": "이 계정·국가로는 쓸 수 없는 조건입니다(403). "
+                              "조건을 바꿔야 합니다 — 기다려도 생기지 않습니다."},
+    "fetch_failed":  {"label": "수집 실패", "usable": False,
+                      "note": "호출이 실패한 조건입니다(429/5xx/타임아웃). 우리 쪽 문제이고, "
+                              "다시 부르면 값이 생길 수 있습니다."},
+    "not_requested": {"label": "아직 조회 전", "usable": False,
+                      "note": "격자에는 있으나 아직 호출하지 않았습니다. 호출 한도가 일 50회라 "
+                              "격자가 며칠에 걸쳐 채워집니다 — 기다리면 생깁니다."},
 }
+
+
+@lru_cache(maxsize=16)
+def _curve_status_cached(day, market):
+    """곡선 캐시의 상태 내역. v_netflix_reach 만 읽는다(격자 LEFT JOIN 결과).
+
+    ★ 분모를 «채워진 것» 으로 잡지 않는다 — 그러면 커버리지가 늘 100% 로 나온다.
+      격자 전체가 분모고, 그 안에서 ok 가 몇인지가 진행률이다.
+    """
+    if not _view_exists(CURVE_VIEW):
+        return []
+    c = _client()
+    where = "WHERE country = @mk" if market else ""
+    job = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ScalarQueryParameter("mk", "STRING", market or "KR")])
+    try:
+        rows = list(c.query(
+            f"SELECT IFNULL(curve_status,'not_requested') st, COUNT(*) n "
+            f"FROM {CURVE_VIEW} {where} GROUP BY st ORDER BY n DESC",
+            job_config=job).result())
+    except Exception:
+        return []
+    return [(r["st"], r["n"]) for r in rows]
+
+
+def _curve_counts(market=""):
+    """(쓸 수 있는 곡선 수, 격자 전체 수)."""
+    from datetime import date
+    st = _curve_status_cached(date.today().isoformat(), (market or "").upper())
+    n_all = sum(n for _, n in st)
+    n_ok = sum(n for k, n in st if CURVE_STATUS.get(k, {}).get("usable"))
+    return n_ok, n_all
+
+
+def curve_status(market=""):
+    """상태별 내역 — 화면이 «불가능» 과 «아직 안 됨» 을 갈라 보여줄 수 있게."""
+    from datetime import date
+    st = _curve_status_cached(date.today().isoformat(), (market or "").upper())
+    if not st:
+        return {"available": False, "rows": [], "note": "곡선 캐시가 아직 없습니다."}
+    out = []
+    for k, n in st:
+        meta = CURVE_STATUS.get(k, {"label": k, "usable": False, "note": "정의되지 않은 상태입니다."})
+        out.append({"status": k, "label": meta["label"], "usable": meta["usable"],
+                    "note": meta["note"], "n": n})
+    n_all = sum(n for _, n in st)
+    n_ok = sum(x["n"] for x in out if x["usable"])
+    return {"available": True, "market": (market or "").upper(), "rows": out,
+            "n_grid": n_all, "n_usable": n_ok,
+            "progress": round(n_ok / n_all * 100, 1) if n_all else 0.0,
+            "note": ("진행률의 분모는 격자 전체입니다 — 채워진 것만 세면 늘 100%% 가 됩니다. "
+                     f"호출 한도가 일 {NETFLIX_RATE_LIMITS['day']}회라 며칠에 걸쳐 채워집니다.")}
 
 
 @lru_cache(maxsize=8)
@@ -417,23 +486,29 @@ class NetflixReachProvider(Provider):
     # 🔴 토큰이 아니라 «캐시» 가 가용 조건이다(DB f5 2026-10-06).
     #    호출 한도가 일 50 이라 요청 경로에서 부를 수 없다. 토큰만 보고 available=True 를
     #    돌려주면 화면이 실시간 조회를 전제로 짜이고, 그러면 다시 짜야 한다.
-    def available(self):
-        if not _view_exists(CURVE_CACHE_TBL):
-            return False, ("넷플릭스 도달 곡선 캐시(bm_netflix_reach_curve)가 아직 없습니다. "
-                           f"API 호출 한도가 일 {NETFLIX_RATE_LIMITS['day']}회·분 "
-                           f"{NETFLIX_RATE_LIMITS['minute']}회라 조건을 바꿀 때마다 부를 수 없고, "
-                           "야간에 격자를 선계산해 캐시에 넣는 구조가 전제입니다. "
-                           "캐시가 생기면 자동 활성화됩니다.")
-        if not os.environ.get("NETFLIX_ADS_TOKEN"):
-            return True, "캐시 조회 가능(토큰 없이도 읽습니다 — 선계산된 격자만 봅니다)"
-        return True, "사용 가능(캐시 조회)"
+    # 🔴 «테이블이 있나» 가 아니라 «쓸 수 있는 곡선이 있나» 로 묻는다(DB f5 지적).
+    #    DB 는 토큰이 오기 전에 스키마를 굳히려고 격자·캐시를 먼저 만든다. 테이블 존재로
+    #    게이트를 걸면 그 시점에 제공자가 켜지고 화면이 곡선 0개로 열린다.
+    #    0 은 «깨끗해서» 일 수도 «아직 아무것도 없어서» 일 수도 있다 — 구분해야 한다.
+    def available(self, market=""):
+        if not _view_exists(CURVE_VIEW):
+            return False, ("넷플릭스 도달 곡선 캐시가 아직 없습니다. 호출 한도가 일 "
+                           f"{NETFLIX_RATE_LIMITS['day']}회라 야간에 격자를 선계산해 "
+                           "캐시에 넣는 구조가 전제입니다 — 준비되면 자동 활성화됩니다.")
+        n_ok, n_all = _curve_counts(market)
+        if n_ok:
+            return True, f"사용 가능 — 곡선 {n_ok:,}개" + (f" / 격자 {n_all:,}" if n_all else "")
+        if n_all:
+            return False, (f"격자 {n_all:,}개가 등록됐지만 아직 쓸 수 있는 곡선이 없습니다. "
+                           f"한도가 일 {NETFLIX_RATE_LIMITS['day']}회라 며칠에 걸쳐 채워집니다.")
+        return False, "격자가 아직 등록되지 않았습니다(캐시할 조합이 미디어플래닝 협의 중)."
 
     def curve(self, **kw):
-        ok, why = self.available()
+        ok, why = self.available(kw.get("market", ""))
         if not ok:
             raise RuntimeError(why)
         raise RuntimeError(
-            "캐시 스키마가 확정되면 이 메서드가 캐시를 읽습니다. 어떤 조합을 캐시할지는 "
+            "쓸 수 있는 곡선이 있으나 조회 구현이 남았습니다. 어떤 조합을 캐시할지는 "
             "미디어플래닝 협의 사항으로 올라가 있습니다. "
             "⚠️ 여기에 넷플릭스 API 직접 호출을 넣지 마십시오 — 한도가 일 "
             f"{NETFLIX_RATE_LIMITS['day']}회입니다.")
