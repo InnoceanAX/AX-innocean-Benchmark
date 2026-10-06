@@ -1663,6 +1663,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
           <div class="fcell" style="margin-bottom:10px"><label>매체</label><select id="rsMedia"></select></div>
           <div class="fcell" style="margin-bottom:10px"><label>국가</label><select id="rsMarket"></select></div>
           <div class="fcell" style="margin-bottom:10px"><label>총 예산 (원)</label><input type="number" id="rsBudget" value="2000000000" step="100000000"></div>
+          <div class="fcell" style="margin-bottom:10px"><label>집행기간 (플라이트)</label><select id="rsDays"><option value="7">7일</option><option value="14">14일</option><option value="30" selected>30일</option><option value="60">60일</option><option value="90">90일</option></select></div>
           <div class="fcell" style="margin-bottom:10px"><label>도달 가능 모집단 (가정)</label><input type="number" id="rsUniverse" value="36000000" step="1000000"></div>
           <div class="fcell" style="margin-bottom:12px"><label>접촉 집중도 k (가정)</label><input type="number" id="rsK" value="1" step="0.1" min="0.1"></div>
           <button class="btn-pri" id="rsRun" style="width:100%;padding:9px;border:none;cursor:pointer;font-family:inherit;font-size:13px">다시 계산</button>
@@ -2010,7 +2011,8 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
                    esc(x.name||x.market)+' ('+x.n+'개 캠페인)</option>'; }).join('');
         }).catch(function(){ el('rsMarket').innerHTML='<option value="">전체 시장</option>'; })
          .then(function(){ rsRun(); rsNetflix();
-            var mo=el('rsMarket'); if(mo) mo.addEventListener('change', rsNetflix); });
+            var mo=el('rsMarket'); if(mo) mo.addEventListener('change', rsNetflix);
+            var dd=el('rsDays'); if(dd) dd.addEventListener('change', rsRun); });
       }).catch(rsRun);
     } else rsRun();
   }
@@ -2074,8 +2076,33 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
         rows+'</div>';
     }).catch(function(){ box.innerHTML=''; });
   }
+  // 🔴 기간은 «안 적힌 가정» 이 되기 쉽다 — 곡선이 어느 기간 기준인지 화면이 말한다.
+  // 2026-10-06 실측: 적합에 쓴 Meta 캠페인은 집행기간 중위 264~1000일이고 90일 이하가
+  // 0건이다. 즉 이 곡선은 «여러 달 누적된 도달» 이다. 4주 플라이트에 그대로 읽으면
+  // 도달을 과대평가한다 — 같은 노출을 짧게 몰아 넣으면 덜 닿는다.
+  // ⚠️ 기간별로 가를 표본이 없으므로 «보정하지 않는다». 보정 계수를 만들면 재지 않은 것을
+  //   잰 것처럼 그리는 셈이다. 기준을 적고 어긋남을 경고하는 데서 멈춘다.
+  function rsPeriodNote(d){
+    var host=el('rsBadge'); if(!host) return;
+    var old=el('rsPeriod'); if(old) old.remove();
+    var pb=d&&d.fit&&d.fit.period_basis; if(!pb) return;
+    var want=parseInt((el('rsDays')||{}).value)||30;
+    var box=document.createElement('div'); box.id='rsPeriod'; box.className='note';
+    var mismatch = pb.days_median && want < pb.days_median*0.5;
+    box.style.borderLeftColor=mismatch?'#B45309':'var(--bdr)';
+    box.style.background=mismatch?'#FFFBEB':'transparent';
+    box.innerHTML='<b>이 곡선의 기간 기준</b><p style="margin:4px 0 0">'+esc(pb.caveat)+'</p>'+
+      (mismatch
+        ? '<p style="margin:6px 0 0;color:#B45309"><b>지금 고른 '+want+'일과 어긋납니다.</b> '+
+          '기간별로 가를 표본이 없어 보정하지 않았습니다 — 이 곡선은 '+want+'일 '+
+          '플라이트의 도달보다 높게 나옵니다. 기간에 따른 차이는 넷플릭스 공식 곡선이 '+
+          '들어오면 그쪽에서 답합니다.</p>'
+        : '');
+    host.parentNode.insertBefore(box, host.nextSibling);
+  }
   function rsRun(){
     var q=qs({budget:el('rsBudget').value||2000000000, media:el('rsMedia').value||'',
+              flight_days:(el('rsDays')&&el('rsDays').value)||30,
               market:(el('rsMarket')&&el('rsMarket').value)||'',
               universe:el('rsUniverse').value||0, points:20});
     j(API+'/reach/curve?'+q).then(function(d){
@@ -2091,6 +2118,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       bar.innerHTML='<b style="color:'+(d.fitted?'#1F7A3D':'#B45309')+'">'+esc(d.estimate_badge)+'</b>'+
         '<p>예산→노출 환산은 <b>실측 CPM ₩'+Number(d.measured.cpm).toLocaleString()+'</b> 입니다 ('+esc(d.measured.cpm_source)+').<br>'+
         line2+'</p>';
+      rsPeriodNote(d);
       var pts=d.points;
       var tl=el('rsTbl').querySelector('thead tr'), tb=el('rsTbl').querySelector('tbody');
       var hasPct=pts.some(function(p){return p.reach_pct!=null;});

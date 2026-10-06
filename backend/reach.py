@@ -87,17 +87,40 @@ def _cpm(media, market, day):
     else:
         name = (media or "").replace("'", "")
         mf = f"AND media_name = '{name}'" if name else ""
+        # ⚠️ 광고주 수를 같이 센다. 1곳이면 그 값은 «벤치마크 통계» 가 아니라 «가정» 이다 —
+        #   광고주 간 편차가 «없다» 가 아니라 «모른다» 다(표본이 한 곳뿐이라 잴 수 없다).
+        #   넷플릭스가 그 경우이고(DB 실측 광고주 1 · API 교차검증 없음), 화면이 그걸 말해야
+        #   플래너가 33,620원을 «넷플릭스 CPM» 으로 인용하지 않는다.
         q = (f"SELECT SAFE_DIVIDE(SUM(IF(cost_ok,cost,0)),SUM(IF(cost_ok,imp,0)))*1000 cpm, "
-             f"SUM(IF(cost_ok,imp,0)) imp FROM {DPLAN_TBL} WHERE imp > 0 {mf}")
+             f"SUM(IF(cost_ok,imp,0)) imp, COUNT(DISTINCT advertiser) adv "
+             f"FROM {DPLAN_TBL} WHERE imp > 0 {mf}")
         src = "bm_dplan_creative_monthly (디플랜 NAS 실측, 금액기준 확인분만)"
     r = list(c.query(q).result())[0]
     cpm = r["cpm"]
-    if not cpm or cpm <= 0 or not r["imp"]:
-        # 해당 매체 실측이 없으면 전체 평균으로 후퇴(그 사실을 소스 문자열에 남긴다)
-        r2 = list(c.query(f"SELECT SAFE_DIVIDE(SUM(cost),SUM(imp))*1000 cpm FROM {CAMP_TBL} "
-                          f"WHERE imp > 0").result())[0]
-        return (r2["cpm"] or 3000.0), "전체 평균 CPM (해당 매체 실측 없음)"
-    return float(cpm), src
+    if cpm and cpm > 0 and r["imp"]:
+        adv = r.get("adv") if hasattr(r, "get") else None
+        if adv is not None and adv < 2:
+            src += (f" · ⚠️ 광고주 {adv}곳뿐이라 «가정» 입니다 — 광고주 간 편차는 "
+                    "«없다» 가 아니라 «모른다» 입니다. 매체 CPM 으로 인용하지 마십시오")
+        return float(cpm), src
+
+    # 🔴 «다른 매체 CPM 으로 후퇴» 를 없앴다 (2026-10-06, DB f5 실측 경고)
+    #   예전에는 전체 평균 CPM 으로 후퇴했다. 그러면 넷플릭스를 골랐을 때 구글·메타가
+    #   지배하는 평균값이 들어간다 — 같은 기간 실측으로 넷플릭스 33,620원 vs YT 2,263원,
+    #   14.9배다. 노출을 15배 크게 잡으면 포화 곡선의 «오른쪽 평평한 구간» 을 읽어
+    #   「예산을 15배 적게 써도 같은 도달」로 보인다. 플래닝 판단이 정반대로 뒤집힌다.
+    #   그래서 모르면 «모른다» 고 답한다. 틀린 숫자보다 빈 화면이 낫다.
+    if (media or "").strip() and "넷플릭스" in (media or ""):
+        nf = _netflix_cpm_cached(day)
+        if nf:
+            return nf["cpm"], (
+                f"netflix_cpm_assumption (가정 — 광고주 {nf['advertisers']}곳 · "
+                f"{nf['source_rows']}일 · {nf['spend_basis']} · "
+                f"API 교차검증 {'있음' if nf['api_cross_checked'] else '없음'})")
+    raise RuntimeError(
+        f"«{media or '선택한 매체'}» 의 CPM 실측이 없어 예산→노출 환산을 할 수 없습니다. "
+        "다른 매체 CPM 으로 대신 쓰면 노출이 자릿수로 틀립니다(같은 기간 넷플릭스와 "
+        "YouTube 가 14.9배 차이). 매체를 바꾸거나, 노출을 직접 입력하십시오.")
 
 
 def _reach_fraction(imps, universe, k):
@@ -202,6 +225,72 @@ def _view_exists(fq):
 
 
 @lru_cache(maxsize=64)
+@lru_cache(maxsize=4)
+def _fit_period_basis(day, market):
+    """적합에 쓴 캠페인들의 집행기간 분포.
+
+    🔴 2026-10-06 실측으로 드러난 것 — 이 곡선에는 «기간 해상도» 가 없다.
+      n=1,106 · 최소 264일 · 중위 264일 · 평균 344일 · 90일 이하 0건.
+      즉 이 곡선이 답하는 것은 «9개월 가까이 누적된 도달» 이다. 4주 플라이트에
+      그대로 읽으면 도달을 과대평가한다. 같은 노출을 짧게 몰아 넣으면 덜 닿는다.
+      (DB f5 지적: 「날짜 입력이 없으면 기간이 화면에 안 적힌 가정이 된다」)
+
+    ⚠️ 기간별로 가를 표본이 없으므로 «보정» 하지 않는다. 보정 계수를 만들면 재지 않은
+      것을 잰 것처럼 그리는 셈이다. 대신 기준을 글자로 적고, 사용자가 의도한 기간이
+      기준보다 훨씬 짧으면 경고한다. 넷플릭스 곡선이 오면 그쪽이 기간별로 답한다.
+    """
+    if not _view_exists(REACH_VIEW):
+        return None
+    c = _client()
+    mf = "AND market = @mk" if market else ""
+    params = [bigquery.ScalarQueryParameter("mk", "STRING", market)] if market else []
+    try:
+        r = list(c.query(
+            f"SELECT COUNT(*) n, MIN(period_days) d_min, MAX(period_days) d_max, "
+            f"APPROX_QUANTILES(period_days,100)[OFFSET(50)] d_med, "
+            f"ROUND(AVG(period_days)) d_avg, COUNTIF(period_days <= 30) le30, "
+            f"COUNTIF(period_days <= 90) le90 FROM {REACH_VIEW} "
+            f"WHERE period_days > 0 AND unique_reach > 0 AND impressions > 0 {mf}",
+            job_config=bigquery.QueryJobConfig(query_parameters=params)).result())[0]
+    except Exception:
+        return None
+    if not r["n"]:
+        return None
+    return {"n": r["n"], "days_min": r["d_min"], "days_median": r["d_med"],
+            "days_max": r["d_max"], "days_avg": int(r["d_avg"] or 0),
+            "n_le_30d": r["le30"], "n_le_90d": r["le90"],
+            "caveat": (f"이 곡선은 집행기간 중위 {r['d_med']}일(최소 {r['d_min']}일) 캠페인들로 "
+                       f"적합했습니다. 30일 이하 캠페인은 {r['le30']}건으로 기간별로 가를 "
+                       "표본이 없습니다. 짧은 플라이트에 그대로 읽으면 도달을 과대평가합니다 "
+                       "— 같은 노출을 짧게 몰아 넣으면 덜 닿습니다.")}
+
+
+@lru_cache(maxsize=2)
+def _netflix_cpm_cached(day):
+    """넷플릭스 환산 CPM — DB 가 매일 갱신하는 테이블에서 읽는다. 숫자를 박지 않는다.
+
+    🔴 이 값은 «벤치마크 통계» 가 아니라 «환산 가정» 이다. 광고주 1곳·52일·순매체비 추정·
+      API 교차검증 없음. 다른 매체 CPM 으로 환산하면 자릿수가 틀린다(같은 기간 YT 와 14.9배).
+      포화 곡선이라 노출을 15배 크게 잡으면 평평한 구간을 읽어 «예산을 15배 적게 써도 같은
+      도달» 로 보인다 — 플래닝 판단이 뒤집힌다.
+    """
+    tbl = f"`{PROJECT}.{MART_DS}.netflix_cpm_assumption`"
+    if not _view_exists(tbl):
+        return None
+    c = _client()
+    try:
+        r = list(c.query(f"SELECT * FROM {tbl} LIMIT 1").result())[0]
+    except Exception:
+        return None
+    return {"cpm": float(r["cpm_krw"]), "advertisers": r["advertisers"],
+            "source_rows": r["source_rows"], "spend_basis": r["spend_basis"],
+            "api_cross_checked": bool(r["api_cross_checked"]),
+            "date_from": str(r["date_from"]), "date_to": str(r["date_to"]),
+            "daily_min": float(r["cpm_daily_min"]), "daily_max": float(r["cpm_daily_max"]),
+            "warning": r["warning"],
+            "is_assumption": (r["advertisers"] or 0) < 2 or not r["api_cross_checked"]}
+
+
 def _fit(market, day):
     """캠페인 누적 unique reach 로 도달–노출 관계를 적합.
 
@@ -296,7 +385,9 @@ class FittedReachProvider(Provider):
                     "a": round(a, 4), "b": round(b, 4),
                     "interpretation": (f"노출을 2배로 늘리면 도달은 약 {2**b:.2f}배가 됩니다"
                                        f" (b={b:.3f} < 1 이므로 수확체감)."),
-                    "source": "apac_kr_unified.v_meta_campaign_reach (캠페인 기간 전체 누적 유니크 도달)"},
+                    "source": "apac_kr_unified.v_meta_campaign_reach (캠페인 기간 전체 누적 유니크 도달)",
+                    # 🔴 기간은 «안 적힌 가정» 이 되기 쉽다 — 반드시 응답에 실어 화면이 숨길 수 없게 한다
+                    "period_basis": _fit_period_basis(day, market or "")},
             "assumptions": [
                 {"key": "universe", "label": "도달 상한(모집단) — 선택", "value": round(cap) if cap else 0,
                  "editable": True,

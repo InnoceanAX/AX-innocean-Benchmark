@@ -177,16 +177,23 @@ def dplan_options(date_from: str = "2026-01", date_to: str = "2026-12"):
 
 @app.get("/api/v1/reach/curve")
 def reach_curve(budget: float = 2_000_000_000, media: str = "", market: str = "KR",
-                universe: int = 0, points: int = 20, provider: str = ""):
+                universe: int = 0, points: int = 20, provider: str = "",
+                flight_days: int = 30):
     """예산 대비 도달(Reach 1+) 곡선.
 
     ⚠️ 기본 제공자는 '가정 기반 추정'이다 — 실측 적합이 아니다.
        응답의 fitted=False / assumptions 를 화면에 반드시 노출할 것.
     """
+    # flight_days 는 플래너가 의도한 집행기간이다. 자체 모델은 기간 해상도가 없어
+    # (적합 표본이 전부 264일 이상) 계산에 쓰지 않고, 응답에 실어 화면이 «곡선의 기간
+    # 기준» 과 어긋남을 경고하게 한다. 넷플릭스 곡선이 오면 flight_days 로 격자를 고른다.
     try:
-        return JSONResponse(reach.curve(budget=budget, media=media, market=market,
-                                        universe=universe or None, points=points,
-                                        provider=provider or None))
+        d = reach.curve(budget=budget, media=media, market=market,
+                        universe=universe or None, points=points,
+                        provider=provider or None)
+        if isinstance(d, dict):
+            d["flight_days_requested"] = int(flight_days)
+        return JSONResponse(d)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e), "points": []}, status_code=500)
 
