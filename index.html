@@ -1648,6 +1648,17 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     <div class="sgrid" id="dpCards"></div>
     <div class="dptw"><table class="dptbl" id="dpTbl"><thead><tr></tr></thead><tbody></tbody></table></div>
     <div class="pgr" id="dpPgr"></div>
+    <div id="dpPivotBox" style="margin-top:28px;border-top:2px solid var(--bdr);padding-top:20px">
+      <h3 style="font-size:15px;margin:0 0 4px">행/열 교차표</h3>
+      <p style="font-size:12px;color:var(--tm);margin:0 0 12px">행과 열을 골라 교차해서 봅니다. 위 필터가 그대로 적용됩니다.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
+        <div class="fcell"><label>행</label><select id="pvRow"></select></div>
+        <div class="fcell"><label>열</label><select id="pvCol"></select></div>
+        <div class="fcell"><label>지표</label><select id="pvMetric"></select></div>
+      </div>
+      <div class="dptw"><table class="dptbl" id="pvTbl"><thead><tr></tr></thead><tbody></tbody></table></div>
+      <div id="pvNote" style="font-size:11px;color:var(--tm);margin-top:8px"></div>
+    </div>
   </div>
 </section>
 
@@ -1969,6 +1980,49 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   function qs(o){ return Object.keys(o).filter(function(k){return o[k]!==''&&o[k]!=null;})
     .map(function(k){return k+'='+encodeURIComponent(o[k]);}).join('&'); }
 
+  // 행/열 교차표 — 디플랜 요청("구글 맞춤보고서처럼 행/열 선택").
+  // ⚠️ 셀 값은 서버가 «합계에서 다시 계산» 한다. 소재별 값을 평균내지 않는다 —
+  //   소재마다 노출이 달라 평균하면 작은 소재가 과대 반영된다.
+  //   표본이 적은 칸(소재 3개 미만)과 금액기준 미확인 칸은 값을 내지 않고 이유를 띄운다.
+  var PV={row:'media',col:'format',metric:'cpm',init:false};
+  function pvRender(d){
+    var tbl=el('pvTbl'); if(!tbl) return;
+    var th=tbl.querySelector('thead tr'), tb=tbl.querySelector('tbody');
+    if(d.error){ th.innerHTML=''; tb.innerHTML='<tr><td>'+esc(d.error)+'</td></tr>';
+      el('pvNote').textContent=''; return; }
+    th.innerHTML='<th>'+esc(d.row_label)+' \ '+esc(d.col_label)+'</th>'+
+      (d.cols||[]).map(function(c){ return '<th style="text-align:right">'+esc(c)+'</th>'; }).join('');
+    tb.innerHTML=(d.rows||[]).map(function(r){
+      var cells=(d.cols||[]).map(function(c){
+        var x=((d.cells||{})[r]||{})[c];
+        if(!x) return '<td style="text-align:right;color:var(--tm)">·</td>';
+        var tip=x.na?(' title="'+esc(x.na)+'"'):(' title="소재 '+x.n+'개 합계 기준"');
+        return '<td style="text-align:right"'+tip+(x.na?' class="nocmp"':'')+'>'+esc(x.text)+
+               '<span style="font-size:9px;color:var(--tm);margin-left:3px">'+x.n+'</span></td>';
+      }).join('');
+      return '<tr><td>'+esc(r)+'</td>'+cells+'</tr>'; }).join('');
+    el('pvNote').innerHTML=(d.note?'<b>'+esc(d.note)+'</b><br>':'')+
+      esc(d.basis||'')+'<br>'+esc(d.warning||'')+
+      '<br>각 칸 오른쪽 작은 숫자는 그 칸을 만든 소재 수입니다.';
+  }
+  function pvLoad(){
+    if(!el('pvTbl')) return;
+    var base={date_from:DP.from||'2026-01',date_to:DP.to||'2026-12'};
+    var f={}; Object.keys(DP.f).forEach(function(k){ if(DP.f[k]) f[k]=DP.f[k]; });
+    f.media=DP.media||''; f.q=DP.q||'';
+    j(API+'/dplan/pivot?'+qs(Object.assign({},base,f,
+        {row:PV.row,col:PV.col,metric:PV.metric}))).then(function(d){
+      if(!PV.init&&d.dims){
+        var mk=function(id,map,cur){ var e=el(id); if(!e) return;
+          e.innerHTML=Object.keys(map).map(function(k){
+            return '<option value="'+k+'"'+(k===cur?' selected':'')+'>'+esc(map[k])+'</option>'; }).join('');
+          e.addEventListener('change',function(){ PV[id==='pvRow'?'row':id==='pvCol'?'col':'metric']=e.value; pvLoad(); }); };
+        mk('pvRow',d.dims,PV.row); mk('pvCol',d.dims,PV.col); mk('pvMetric',d.metrics,PV.metric);
+        PV.init=true;
+      }
+      pvRender(d);
+    }).catch(function(){});
+  }
   function dpLoad(){
     var base={date_from:DP.from||'2026-01',date_to:DP.to||'2026-12'};
     var p=Promise.resolve(DP.opt);
@@ -1986,6 +2040,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       if(sum.error||det.error){ el('dpSrc').innerHTML='<span class="badge bg-stop">데이터를 불러오지 못했습니다</span> <span>'+esc(sum.error||det.error)+'</span>'; return; }
       dpSrcBar(det.freshness||sum.freshness||{},sum);
       dpTabs(sum.media); dpCards(sum); dpFilters(); dpTable(det); dpColChooser();
+      pvLoad();
     }).catch(function(e){
       el('dpSrc').innerHTML='<span class="badge bg-stop">오류</span> <span>'+esc(e&&e.message||e)+'</span>';
     });
@@ -2254,6 +2309,32 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       '보험 계열은 여전히 갈립니다. 데이터에 그룹 축 자체가 없습니다.</p>';
   }
 
+  // 업종×광고상품 층화 토글 — 디플랜 요청(2026-10-14).
+  // ★ 왜 필요한가(실측): 수송/항공 업종의 CPM 이 검색 ₩37,107 vs 동영상 ₩1,668 로 22배다.
+  //   업종만 보면 이 둘이 한 칸에 섞여, «업종 차이» 와 «채널 구성 차이» 를 구분할 수 없다.
+  //   기본값은 업종이다 — 층화하면 칸이 40개로 늘어 처음 보는 사람에게는 읽기 어렵다.
+  function mountStratToggle(meta){
+    var pg=document.getElementById('pgBM'); if(!pg) return;
+    var box=document.getElementById('bmStrat');
+    if(!box){
+      var tw=pg.querySelector('.twrap'); if(!tw) return;
+      box=document.createElement('div'); box.id='bmStrat';
+      box.style.cssText='display:flex;gap:6px;align-items:center;margin:0 0 8px;font-size:12px';
+      tw.parentNode.insertBefore(box, tw);
+    }
+    var opts=[['industry','업종'],['industry_channel','업종 × 광고상품']];
+    box.innerHTML='<span style="color:var(--tm)">비교 기준</span>'+opts.map(function(o){
+      var on=(curDim===o[0]);
+      return '<button type="button" data-sd="'+o[0]+'" style="padding:3px 10px;border:1px solid '+
+        (on?'var(--ind)':'var(--bdr)')+';background:'+(on?'var(--ind)':'#fff')+';color:'+
+        (on?'#fff':'inherit')+';cursor:pointer;font-family:inherit;font-size:12px">'+o[1]+'</button>';
+    }).join('')+((meta&&meta.strat_note)?'<span style="color:#B45309;margin-left:6px">'+
+      esc(meta.strat_note)+'</span>':'');
+    Array.prototype.forEach.call(box.querySelectorAll('[data-sd]'), function(b){
+      b.onclick=function(){ if(curDim===b.getAttribute('data-sd')) return;
+        curDim=b.getAttribute('data-sd'); bmClearCache(); bmRefresh(); };
+    });
+  }
   function mountCaveats(meta){
     var pg=document.getElementById('pgBM'); if(!pg) return;
     var box=document.getElementById('bmCaveat');
@@ -2282,6 +2363,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       var m=d.meta, rows=(d.benchmark||[]).filter(function(r){return r.dim!=='TOTAL';});
       mountCaveats(m);
       mountBrandBasis();
+      mountStratToggle(m);
       var mx=Math.max.apply(null,rows.map(function(r){return r.n||0;}).concat([1]));
       el('bmRelList').innerHTML=
         (m.freshness?'<div style="font-size:11px;color:var(--tm);margin-bottom:10px">마트 최신 집행월 <b style="color:#000">'+

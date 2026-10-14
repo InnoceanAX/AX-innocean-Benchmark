@@ -253,6 +253,110 @@ def get_creatives(date_from="2026-01", date_to="2026-12", filters=None,
     }
 
 
+# ── 행/열 피벗 (디플랜 요청: "구글 맞춤보고서처럼 행/열을 선택") ────────
+# 🔴 피벗을 그냥 열면 «평균의 평균» 과 «모집단이 다른 비율» 이 바로 나온다.
+#   그래서 두 가지를 구조로 막는다:
+#     ① 셀 값은 «합계에서 다시 계산» 한다. 소재별 CPM 을 평균내지 않는다
+#        (소재마다 노출이 달라 평균하면 작은 소재가 과대 반영된다).
+#     ② 광고비 기반 지표는 cost_ok 행만 분자·분모에 넣는다. 기준 미확인 광고비가
+#        섞이면 순매체비와 총액이 한 칸에서 더해진다.
+#   그리고 셀마다 «소재 수» 를 같이 내려보내 화면이 표본을 숨길 수 없게 한다.
+PIVOT_DIMS = {
+    "media": ("media_name", "매체명"), "industry": ("industry", "업종"),
+    "advertiser": ("advertiser", "광고주"), "brand": ("brand", "브랜드"),
+    "product": ("product", "상품명"), "format": ("creative_format", "소재유형"),
+    "ratio": ("creative_ratio", "가로/세로"), "device": ("device", "디바이스"),
+    "goal": ("conv_goal", "전환목표"), "objective": ("objective", "캠페인목표"),
+    "sec": ("CAST(creative_sec AS STRING)", "소재초수"), "period": ("period", "집행월"),
+}
+# 합계에서 다시 계산하는 식. 분자·분모가 같은 모집단인지 확인된 것만 둔다.
+PIVOT_METRICS = {
+    "imp":   ("노출",  "int",   "SUM(imp)"),
+    "clk":   ("클릭",  "int",   "SUM(clk)"),
+    "views": ("조회",  "int",   "SUM(views)"),
+    "cost":  ("광고비", "money", "SUM(IF(cost_ok, cost, 0))"),
+    "ctr":   ("CTR",  "pct",   "SAFE_DIVIDE(SUM(clk), SUM(imp))*100"),
+    "vtr":   ("VTR",  "pct",   "SAFE_DIVIDE(SUM(views), SUM(imp))*100"),
+    "cvr":   ("CVR",  "pct",   "SAFE_DIVIDE(SUM(conv), SUM(clk))*100"),
+    "cpm":   ("CPM",  "money", "SAFE_DIVIDE(SUM(IF(cost_ok,cost,0)), SUM(IF(cost_ok,imp,0)))*1000"),
+    "cpc":   ("CPC",  "money", "SAFE_DIVIDE(SUM(IF(cost_ok,cost,0)), SUM(IF(cost_ok,clk,0)))"),
+    "cpv":   ("CPV",  "money", "SAFE_DIVIDE(SUM(IF(cost_ok,cost,0)), SUM(IF(cost_ok,views,0)))"),
+}
+PIVOT_MAX_ROWS, PIVOT_MAX_COLS = 30, 15
+PIVOT_N_MIN = 3   # 이보다 적은 소재로 만든 칸은 값을 내지 않고 «표본 N» 만 알린다
+COST_BASED = ("cpm", "cpc", "cpv", "cost")
+
+
+def get_pivot(date_from="2026-01", date_to="2026-12", row="media", col="format",
+              metric="cpm", filters=None, c=None):
+    """행x열 교차표. 셀은 합계에서 다시 계산한 값 + 소재 수."""
+    if row not in PIVOT_DIMS or col not in PIVOT_DIMS:
+        return {"error": "지원하지 않는 차원입니다", "rows": [], "cols": [], "cells": {}}
+    if row == col:
+        return {"error": "행과 열이 같습니다 - 다른 차원을 고르십시오",
+                "rows": [], "cols": [], "cells": {}}
+    if metric not in PIVOT_METRICS:
+        metric = "cpm"
+    c = c or _client()
+    rexpr, rlabel = PIVOT_DIMS[row]
+    cexpr, clabel = PIVOT_DIMS[col]
+    mlabel, mfmt, mexpr = PIVOT_METRICS[metric]
+    where, prm = _where(date_from, date_to, filters)
+    q = f"""
+    SELECT IFNULL(NULLIF(CAST({rexpr} AS STRING), ''), '(미상)') AS r,
+           IFNULL(NULLIF(CAST({cexpr} AS STRING), ''), '(미상)') AS c,
+           COUNT(*) n, {mexpr} AS v,
+           SUM(IF(cost_ok, cost, 0)) sp, COUNTIF(cost_ok) n_cost
+    FROM {TBL} WHERE {where} GROUP BY r, c ORDER BY sp DESC"""
+    rows = list(c.query(q, job_config=bigquery.QueryJobConfig(query_parameters=prm)).result())
+    # 축 순서는 광고비 합계 기준(큰 것부터). 상한을 넘으면 자르고 몇 칸을 뺐는지 알린다.
+    rsum, csum = {}, {}
+    for x in rows:
+        rsum[x["r"]] = rsum.get(x["r"], 0) + (x["sp"] or 0)
+        csum[x["c"]] = csum.get(x["c"], 0) + (x["sp"] or 0)
+    rkeys = [k for k, _ in sorted(rsum.items(), key=lambda t: -t[1])]
+    ckeys = [k for k, _ in sorted(csum.items(), key=lambda t: -t[1])]
+    r_cut, c_cut = max(0, len(rkeys) - PIVOT_MAX_ROWS), max(0, len(ckeys) - PIVOT_MAX_COLS)
+    rkeys, ckeys = rkeys[:PIVOT_MAX_ROWS], ckeys[:PIVOT_MAX_COLS]
+    rset, cset = set(rkeys), set(ckeys)
+    cells = {}
+    for x in rows:
+        if x["r"] not in rset or x["c"] not in cset:
+            continue
+        n, v = x["n"], x["v"]
+        if n < PIVOT_N_MIN:
+            cell = {"n": n, "text": "-",
+                    "na": f"소재 {n}개로 만든 칸입니다 - 한둘에 흔들려 값을 내지 않습니다"}
+        elif metric in COST_BASED and not x["n_cost"]:
+            cell = {"n": n, "text": "-",
+                    "na": "이 칸의 광고비는 금액 기준(순매체비/총액)이 확인되지 않아 "
+                          "단가를 내지 않습니다"}
+        elif v is None:
+            cell = {"n": n, "text": "-", "na": "분모가 0입니다"}
+        else:
+            cell = {"n": n, "value": float(v),
+                    "text": (_pct(v) if mfmt == "pct" else
+                             _money(v) if mfmt == "money" else _num(v))}
+        cells.setdefault(x["r"], {})[x["c"]] = cell
+    note = []
+    if r_cut:
+        note.append(f"행 {r_cut}개를 뺐습니다(광고비 상위 {PIVOT_MAX_ROWS}개만)")
+    if c_cut:
+        note.append(f"열 {c_cut}개를 뺐습니다(광고비 상위 {PIVOT_MAX_COLS}개만)")
+    return {
+        "row_dim": row, "row_label": rlabel, "col_dim": col, "col_label": clabel,
+        "metric": metric, "metric_label": mlabel, "rows": rkeys, "cols": ckeys,
+        "cells": cells, "note": " / ".join(note) or None,
+        "dims": {k: v[1] for k, v in PIVOT_DIMS.items()},
+        "metrics": {k: v[0] for k, v in PIVOT_METRICS.items()},
+        "basis": ("각 칸은 그 칸에 속한 소재들의 «합계에서 다시 계산» 한 값입니다 - "
+                  "소재별 값을 평균낸 것이 아닙니다(소재마다 노출이 달라 평균하면 "
+                  "작은 소재가 과대 반영됩니다). 단가는 금액 기준이 확인된 광고비만 씁니다."),
+        "warning": ("이 표는 디플랜 NAS 자료만 봅니다. API 수집 매체(구글·메타 등)와 "
+                    "합산하지 마십시오 - 같은 캠페인이 양쪽에 있어 이중계상됩니다."),
+    }
+
+
 @lru_cache(maxsize=8)
 def _options_cached(date_from, date_to, day):
     c = _client()

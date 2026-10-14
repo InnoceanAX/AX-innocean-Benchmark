@@ -164,6 +164,29 @@ def dplan_creatives(date_from: str = "2026-01", date_to: str = "2026-12",
         return JSONResponse({"error": str(e), "rows": [], "columns": []}, status_code=500)
 
 
+@app.get("/api/v1/dplan/pivot")
+def dplan_pivot(date_from: str = "2026-01", date_to: str = "2026-12",
+                row: str = "media", col: str = "format", metric: str = "cpm",
+                media: str = "", industry: str = "", advertiser: str = "",
+                brand: str = "", product: str = "", format: str = "",
+                ratio: str = "", device: str = "", goal: str = "",
+                objective: str = "", sec: str = "", q: str = ""):
+    """행x열 교차표 — 디플랜 요청 "구글 맞춤보고서처럼 행/열을 선택".
+
+    ⚠️ 셀 값은 그 칸 소재들의 «합계에서 다시 계산» 한다. 소재별 값을 평균내지 않는다 —
+       소재마다 노출이 달라 평균하면 작은 소재가 과대 반영된다.
+    """
+    try:
+        f = {"media": media, "industry": industry, "advertiser": advertiser,
+             "brand": brand, "product": product, "format": format, "ratio": ratio,
+             "device": device, "goal": goal, "objective": objective, "sec": sec, "q": q}
+        return JSONResponse(dplan.get_pivot(date_from, date_to, row=row, col=col,
+                                            metric=metric, filters=f))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e), "rows": [], "cols": [], "cells": {}},
+                            status_code=500)
+
+
 @app.get("/api/v1/dplan/options")
 def dplan_options(date_from: str = "2026-01", date_to: str = "2026-12"):
     """디플랜 표 필터 드롭다운 + 검색 자동완성 사전."""

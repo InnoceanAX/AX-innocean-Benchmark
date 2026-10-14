@@ -137,7 +137,20 @@ def _agg_extra(k, imp, cost, conv, ex):
 # market = 국가(ISO2)로 통합 — 별도 '권역' 중복 제거.
 DIMS = {"market": "국가", "objective": "캠페인목표", "brand": "브랜드",
         "industry": "업종", "agency": "대행사", "channel": "광고상품",
-        "device": "디바이스", "age": "연령", "gender": "성별"}
+        "device": "디바이스", "age": "연령", "gender": "성별",
+        # 층화 차원 — 디플랜 요청(2026-10-14). 업종만 보면 채널 구성이 섞여
+        # «업종 차이» 와 «채널 차이» 가 한 칸에 들어간다. 검색과 동영상은 단가 구조가
+        # 다르므로, 같은 업종이라도 채널 비중이 다르면 CPM·CPC 가 그 탓으로 벌어진다.
+        "industry_channel": "업종×광고상품"}
+
+# 차원 키 → SQL 표현식. 없으면 키 자체를 컬럼명으로 쓴다.
+# ⚠️ 복합 차원은 칸 수가 곱으로 늘어난다(업종 약 20 × 채널 약 10). 표본 하한과
+#   칸 수 상한으로 끊지 않으면 «읽을 수 없는 표» 가 된다 — 아래 STRAT_MAX_ROWS.
+DIM_SQL = {"industry_channel":
+           "CONCAT(industry, ' · ', IFNULL(NULLIF(channel,''), '(기타)'))"}
+# 복합 차원이 요구하는 컬럼 — 세그먼트 마트엔 channel 이 없어 제공하지 않는다
+DIM_NEEDS = {"industry_channel": ("industry", "channel")}
+STRAT_MAX_ROWS = 40   # 층화 표의 칸 수 상한(광고비 상위). 넘는 칸은 «그 외» 로 알린다
 # 필터 화이트리스트 (channel/agency는 캠페인 마트에만 존재 — 세그먼트/영상 소스엔 미적용)
 FILTERS = {"market", "objective", "brand", "industry", "agency", "channel"}
 CAMPAIGN_ONLY_FILTERS = {"agency", "channel"}   # 세그먼트/영상 소스엔 없는 컬럼
@@ -209,6 +222,12 @@ DEVICE_NAME = {"MOBILE": "모바일", "DESKTOP": "데스크톱", "TABLET": "태�
 
 
 def dim_name(dim, code):
+    if dim == "industry_channel":
+        # 'IT/통신 · SEARCH' → 'IT/통신 · 검색'
+        parts = str(code or "").split(" · ")
+        if len(parts) == 2:
+            return f"{parts[0]} · {CHANNEL_NAME.get(parts[1], parts[1])}"
+        return code
     if dim == "market":
         return MARKET_NAME.get(code, code)
     if dim == "brand":
@@ -400,11 +419,21 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         gross = max(0.0, float(gross or 0))
     except (TypeError, ValueError):
         gross = 0.0
+    if dim in DIM_NEEDS:
+        _have = _table_cols(SEGMENT_TBL.get(dim, TBL)) or set()
+        _miss = [c for c in DIM_NEEDS[dim] if c not in _have]
+        if _miss:
+            return {"benchmark": [], "detail": [], "charts": None, "meta": {
+                "media": media, "media_name": MEDIA_NAME.get(media, media),
+                "available": False, "dim": dim,
+                "note": (f"{DIMS.get(dim, dim)} 층화에 필요한 컬럼이 없습니다"
+                         f"({', '.join(_miss)}).")}}
     if dim in SEGMENT_TBL and not _segment_available(dim):
         return {"benchmark": [], "detail": [], "charts": None, "meta": {
             "media": media, "media_name": MEDIA_NAME.get(media, media), "available": False,
             "dim": dim, "note": f"{DIMS.get(dim, dim)} 데이터 준비 중입니다 (통합뷰 추가 대기)."}}
     src = SEGMENT_TBL.get(dim, TBL)
+    dimsql = DIM_SQL.get(dim, dim)
     revc = _rev_src(src)       # ROAS 분자 컬럼 — rev_pur 우선(이름이 뜻을 말하는 쪽)
     convc = _conv_src(src)     # CVR 분자 컬럼 — conv_pur 우선
     has_video = (src == TBL)   # 영상 집계 컬럼은 캠페인 마트에만 존재(세그먼트 마트엔 없음)
@@ -488,7 +517,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     # 1) 기준차원별 4분위 + 합계 (캠페인 단위 분포)
     bench_sql = f"""
     WITH camp AS (
-      SELECT {dim} AS dim, campaign_id,{chan_sel}{isrc_sel}
+      SELECT {dimsql} AS dim, campaign_id,{chan_sel}{isrc_sel}
         SUM(imp) imp, SUM(clk) clk, SUM(cost) cost, SUM(conv) conv, SUM({convc}) conv_pur, SUM({revc}) rev{vcols_sel}
       FROM {src} WHERE {where}
       GROUP BY dim, campaign_id HAVING {camp_having}
@@ -628,7 +657,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     # 2) detail (월 × 기준차원)
     detail = []
     det_sql = f"""
-      SELECT period, {dim} AS dim, COUNT(*) n, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost,
+      SELECT period, {dimsql} AS dim, COUNT(*) n, SUM(imp) imp, SUM(clk) clk, SUM(cost) cost,
              SUM(conv) conv, SUM({convc}) conv_pur, SUM({revc}) rev{vcols_sel}
       FROM {src} WHERE {where} GROUP BY period, dim HAVING imp > 0
       ORDER BY period DESC, cost DESC
@@ -731,6 +760,22 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
     if meta_eng_avail: avail_metrics += ["cmt", "rct", "lead", "shr"]
     # VTR/CPV 기준(basis) 가용: tv/100=영상(Google), 3s=Meta3초; 링크클릭 기준=link_avail
     video_bases = (["tv", "100"] if vid_avail else []) + (["3s"] if metaview_avail else []) + (["thru"] if thru_avail else [])
+    # 층화 차원은 칸이 곱으로 늘어난다(업종×광고상품 실측 58칸). 광고비 상위로 끊고
+    # 몇 칸을 뺐는지 알린다 — 조용히 자르면 «없는 조합» 으로 읽힌다.
+    strat_note = None
+    if dim in DIM_SQL and len(benchmark) > STRAT_MAX_ROWS:
+        def _sp(r):
+            try:
+                return float(str(r.get("cost", "0")).replace(",", "").lstrip("₩$€¥₹") or 0)
+            except ValueError:
+                return 0.0
+        benchmark.sort(key=_sp, reverse=True)
+        cut = len(benchmark) - STRAT_MAX_ROWS
+        benchmark = benchmark[:STRAT_MAX_ROWS]
+        strat_note = (f"{DIMS[dim]} 조합이 {len(benchmark) + cut}칸이라 광고비 상위 "
+                      f"{STRAT_MAX_ROWS}칸만 표시합니다(나머지 {cut}칸은 집행이 작아 "
+                      "표본 하한에 걸리는 쪽입니다). 필터로 업종을 좁히면 전부 보입니다.")
+
     fx_rates, fx_asof = _fx()
     result = {
         "benchmark": [total] + benchmark,
@@ -739,6 +784,7 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         "meta": {
             "media": media, "media_name": MEDIA_NAME.get(media, media), "available": True,
             "dim": dim, "dim_label": DIMS[dim], "n_dim": len(benchmark), "rows": len(detail),
+            "stratified": dim in DIM_SQL, "strat_note": strat_note,
             "date_from": date_from, "date_to": date_to,
             "currency": (currency or "KRW").upper(), "symbol": sym, "cached": True,
             "gross": gross, "cost_basis": ("Gross" if gross > 0 else "Net"),
@@ -960,6 +1006,7 @@ def period_compare(media="G", dim="industry", date_from="2025-01-01", date_to="2
     if dim not in DIMS:
         dim = "industry"
     src = SEGMENT_TBL.get(dim, TBL)
+    dimsql = DIM_SQL.get(dim, dim)
     revc = _rev_src(src)       # ROAS 분자 — rev_pur 우선
     convc = _conv_src(src)     # CVR 분자 — conv_pur 우선
     p0, p1 = date_from[:7], date_to[:7]
@@ -974,7 +1021,7 @@ def period_compare(media="G", dim="industry", date_from="2025-01-01", date_to="2
         where, params = _filter_clauses(media, a, b, filters)
         rows = list(cl.query(f"""
           WITH camp AS (
-            SELECT {dim} AS dim, campaign_id, SUM(imp) imp, SUM(clk) clk,
+            SELECT {dimsql} AS dim, campaign_id, SUM(imp) imp, SUM(clk) clk,
                    SUM(cost) cost, SUM({convc}) conv_pur, SUM({revc}) rev
             FROM {src} WHERE {where}
             GROUP BY dim, campaign_id HAVING imp >= 1000 AND clk > 0
