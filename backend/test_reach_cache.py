@@ -87,6 +87,38 @@ d8, why8 = reach.points_from_cache([_row()], 0, BUD)
 ck("CPM 0 이면 거부", d8 is None and bool(why8), why8 or "")
 
 print()
+print("=== 모집단 밴드 — 분모가 범위라는 것을 숨기지 않는다 ===")
+# 벤더가 준 모집단(메타 delivery_estimate 실측 모양: ES 25~54 → 20.9M~24.6M)
+rv = _row(); rv.update({"population_lower": 20_900_000, "population_upper": 24_600_000,
+                        "population_source": "vendor_api"})
+d9, _ = reach.points_from_cache([rv], CPM, BUD, points=5)
+ck("벤더 모집단이면 밴드가 나온다",
+   d9 and all("reach_pct_lower" in p and "reach_pct_upper" in p for p in d9["points"]))
+ck("상한 모집단이 하한 도달률을 만든다",
+   d9 and d9["points"][-1]["reach_pct_lower"] < d9["points"][-1]["reach_pct_upper"])
+ck("population.is_vendor 가 참", d9 and d9["population"]["is_vendor"] is True)
+ck("범위라고 경고", d9 and any("범위입니다" in w for w in d9["warnings"]))
+
+# 가정 모집단 — 같은 칸에 섞이면 신뢰도가 같아 보인다
+ra = _row(); ra.update({"population_lower": 30_000_000, "population_upper": 30_000_000,
+                        "population_source": "assumed"})
+d10, _ = reach.points_from_cache([ra], CPM, BUD, points=5)
+ck("가정 모집단은 is_vendor 가 거짓", d10 and d10["population"]["is_vendor"] is False)
+ck("가정이라고 경고", d10 and any("«가정»" in w for w in d10["warnings"]))
+
+# 모집단이 없으면 % 를 만들지 않는다
+d11, _ = reach.points_from_cache([_row()], CPM, BUD, points=5)
+ck("모집단 없으면 밴드 없음",
+   d11 and d11["population"] is None and "reach_pct_lower" not in d11["points"][0])
+
+# 상·하한이 뒤집혀 들어와도 버티는가
+rb = _row(); rb.update({"population_lower": 24_600_000, "population_upper": 20_900_000,
+                        "population_source": "vendor_api"})
+d12, _ = reach.points_from_cache([rb], CPM, BUD, points=3)
+ck("상하한 뒤집힘을 바로잡는다",
+   d12 and d12["population"]["lower"] < d12["population"]["upper"])
+
+print()
 if fails:
     print(f"FAILED {len(fails)}건: {', '.join(fails)}")
     raise SystemExit(1)

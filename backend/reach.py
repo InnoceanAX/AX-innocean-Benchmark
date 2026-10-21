@@ -1041,9 +1041,43 @@ def points_from_cache(rows, cpm, budget, points=20):
     if truncated:
         warn.append(f"요청 예산이 캐시된 곡선의 끝(약 {cap_cost/1e8:.1f}억)을 넘어 "
                     "거기서 멈췄습니다 — 그 바깥은 캐시에 없습니다.")
+
+    # 🔑 도달률(%)의 분모 — «행마다» 들고 있는 모집단을 쓴다 (DB f5/d9 계약, 2026-10-21)
+    #   메타는 delivery_estimate 로 모집단을 «권한 없이» 준다(실측: ES 25~54 →
+    #   2,090만~2,460만). 넷플릭스는 가입자 규모를 몰라 한동안 assumed 다.
+    #   ⚠️ 점이 아니라 «범위» 다(폭 ±8%). 단일 %를 내면 그 자체가 가정이 되므로
+    #     밴드로 그린다. 상·하한을 각 점에 실어 화면이 띠로 칠할 수 있게 한다.
+    #   ⚠️ 🔴 타게팅마다 모집단이 다르다. 그래서 전역 상수가 아니라 행에서 읽는다 —
+    #     전역으로 두면 뒤에 다시 부를 때 과거 도달률이 «조용히» 바뀐다.
+    #   ⚠️ population_source 를 반드시 끌고 올라간다. vendor_api 와 assumed 를 한 칸에
+    #     섞으면 화면에서 둘이 같은 신뢰도로 보인다.
+    pop_lo = row.get("population_lower")
+    pop_hi = row.get("population_upper")
+    pop_src = (row.get("population_source") or "").strip() or None
+    pop = None
+    if pop_lo or pop_hi:
+        lo = float(pop_lo or pop_hi or 0)
+        hi = float(pop_hi or pop_lo or 0)
+        if lo > 0 and hi > 0:
+            if lo > hi:
+                lo, hi = hi, lo
+            for p in out:
+                # 분모가 크면 비율이 작다 — 상한 모집단이 «하한 도달률» 을 만든다
+                p["reach_pct_lower"] = round(p["reach"] / hi * 100, 2)
+                p["reach_pct_upper"] = round(p["reach"] / lo * 100, 2)
+            pop = {"lower": round(lo), "upper": round(hi), "source": pop_src or "unknown",
+                   "is_vendor": pop_src == "vendor_api",
+                   "spread_pct": round((hi - lo) / ((hi + lo) / 2) * 100, 1)}
+            if pop_src != "vendor_api":
+                warn.append(f"도달률의 분모가 «가정» 입니다(출처 {pop_src or '미기록'}) — "
+                            "벤더가 준 모집단이 아닙니다. 비율보다 절대 도달로 읽으십시오.")
+            else:
+                warn.append(f"도달률은 범위입니다 — 모집단 {round(lo):,}~{round(hi):,}명"
+                            f"(벤더 제공, 폭 ±{pop['spread_pct']/2:.0f}%). "
+                            "단일 %가 아니라 띠로 읽으십시오.")
     return {"points": out, "warnings": warn, "scope": scope,
             "max_imp": round(max_imp), "max_reach": round(pairs[-1][1]),
-            "n_cache_points": len(pairs)}, None
+            "n_cache_points": len(pairs), "population": pop}, None
 
 
 def _fetch_cache_rows(view, market, flight_days, targeting_label=""):
@@ -1083,11 +1117,8 @@ def _cache_curve_response(provider, view, media, market, flight_days, budget, po
     parsed, why = points_from_cache(rows, cpm, budget, points)
     if parsed is None:
         raise RuntimeError(why)
-    uni = _universe_hint(market)
     pts = parsed["points"]
-    if uni:
-        for p in pts:
-            p["reach_pct"] = round(p["reach"] / uni * 100, 2)
+    pop = parsed.get("population")
     return {
         "provider": provider.name, "provider_label": provider.label,
         "fitted": True, "kind": provider.kind,
@@ -1096,25 +1127,24 @@ def _cache_curve_response(provider, view, media, market, flight_days, budget, po
         "measured": {"cpm": round(cpm, 2), "cpm_source": cpm_src,
                      "note": "예산→노출은 실측 CPM, 노출→도달은 벤더 예측 곡선입니다."},
         "cache": {"scope": parsed["scope"], "max_imp": parsed["max_imp"],
-                  "max_reach": parsed["max_reach"], "flight_days": int(flight_days or 0)},
+                  "max_reach": parsed["max_reach"], "flight_days": int(flight_days or 0),
+                  "population": pop},
         "measures": provider.measures,
         "caveats": ([
             "이 곡선은 벤더의 «예측» 입니다 — 우리가 집행해서 관찰한 값이 아닙니다.",
             provider.measures,
         ] + parsed["warnings"] + ([
-            "도달률(%)은 모집단 가정이 없어 표시하지 않습니다 — 절대 도달로 읽으십시오."
-        ] if not uni else [])),
+            "도달률(%)은 이 조건의 모집단이 캐시에 없어 표시하지 않습니다 — "
+            "절대 도달로 읽으십시오."
+        ] if not pop else [])),
     }
 
 
-def _universe_hint(market):
-    """도달률(%) 분모. 벤더가 모집단을 주지 않으면 0 — 그러면 %를 그리지 않는다.
-
-    ⚠️ 가정 모집단(예: 3,600만)을 벤더 곡선에 갖다 붙이면 «그 벤더의 도달률» 처럼
-      보인다. 넷플릭스 한국 광고요금제 가입자 규모는 우리가 모른다 — 물어야 한다.
-      모를 때는 %를 안 그리는 쪽이 맞다.
-    """
-    return 0
+# ⚠️ 폐기 — 전역 모집단을 쓰지 않는다.
+#   한때 시장 단위로 모집단을 하나 두려 했는데, DB 실측으로 «타게팅마다 모집단이 다르다»
+#   가 확인됐다(메타 delivery_estimate). 전역으로 두면 조건을 바꿔도 분모가 그대로여서
+#   도달률이 틀리고, 나중에 값을 갱신하면 과거 도달률이 «조용히» 바뀐다.
+#   분모는 곡선 캐시 «행» 에서 읽는다(population_lower/upper/source).
 
 
 class _VendorForecastProvider(Provider):
