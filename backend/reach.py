@@ -1303,6 +1303,9 @@ def compare_curves(budget=2_000_000_000, media="", market="KR", universe=None,
                            points=d.get("points", []),
                            measured=d.get("measured"),
                            fit=d.get("fit"),
+                           # 화면이 모집단 출처(vendor_api/assumed)를 읽어야 한다 —
+                           # 안 실으면 밴드는 그려지는데 «무엇으로 나눈 비율인지» 가 사라진다
+                           cache=d.get("cache"),
                            caveats=d.get("caveats", [])))
     return {
         "budget": budget, "points": points, "market": market, "media": media,

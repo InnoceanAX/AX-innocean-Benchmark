@@ -355,7 +355,12 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     _fillSel('업종','industry'); _fillSel('국가','market');
     if((window._bmOptions||{}).channel_available) _fillSel('광고 상품','channel');
   }
-  window.bmSetDim=function(){};   // 원안엔 기준차원 없음 (no-op)
+  // 🔴 원래 no-op 스텁이었다. 추가 모듈(아래 IIFE)은 이 스코프의 curDim 을 «볼 수 없다» —
+  //   모듈에서 curDim 을 직접 쓰면 ReferenceError 가 나고, promise 안이면 조용히 삼켜진다.
+  //   실제로 mountBrandBasis·mountStratToggle 이 그렇게 죽어 있었다(브라우저 검증으로 발견).
+  //   그래서 경계를 함수로 만든다 — 모듈은 bmGetDim/bmSetDim 만 쓴다.
+  window.bmSetDim=function(d){ if(d) curDim=d; };
+  window.bmGetDim=function(){ return curDim; };
   // 영상은 별도 매체가 아니라 집행 플랫폼(Google)에 귀속 → 영상 탭 제거. 혹시 남아있으면 정리.
   function removeVideoTab(){ var v=document.getElementById('mtV'); if(v&&v.parentNode)v.parentNode.removeChild(v); }
   function tidyMediaTabs(){   // 매체 탭 정렬 + 네이버(수집예정) 비활성
@@ -1652,12 +1657,12 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       <h3 style="font-size:15px;margin:0 0 4px">행/열 교차표</h3>
       <p style="font-size:12px;color:var(--tm);margin:0 0 12px">행과 열을 골라 교차해서 봅니다. 위 필터가 그대로 적용됩니다.</p>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
-        <div class="fcell"><label>행</label><select id="pvRow"></select></div>
-        <div class="fcell"><label>열</label><select id="pvCol"></select></div>
-        <div class="fcell"><label>지표</label><select id="pvMetric"></select></div>
+        <div class="fcell"><label>행</label><select id="dpPvRow"></select></div>
+        <div class="fcell"><label>열</label><select id="dpPvCol"></select></div>
+        <div class="fcell"><label>지표</label><select id="dpPvMetric"></select></div>
       </div>
-      <div class="dptw"><table class="dptbl" id="pvTbl"><thead><tr></tr></thead><tbody></tbody></table></div>
-      <div id="pvNote" style="font-size:11px;color:var(--tm);margin-top:8px"></div>
+      <div class="dptw"><table class="dptbl" id="dpPvTbl"><thead><tr></tr></thead><tbody></tbody></table></div>
+      <div id="dpPvNote" style="font-size:11px;color:var(--tm);margin-top:8px"></div>
     </div>
   </div>
 </section>
@@ -1995,10 +2000,10 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   //   표본이 적은 칸(소재 3개 미만)과 금액기준 미확인 칸은 값을 내지 않고 이유를 띄운다.
   var PV={row:'media',col:'format',metric:'cpm',init:false};
   function pvRender(d){
-    var tbl=el('pvTbl'); if(!tbl) return;
+    var tbl=el('dpPvTbl'); if(!tbl) return;
     var th=tbl.querySelector('thead tr'), tb=tbl.querySelector('tbody');
     if(d.error){ th.innerHTML=''; tb.innerHTML='<tr><td>'+esc(d.error)+'</td></tr>';
-      el('pvNote').textContent=''; return; }
+      el('dpPvNote').textContent=''; return; }
     th.innerHTML='<th>'+esc(d.row_label)+' \ '+esc(d.col_label)+'</th>'+
       (d.cols||[]).map(function(c){ return '<th style="text-align:right">'+esc(c)+'</th>'; }).join('');
     tb.innerHTML=(d.rows||[]).map(function(r){
@@ -2010,12 +2015,12 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
                '<span style="font-size:9px;color:var(--tm);margin-left:3px">'+x.n+'</span></td>';
       }).join('');
       return '<tr><td>'+esc(r)+'</td>'+cells+'</tr>'; }).join('');
-    el('pvNote').innerHTML=(d.note?'<b>'+esc(d.note)+'</b><br>':'')+
+    el('dpPvNote').innerHTML=(d.note?'<b>'+esc(d.note)+'</b><br>':'')+
       esc(d.basis||'')+'<br>'+esc(d.warning||'')+
       '<br>각 칸 오른쪽 작은 숫자는 그 칸을 만든 소재 수입니다.';
   }
   function pvLoad(){
-    if(!el('pvTbl')) return;
+    if(!el('dpPvTbl')) return;
     var base={date_from:DP.from||'2026-01',date_to:DP.to||'2026-12'};
     var f={}; Object.keys(DP.f).forEach(function(k){ if(DP.f[k]) f[k]=DP.f[k]; });
     f.media=DP.media||''; f.q=DP.q||'';
@@ -2025,8 +2030,8 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
         var mk=function(id,map,cur){ var e=el(id); if(!e) return;
           e.innerHTML=Object.keys(map).map(function(k){
             return '<option value="'+k+'"'+(k===cur?' selected':'')+'>'+esc(map[k])+'</option>'; }).join('');
-          e.addEventListener('change',function(){ PV[id==='pvRow'?'row':id==='pvCol'?'col':'metric']=e.value; pvLoad(); }); };
-        mk('pvRow',d.dims,PV.row); mk('pvCol',d.dims,PV.col); mk('pvMetric',d.metrics,PV.metric);
+          e.addEventListener('change',function(){ PV[id==='dpPvRow'?'row':id==='dpPvCol'?'col':'metric']=e.value; pvLoad(); }); };
+        mk('dpPvRow',d.dims,PV.row); mk('dpPvCol',d.dims,PV.col); mk('dpPvMetric',d.metrics,PV.metric);
         PV.init=true;
       }
       pvRender(d);
@@ -2217,6 +2222,10 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   //   보는 사람이 차이를 «어느 쪽이 틀렸다» 로 읽는다.
   // ⚠️ 못 쓰는 제공자도 이유와 함께 보여준다. 빠뜨리면 지금 가진 것이 전부로 보인다.
   var rsCmpChart=null;
+  function hexA(h,a){ var m=/^#?([0-9a-f]{6})$/i.exec(String(h).trim());
+    if(!m) return 'rgba(107,114,128,'+a+')';
+    var n=parseInt(m[1],16);
+    return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')'; }
   var CMP_COLOR={netflix:'#E50914',google_reachplan:'#1A73E8',meta_rf:'#0866FF',
                  fitted:'#1F7A3D',assumption:'#B45309'};
   var KIND_LABEL={forecast:'벤더 예측',measured:'우리 실측',assumption:'가정식'};
@@ -2231,13 +2240,29 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       var ser=d.series||[], labels=[];
       if(ser.length&&ser[0].points) labels=ser[0].points.map(function(p){
         return (p.cost/100000000).toFixed(0)+'억'; });
-      var usePct=ser.some(function(x){ return (x.points||[]).some(function(p){ return p.reach_pct!=null; }); });
-      var ds=ser.map(function(x){
+      var usePct=ser.some(function(x){ return (x.points||[]).some(function(p){
+        return p.reach_pct!=null||p.reach_pct_lower!=null; }); });
+      // 🔑 모집단이 «범위» 로 오면 선 하나가 아니라 띠로 그린다.
+      //   벤더가 주는 모집단은 상·하한이다(실측 폭 ±8%). 단일 %를 그리면 그 자체가
+      //   가정이 된다 — 중간값을 골라 선으로 그으면 범위가 사라진다.
+      //   Chart.js 는 fill:'-1' 로 «직전 데이터셋까지» 칠하므로 상한·하한을 쌍으로 넣는다.
+      var ds=[];
+      ser.forEach(function(x){
         var col=CMP_COLOR[x.name]||'#6B7280';
-        return {label:x.label, data:(x.points||[]).map(function(p){
+        var pts=x.points||[];
+        var hasBand=usePct&&pts.some(function(p){ return p.reach_pct_lower!=null; });
+        if(hasBand){
+          ds.push({label:x.label+' (상한)', data:pts.map(function(p){return p.reach_pct_upper;}),
+                   borderColor:col, borderWidth:1, pointRadius:0, fill:false, tension:.3});
+          ds.push({label:x.label+' (모집단 범위)', data:pts.map(function(p){return p.reach_pct_lower;}),
+                   borderColor:col, borderWidth:1, pointRadius:0, tension:.3,
+                   fill:'-1', backgroundColor:hexA(col,.14)});
+          return;
+        }
+        ds.push({label:x.label, data:pts.map(function(p){
                   return usePct?(p.reach_pct!=null?p.reach_pct:null):p.reach; }),
                 borderColor:col, backgroundColor:'transparent', fill:false, tension:.3,
-                pointRadius:2, borderDash:(x.kind==='assumption'?[5,4]:[])};
+                pointRadius:2, borderDash:(x.kind==='assumption'?[5,4]:[])});
       });
       if(rsCmpChart) rsCmpChart.destroy();
       rsCmpChart=new Chart(el('rsCmpChart'),{type:'line',data:{labels:labels,datasets:ds},
@@ -2250,10 +2275,17 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       el('rsCmpWhat').innerHTML='<div class="note"><b>'+esc(d.read_me)+'</b></div>'+
         '<table class="dptbl" style="font-size:11px;margin-top:8px"><thead><tr>'+
         '<th style="text-align:left">곡선</th><th style="text-align:left">성격</th>'+
+        '<th style="text-align:left">도달률 분모</th>'+
         '<th style="text-align:left">재는 것</th></tr></thead><tbody>'+
         ser.map(function(x){
+          // 🔴 vendor_api 와 assumed 를 같은 칸에 쓰면 화면에서 신뢰도가 같아 보인다
+          var pop=(x.cache&&x.cache.population)||null, pd='—';
+          if(pop){
+            pd=(pop.lower/10000).toFixed(0)+'만~'+(pop.upper/10000).toFixed(0)+'만 '+
+               (pop.is_vendor?'<b>(벤더 제공)</b>':'<span style="color:#B45309">(가정)</span>');
+          }
           return '<tr><td style="color:'+(CMP_COLOR[x.name]||'#6B7280')+';font-weight:700">'+
-            esc(x.label)+'</td><td>'+esc(KIND_LABEL[x.kind]||x.kind)+'</td><td>'+
+            esc(x.label)+'</td><td>'+esc(KIND_LABEL[x.kind]||x.kind)+'</td><td>'+pd+'</td><td>'+
             esc(x.measures||'')+'</td></tr>'; }).join('')+'</tbody></table>'+
         '<p style="font-size:11px;color:var(--tm);margin:6px 0 0">'+esc(d.axis_note)+'</p>';
       var bl=d.blocked||[];
@@ -2336,7 +2368,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
           '<p style="font-size:11px;color:var(--tm);margin:0 0 10px">표본이 적으면 중앙값·상위 25%/10% 가 캠페인 한둘에 흔들립니다.</p>'+
           '<div id="bmRelList"></div></div>'+
         '<div class="pvbox"><h4>내 캠페인은 어디쯤인가</h4>'+
-          '<div class="fcell" style="margin-bottom:8px"><label>지표</label><select id="pvMetric"></select></div>'+
+          '<div class="fcell" style="margin-bottom:8px"><label>지표</label><select id="dpPvMetric"></select></div>'+
           '<div class="fcell" style="margin-bottom:10px"><label>내 값</label><input type="number" id="pvVal" step="0.01" placeholder="예: 4200"></div>'+
           '<button id="pvGo" style="width:100%;padding:8px;background:#000;color:#fff;border:none;cursor:pointer;font-family:inherit;font-size:13px">비교</button>'+
           '<div id="pvOut"></div></div>'+
@@ -2345,7 +2377,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     el('pvGo').onclick=pvRun;
   }
   function bmState(){
-    var S=window.STATE||{};
+    var S=_S();
     return {media:S.media||'G',
             date_from:(S.date_from||S.from||'2025-06-01'),
             date_to:(S.date_to||S.to||'2026-12-31'),
@@ -2356,10 +2388,38 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   // 브랜드 축의 «기준» 을 화면이 스스로 밝힌다.
   // 같은 그룹이라도 brand 값이 다르면 다른 행이다 — 현대차와 현대해상은 업종부터 다르다.
   // 기준을 안 적으면 다음 사람이 «현대가 왜 둘이냐» 를 결함으로 읽는다(DB d9 지적, 2026-09-22).
+  // 기준차원 읽기 — 원래 스코프의 curDim 을 getter 로만 건드린다(모듈에서 직접 보이지 않는다)
+  // 🔴 삼켜지는 에러를 드러낸다 (2026-10-21)
+  //   추가 모듈이 원래 스크립트의 스코프 변수를 참조하면 ReferenceError 가 나는데,
+  //   그게 promise .then 안이면 «unhandledrejection» 이 되어 콘솔 error 로도 안 찍힌다.
+  //   그래서 화면은 멀쩡해 보이고 기능만 조용히 죽는다 — 실제로 경고 배너·브랜드 기준·
+  //   층화 토글 세 개가 그렇게 죽어 있었고, API 200 만 보던 내 검증은 그걸 못 잡았다.
+  //   이 리스너는 그 구멍을 막는다. 브라우저 검증이 콘솔에서 바로 본다.
+  (function(){
+    function mark(tag, e){
+      try{
+        var msg = (e && (e.message || e.reason && (e.reason.message || e.reason) || e)) + '';
+        console.error('[BM-' + tag + '] ' + msg.slice(0, 300));
+      }catch(_){}
+    }
+    window.addEventListener('unhandledrejection', function(ev){ mark('REJECT', ev); });
+    window.addEventListener('error', function(ev){ mark('ERROR', ev && (ev.error || ev)); });
+  })();
+
+  // 🔴 STATE 는 const 로 선언돼 «window.STATE 가 되지 않는다» (var 와 다른 점).
+  //   그래서 추가 모듈이 쓰던 window.STATE 검사가 «항상 실패» 하고 있었다 —
+  //   bmState() 가 사용자가 고른 매체·기간·필터를 무시한 기본값을 돌려줬고,
+  //   STATE.dim 도 읽히지 않아 층화 안내가 안 떴다(브라우저 검증으로 발견).
+  //   const 의 전역 렉시컬 바인딩은 «뒤에 오는 스크립트» 에서 맨이름으로 보인다.
+  function _S(){ try{ return (typeof STATE!=='undefined'&&STATE)?STATE:{}; }catch(e){ return {}; } }
+
+  function _mdim(){ try{
+    return (window.bmGetDim?bmGetDim():null) || _S().dim || 'industry';
+  }catch(e){ return 'industry'; } }
   function mountBrandBasis(){
     var pg=document.getElementById('pgBM'); if(!pg) return;
     var b=document.getElementById('bmBrandBasis');
-    if(curDim!=='brand'){ if(b) b.remove(); return; }
+    if(_mdim()!=='brand'){ if(b) b.remove(); return; }
     if(!b){
       b=document.createElement('div'); b.id='bmBrandBasis'; b.className='note';
       var tw=pg.querySelector('.twrap'); if(!tw) return;
@@ -2387,15 +2447,24 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     }
     var opts=[['industry','업종'],['industry_channel','업종 × 광고상품']];
     box.innerHTML='<span style="color:var(--tm)">비교 기준</span>'+opts.map(function(o){
-      var on=(curDim===o[0]);
+      var on=(_mdim()===o[0]);
       return '<button type="button" data-sd="'+o[0]+'" style="padding:3px 10px;border:1px solid '+
         (on?'var(--ind)':'var(--bdr)')+';background:'+(on?'var(--ind)':'#fff')+';color:'+
         (on?'#fff':'inherit')+';cursor:pointer;font-family:inherit;font-size:12px">'+o[1]+'</button>';
     }).join('')+((meta&&meta.strat_note)?'<span style="color:#B45309;margin-left:6px">'+
       esc(meta.strat_note)+'</span>':'');
     Array.prototype.forEach.call(box.querySelectorAll('[data-sd]'), function(b){
-      b.onclick=function(){ if(curDim===b.getAttribute('data-sd')) return;
-        curDim=b.getAttribute('data-sd'); bmClearCache(); bmRefresh(); };
+      b.onclick=function(){ var d=b.getAttribute('data-sd'); if(_mdim()===d) return;
+        // ⚠️ 기준차원 소스가 «둘» 이다 — 원래 화면은 curDim(표 렌더), 추가 모듈은 STATE.dim
+        //   (bmRefresh 조회). 하나만 바꾸면 표는 바뀌는데 안내 문구·경고가 안 따라온다.
+        //   실제로 층화 안내문이 그래서 안 떴다(브라우저 검증으로 발견). 둘 다 바꾼다.
+        if(window.bmSetDim) bmSetDim(d);
+        _S().dim=d;
+        bmClearCache();
+        if(window.bmLoad) bmLoad().then(function(){
+          if(window.renderBench) renderBench();
+          bmRefresh();
+        }); };
     });
   }
   function mountCaveats(meta){
@@ -2421,7 +2490,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   function bmRefresh(){
     bmPanel();
     var s=bmState();
-    j(API+'/benchmark?'+qs(Object.assign({dim:(window.STATE&&STATE.dim)||'industry'},s))).then(function(d){
+    j(API+'/benchmark?'+qs(Object.assign({dim:_S().dim||'industry'},s))).then(function(d){
       if(!d||!d.meta) return;
       var m=d.meta, rows=(d.benchmark||[]).filter(function(r){return r.dim!=='TOTAL';});
       mountCaveats(m);
@@ -2574,7 +2643,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
      증감이 실제 변화가 아니라 모집단 변화일 수 있기 때문이다. */
   var CMP={mode:''};
   function bmState2(){
-    var S=window.STATE||{};
+    var S=_S();
     return {media:S.media||'G', dim:(S.dim||'industry'),
             date_from:S.date_from||S.from||'2026-01-01',
             date_to:S.date_to||S.to||'2026-12-31',
