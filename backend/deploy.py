@@ -29,7 +29,7 @@ RUNTIME_SA = f"perf-data-analyst@{PROJECT}.iam.gserviceaccount.com"
 SERVICE_SA = f"benchmark-app@{PROJECT}.iam.gserviceaccount.com"
 REPO = "cloud-run-source-deploy"                           # 기존 AR repo 재사용
 IMAGE = "innocean-benchmark"
-TAG = "backend-v94"
+TAG = "backend-v95"
 IMG_URI = f"{REGION}-docker.pkg.dev/{PROJECT}/{REPO}/{IMAGE}:{TAG}"
 STAGE_BUCKET = "innocean-perf-apac-kr-cloudbuild-source"
 SRC_OBJECT = "benchmark/source.tar.gz"
@@ -291,7 +291,10 @@ def main():
     ap.add_argument("--build", action="store_true")
     ap.add_argument("--verify", action="store_true")
     ap.add_argument("--full", action="store_true",
-                    help="서비스 배포 + 마트 Job 이미지 갱신 + 마트 즉시 재빌드(채널 컬럼 복구)")
+                    help="배포 후 마트를 즉시 재빌드(야간 스케줄을 기다리지 않음)")
+    ap.add_argument("--service-only", action="store_true",
+                    help="마트 Job 이미지 갱신을 건너뛴다. 야간 빌더가 구 코드로 남으므로 "
+                         "mart.py 를 건드리지 않은 경우에만 쓸 것")
     a = ap.parse_args()
     print(f"배포 대상: {PROJECT}/{REGION}/{SERVICE}  (deployer={creds.service_account_email})")
     if a.verify:
@@ -304,9 +307,19 @@ def main():
     if a.build:
         print("빌드 완료 (배포 생략)"); return
     deploy_service(with_secret=has_secret)
+
+    # 🔴 마트 Job 이미지 갱신은 «기본» 이다 (2026-10-21 사고로 바꿨다)
+    #   전에는 --full 에서만 돌렸다. 그 결과 서비스는 새 코드, 야간 마트 빌더 Job 은
+    #   구버전 이미지로 남았고, 스케줄이 구 mart.py 로 마트를 «덮어» 새 컬럼이 사라졌다.
+    #   실제 피해: 2026-10-20 야간 빌드가 delivery_days_actual 을 떨어뜨려
+    #   /api/v1/reach/* 가 전부 500 이 됐다. 서비스는 200 이라 배포 검증도 통과했다.
+    #   ⚠️ 같은 사고가 전에 channel 컬럼으로도 있었다(아래 run_mart_job_now_wait 주석).
+    #     플래그로 막는 방식이 두 번 실패했으므로 기본 동작으로 올린다.
+    #   이미지 갱신은 멱등하고 몇 초다. 안 하는 쪽의 비용이 «조용한 데이터 파손» 이다.
+    if not a.service_only:
+        deploy_mart_job()
     if a.full:
-        deploy_mart_job()       # 마트 Job을 새 이미지로 갱신(야간 스케줄도 새 mart.py 사용)
-        run_mart_job_now_wait()  # 마트 즉시 재빌드 → 누락된 channel 컬럼 복구
+        run_mart_job_now_wait()  # 마트 즉시 재빌드(야간을 기다리지 않을 때)
     verify()
     print("\n✅ 배포 완료.")
 
