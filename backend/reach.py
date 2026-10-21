@@ -889,9 +889,14 @@ class NetflixReachProvider(Provider):
     #    0 은 «깨끗해서» 일 수도 «아직 아무것도 없어서» 일 수도 있다 — 구분해야 한다.
     def available(self, market=""):
         if not _view_exists(CURVE_VIEW):
+            # 실측(2026-10-21): Secret Manager 29개에 netflix/netkey 시크릿이 없다.
+            #   토큰은 발급됐고 1Password 공유 링크 안에만 있다 — 꺼내는 것은 사람이 한다.
             return False, ("넷플릭스 도달 곡선 캐시가 아직 없습니다. 호출 한도가 일 "
                            f"{NETFLIX_RATE_LIMITS['day']}회라 야간에 격자를 선계산해 "
-                           "캐시에 넣는 구조가 전제입니다 — 준비되면 자동 활성화됩니다.")
+                           "캐시에 넣는 구조가 전제입니다. "
+                           "해제 조건: 토큰은 이미 발급됐으나 Secret Manager 에 없습니다"
+                           "(1Password 공유 링크 안에만 있음). 사람이 꺼내 주입해야 합니다 — "
+                           "python deploy/set_netflix_key.py --env staging")
         n_ok, n_all = _curve_counts(market)
         if n_ok:
             return True, f"사용 가능 — 곡선 {n_ok:,}개" + (f" / 격자 {n_all:,}" if n_all else "")
@@ -975,10 +980,19 @@ class GoogleReachPlanProvider(_VendorForecastProvider):
     api_name = "ReachPlanService"
     measures = ("한 조건 안 — 같은 타게팅에서 예산을 늘렸을 때 구글이 예측하는 "
                 "YouTube·디스플레이 도달입니다. 우리 실측이 아니라 «구글의 예측» 입니다.")
-    blocked_reason = ("Google Ads ReachPlanService 가 아직 연동되지 않았습니다. "
-                      "우리 구글 데이터는 Data Transfer(실적 테이블)로 들어오는데, "
-                      "도달 예측은 Google Ads API 의 별도 서비스라 개발자 토큰과 "
-                      "API 접근 권한이 따로 필요합니다 — 미요청 상태입니다.")
+    # 실측(2026-10-21): Secret Manager 29개 전수에 구글 광고 토큰이 없다.
+    #   1PDAuto 의 developer_token 은 «마이크로소프트 광고» 용이고 캐나다에서 별도로 받은
+    #   것이라 재사용 불가다 — 본사 전용으로 새로 받아야 한다(사용자 확인).
+    #   데이터 전송 설정에서 관리자 계정(MCC) 3개를 확인했다.
+    blocked_reason = ("구글 개발자 토큰이 없습니다. 우리 구글 데이터는 Data Transfer"
+                      "(실적 테이블)로 들어오고, 도달 예측은 Google Ads API 의 별도 "
+                      "서비스입니다 — 구글 광고 API 는 개발자 토큰 없이는 호출 자체가 "
+                      "불가능합니다. 해제 조건: 관리자 계정(MCC) API 센터에서 "
+                      "기본(Basic) 등급 토큰을 확인하십시오 — 후보 MCC "
+                      "8286530634(lc2015) · 7297527650(dplan360) · 9958618792(hmca). "
+                      "없으면 기본 등급을 신청해야 하고 승인 심사가 걸립니다. "
+                      "⚠️ 테스트 등급은 즉시 발급되지만 테스트 계정만 되어 실제 도달 예측이 "
+                      "나오지 않습니다 — 기본 등급이어야 합니다.")
 
 
 class MetaRFProvider(_VendorForecastProvider):
@@ -989,9 +1003,17 @@ class MetaRFProvider(_VendorForecastProvider):
     api_name = "Reach & Frequency API"
     measures = ("한 조건 안 — 같은 타게팅에서 예산을 늘렸을 때 메타가 예측하는 "
                 "도달입니다. 아래 «메타 실측 적합» 과 다른 것입니다(이쪽은 예측).")
-    blocked_reason = ("Meta Reach & Frequency API 가 아직 연동되지 않았습니다. "
-                      "우리 메타 수집은 Insights(집행 실적)이고, 도달 예측은 별도 "
-                      "엔드포인트라 광고계정 자격과 권한이 따로 필요합니다 — 미요청 상태입니다.")
+    # 실측(2026-10-21): 기존 토큰으로 R&F 엔드포인트를 읽으니 메타가 직접 답했다.
+    #   GET act_<id>/reachfrequencypredictions
+    #   → HTTP 403 (#200) Requires ads_management permission to manage the object
+    #   토큰 권한: read_insights · ads_read · pages_* (SYSTEM_USER · 유효)
+    #   즉 «새 연동» 이 아니라 «권한 한 줄» 이다 — 호스트·토큰·계정이 모두 그대로다.
+    blocked_reason = ("메타 토큰에 ads_management 권한이 없습니다(현재 ads_read 까지). "
+                      "R&F 예측 생성에 그 권한이 필요하며 메타가 직접 그렇게 답합니다 — "
+                      "HTTP 403 (#200) Requires ads_management permission. "
+                      "해제 조건: 비즈니스 관리자에서 해당 시스템 사용자에게 ads_management "
+                      "를 부여하면 됩니다(새 앱·새 연동 불필요 — 지금 쓰는 토큰·계정 그대로). "
+                      "그 뒤 R&F 예약형 구매가 해당 계정·국가·목표에서 가능한지 확인합니다.")
 
 
 _PROVIDERS = [AssumptionProvider(), FittedReachProvider(), NetflixReachProvider(),
