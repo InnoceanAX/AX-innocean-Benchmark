@@ -741,8 +741,11 @@ NETFLIX_RATE_LIMITS = {"month": 1500, "day": 50, "hour": 20, "minute": 5}
 #    suppressed 를 «도달 0» 으로 그리면 플래너가 «효과 없는 조건» 으로 읽는다.
 CURVE_STATUS = {
     "ok":            {"label": "곡선 있음", "usable": True,  "note": ""},
-    "suppressed":    {"label": "넷플릭스 미공개", "usable": False,
-                      "note": "모집단이 작아 넷플릭스가 출력을 억제한 조건입니다(422). "
+    # ⚠️ 벤더 중립 문구로 적는다. 처음엔 "넷플릭스가 억제했다" 로 박아뒀는데,
+    #   이 상태값을 구글·메타 곡선도 쓰게 되면서 틀린 벤더 이름이 화면에 나간다.
+    #   테스트(test_reach_cache.py)가 이걸 드러냈다.
+    "suppressed":    {"label": "벤더 미공개", "usable": False,
+                      "note": "모집단이 작아 매체가 출력을 억제한 조건입니다(미공개, 422). "
                               "도달이 0 이라는 뜻이 아닙니다."},
     "not_permitted": {"label": "사용 불가 조건", "usable": False,
                       "note": "이 계정·국가로는 쓸 수 없는 조건입니다(403). "
@@ -909,11 +912,12 @@ class NetflixReachProvider(Provider):
         ok, why = self.available(kw.get("market", ""))
         if not ok:
             raise RuntimeError(why)
-        raise RuntimeError(
-            "쓸 수 있는 곡선이 있으나 조회 구현이 남았습니다. 어떤 조합을 캐시할지는 "
-            "미디어플래닝 협의 사항으로 올라가 있습니다. "
-            "⚠️ 여기에 넷플릭스 API 직접 호출을 넣지 마십시오 — 한도가 일 "
-            f"{NETFLIX_RATE_LIMITS['day']}회입니다.")
+        # ⚠️ 여기에 넷플릭스 API 직접 호출을 넣지 마십시오 — 한도가 일
+        #   NETFLIX_RATE_LIMITS['day']회입니다. 선계산 캐시만 읽습니다.
+        return _cache_curve_response(
+            self, CURVE_VIEW, kw.get("media", ""), kw.get("market", ""),
+            kw.get("flight_days", 30), kw.get("budget", 2_000_000_000),
+            kw.get("points", 20))
 
 
 # ── 벤더 예측 곡선 — 구글 · 메타 ────────────────────────────────────
@@ -951,6 +955,168 @@ def _vendor_curve_counts(view, market=""):
     return n_ok, n_all
 
 
+# ── 캐시 곡선 해석기 ───────────────────────────────────────────────
+# 🔑 «질의» 와 «해석» 을 나눈다. 해석기는 순수 함수라 실제 데이터가 오기 전에
+#   가짜 행으로 검증할 수 있다. 안 나누면 「구현했다」가 검증되지 않은 주장이 된다.
+#   (DB 와 서로 열 번 겪은 자리 — 못 쟀으면 못 쟀다고 적는다)
+CURVE_SCOPE_NOTE = {
+    "advertiser": "",
+    "agency_shared": ("⚠️ 이 곡선은 «대행사 공용 계정» 기준입니다. 미등록 광고주 여러 곳이 "
+                      "한 계정을 쓰므로 특정 광고주의 도달로 읽지 마십시오 — "
+                      "분모가 다른 집단입니다."),
+    "unknown": ("⚠️ 이 곡선이 어느 광고 계정 기준인지 기록되지 않았습니다. "
+                "광고주별 플래닝 근거로 쓰기 전에 출처를 확인하십시오."),
+}
+
+
+def points_from_cache(rows, cpm, budget, points=20):
+    """캐시 행 → 화면이 그릴 점 목록. 순수 함수(쿼리 없음).
+
+    rows: v_*_reach 한 조건의 행들. 각 행은
+          curve_status · impression_reach[{impression, reach}] · points · ad_account_scope
+    cpm:  예산→노출 환산 단가(원). 곡선은 «노출» 축이고 화면은 «예산» 축이다.
+
+    ⚠️ 상태가 ok 가 아닌 행은 점을 만들지 않고 이유를 돌려준다.
+      suppressed(미공개) · not_permitted(불가) · fetch_failed(실패) · not_requested(미조회)
+      를 한 칸에 섞으면 화면이 «도달 0» 으로 그린다 — 플래너가 «효과 없는 조건» 으로 읽는다.
+    ⚠️ impression_reach 는 REPEATED STRUCT 다. 스칼라로 받으면 한 행 때문에 전체가 깨진다
+      (카카오 status 가 ["OFF"] 였던 그 함정).
+    """
+    if not rows:
+        return None, "격자에 이 조건이 없습니다(아직 등록되지 않았습니다)."
+    ok = [r for r in rows if (r.get("curve_status") or "") == "ok"]
+    if not ok:
+        st = (rows[0].get("curve_status") or "not_requested")
+        meta = CURVE_STATUS.get(st, {"note": f"알 수 없는 상태입니다({st})."})
+        return None, meta.get("note") or st
+    row = ok[0]
+    arr = row.get("impression_reach") or []
+    if not isinstance(arr, (list, tuple)) or not arr:
+        return None, "곡선 점이 비어 있습니다(수집은 성공했는데 값이 없습니다)."
+    npts = row.get("points")
+    warn = []
+    if npts is not None and npts != 100:
+        # DB 지침: points 가 100 이 아니면 의심하라
+        warn.append(f"곡선 점이 {npts}개입니다(보통 100개) — 수집이 중간에 끊겼을 수 있습니다.")
+    scope = (row.get("ad_account_scope") or "unknown")
+    if CURVE_SCOPE_NOTE.get(scope):
+        warn.append(CURVE_SCOPE_NOTE[scope])
+
+    pairs = []
+    for x in arr:
+        try:
+            imp = float(x["impression"] if isinstance(x, dict) else x.impression)
+            rch = float(x["reach"] if isinstance(x, dict) else x.reach)
+        except (KeyError, TypeError, AttributeError, ValueError):
+            continue
+        if imp > 0 and rch >= 0:
+            pairs.append((imp, rch))
+    if not pairs:
+        return None, "곡선 점을 읽을 수 없습니다(impression_reach 구조가 예상과 다릅니다)."
+    pairs.sort()
+
+    # 예산 축으로 자른다. 곡선은 노출 축이므로 예산 = 노출 × CPM / 1000.
+    # ⚠️ 캐시의 최대 노출을 넘는 예산은 «외삽» 이다 — 늘려 그리지 않고 거기서 멈춘다.
+    max_imp = pairs[-1][0]
+    cap_cost = max_imp * (cpm or 0) / 1000.0
+    hi = min(float(budget or 0), cap_cost) if cap_cost > 0 else 0.0
+    if hi <= 0:
+        return None, "예산→노출 환산 CPM 이 없어 예산 축에 올릴 수 없습니다."
+    out, n = [], max(2, int(points))
+    for i in range(1, n + 1):
+        cost = hi * i / n
+        imps = cost / (cpm / 1000.0)
+        # 선형 보간 — 점이 100개면 구간이 촘촘해 보간 오차가 작다
+        rch = pairs[0][1]
+        for j in range(1, len(pairs)):
+            x0, y0 = pairs[j - 1]
+            x1, y1 = pairs[j]
+            if imps <= x1:
+                rch = y0 + (y1 - y0) * ((imps - x0) / (x1 - x0)) if x1 > x0 else y1
+                break
+            rch = y1
+        out.append({"cost": round(cost), "imps": round(imps), "reach": round(rch),
+                    "frequency": round(imps / rch, 2) if rch > 0 else None})
+    truncated = cap_cost > 0 and float(budget or 0) > cap_cost
+    if truncated:
+        warn.append(f"요청 예산이 캐시된 곡선의 끝(약 {cap_cost/1e8:.1f}억)을 넘어 "
+                    "거기서 멈췄습니다 — 그 바깥은 캐시에 없습니다.")
+    return {"points": out, "warnings": warn, "scope": scope,
+            "max_imp": round(max_imp), "max_reach": round(pairs[-1][1]),
+            "n_cache_points": len(pairs)}, None
+
+
+def _fetch_cache_rows(view, market, flight_days, targeting_label=""):
+    """캐시 조회 — v_*_reach «뷰만» 읽는다(격자 LEFT JOIN 결과라 미조회 칸도 행으로 온다).
+
+    ⚠️ 테이블을 직접 읽으면 채워진 것만 보여 커버리지가 늘 100% 로 나온다(DB 지침).
+    """
+    if not _view_exists(view):
+        return []
+    c = _client()
+    w = ["TRUE"]
+    prm = []
+    if market:
+        w.append("country = @mk")
+        prm.append(bigquery.ScalarQueryParameter("mk", "STRING", market.upper()))
+    if flight_days:
+        w.append("flight_days = @fd")
+        prm.append(bigquery.ScalarQueryParameter("fd", "INT64", int(flight_days)))
+    if targeting_label:
+        w.append("targeting_label = @tl")
+        prm.append(bigquery.ScalarQueryParameter("tl", "STRING", targeting_label))
+    try:
+        return [dict(r) for r in c.query(
+            f"SELECT * FROM {view} WHERE {' AND '.join(w)} "
+            f"ORDER BY IF(IFNULL(curve_status,'')='ok',0,1) LIMIT 20",
+            job_config=bigquery.QueryJobConfig(query_parameters=prm)).result()]
+    except Exception:
+        return []
+
+
+def _cache_curve_response(provider, view, media, market, flight_days, budget, points):
+    """캐시에서 곡선을 읽어 화면 응답 형태로 돌려준다. 못 읽으면 이유를 들고 올린다."""
+    import datetime
+    day = datetime.date.today().isoformat()
+    cpm, cpm_src = _cpm(media or "", market or "", day)
+    rows = _fetch_cache_rows(view, market, flight_days)
+    parsed, why = points_from_cache(rows, cpm, budget, points)
+    if parsed is None:
+        raise RuntimeError(why)
+    uni = _universe_hint(market)
+    pts = parsed["points"]
+    if uni:
+        for p in pts:
+            p["reach_pct"] = round(p["reach"] / uni * 100, 2)
+    return {
+        "provider": provider.name, "provider_label": provider.label,
+        "fitted": True, "kind": provider.kind,
+        "estimate_badge": f"{provider.label} — 선계산 캐시 {parsed['n_cache_points']}점",
+        "points": pts,
+        "measured": {"cpm": round(cpm, 2), "cpm_source": cpm_src,
+                     "note": "예산→노출은 실측 CPM, 노출→도달은 벤더 예측 곡선입니다."},
+        "cache": {"scope": parsed["scope"], "max_imp": parsed["max_imp"],
+                  "max_reach": parsed["max_reach"], "flight_days": int(flight_days or 0)},
+        "measures": provider.measures,
+        "caveats": ([
+            "이 곡선은 벤더의 «예측» 입니다 — 우리가 집행해서 관찰한 값이 아닙니다.",
+            provider.measures,
+        ] + parsed["warnings"] + ([
+            "도달률(%)은 모집단 가정이 없어 표시하지 않습니다 — 절대 도달로 읽으십시오."
+        ] if not uni else [])),
+    }
+
+
+def _universe_hint(market):
+    """도달률(%) 분모. 벤더가 모집단을 주지 않으면 0 — 그러면 %를 그리지 않는다.
+
+    ⚠️ 가정 모집단(예: 3,600만)을 벤더 곡선에 갖다 붙이면 «그 벤더의 도달률» 처럼
+      보인다. 넷플릭스 한국 광고요금제 가입자 규모는 우리가 모른다 — 물어야 한다.
+      모를 때는 %를 안 그리는 쪽이 맞다.
+    """
+    return 0
+
+
 class _VendorForecastProvider(Provider):
     """벤더 예측 곡선의 공통 틀. 캐시가 채워지면 켜진다."""
     kind = "forecast"
@@ -968,8 +1134,12 @@ class _VendorForecastProvider(Provider):
 
     def curve(self, **kw):
         ok, why = self.available(kw.get("market", ""))
-        raise RuntimeError(why if not ok else
-                           f"{self.api_name} 곡선 조회 구현이 남았습니다(캐시 스키마 확정 후).")
+        if not ok:
+            raise RuntimeError(why)
+        return _cache_curve_response(
+            self, self.view, kw.get("media", ""), kw.get("market", ""),
+            kw.get("flight_days", 30), kw.get("budget", 2_000_000_000),
+            kw.get("points", 20))
 
 
 class GoogleReachPlanProvider(_VendorForecastProvider):
@@ -1011,9 +1181,16 @@ class MetaRFProvider(_VendorForecastProvider):
     blocked_reason = ("메타 토큰에 ads_management 권한이 없습니다(현재 ads_read 까지). "
                       "R&F 예측 생성에 그 권한이 필요하며 메타가 직접 그렇게 답합니다 — "
                       "HTTP 403 (#200) Requires ads_management permission. "
-                      "해제 조건: 비즈니스 관리자에서 해당 시스템 사용자에게 ads_management "
-                      "를 부여하면 됩니다(새 앱·새 연동 불필요 — 지금 쓰는 토큰·계정 그대로). "
-                      "그 뒤 R&F 예약형 구매가 해당 계정·국가·목표에서 가능한지 확인합니다.")
+                      "해제 조건: 비즈니스 관리자에서 ads_management 를 부여해야 합니다"
+                      "(새 앱·새 연동 불필요 — 호스트·토큰·계정 그대로). "
+                      "⚠️ 다만 교환이 비대칭입니다(DB 실측 180일): R&F 가 덮는 예약형"
+                      "(RESERVED) 집행은 ₩1.82억으로 메타 지출의 1.9% 인데, 이 토큰이 "
+                      "덮는 범위는 13계정 ₩94.5억입니다 — 1.9% 를 계획하려고 전체에 "
+                      "«쓰기» 권한을 붙이는 셈입니다. 그래서 R&F 전용 시스템 사용자를 "
+                      "따로 만들어 해당 7계정만 묶는 쪽을 권합니다. "
+                      "자격 자체는 충족돼 보입니다 — 예약형 캠페인 172개가 "
+                      "도달·인지 목표군으로 실제 돌고 있습니다. "
+                      "다만 R&F 예측 가능 여부는 계정·국가·목표 조합별이라 불러봐야 압니다.")
 
 
 _PROVIDERS = [AssumptionProvider(), FittedReachProvider(), NetflixReachProvider(),

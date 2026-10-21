@@ -8,7 +8,8 @@ DB팀 deploy/deploy.py 패턴 재사용. Cloud Run *서비스*(공개) 배포 + 
   python deploy.py --verify   # 배포 후 라이브 검증만
 런타임 SA = perf-data-analyst (BigQuery 마트 접근). 인증 = setup SA 키(ADC).
 """
-import os, sys, io, time, base64, tarfile, argparse
+import os
+import sys, sys, io, time, base64, tarfile, argparse
 from pathlib import Path
 
 try:
@@ -29,7 +30,7 @@ RUNTIME_SA = f"perf-data-analyst@{PROJECT}.iam.gserviceaccount.com"
 SERVICE_SA = f"benchmark-app@{PROJECT}.iam.gserviceaccount.com"
 REPO = "cloud-run-source-deploy"                           # 기존 AR repo 재사용
 IMAGE = "innocean-benchmark"
-TAG = "backend-v99"
+TAG = "backend-v101"
 IMG_URI = f"{REGION}-docker.pkg.dev/{PROJECT}/{REPO}/{IMAGE}:{TAG}"
 STAGE_BUCKET = "innocean-perf-apac-kr-cloudbuild-source"
 SRC_OBJECT = "benchmark/source.tar.gz"
@@ -243,6 +244,32 @@ def run_mart_job_now_wait():
     return False
 
 
+def check_tests():
+    """배포 전 단위 테스트 — 지금은 캐시 곡선 해석기.
+
+    ★ 왜 게이트에 두나
+      벤더 곡선은 자격증명이 풀릴 때까지 한 행도 안 들어온다. 그 사이 해석기를 고치면
+      «돌려 볼 데이터가 없어» 검증 없이 배포된다. 가짜 행으로 대는 테스트를 게이트에
+      두면 그 구멍이 막힌다 — 프론트 문법 검사를 넣은 것과 같은 이유다.
+    """
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    for t in ("test_reach_cache.py",):
+        f = os.path.join(here, t)
+        if not os.path.exists(f):
+            continue
+        env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+        r = subprocess.run([sys.executable, f], cwd=here, env=env,
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            tail = (r.stdout or "")[-1200:] + (r.stderr or "")[-400:]
+            print(f"· [테스트 실패] {t}")
+            print(tail)
+            return False
+        print(f"· 테스트 통과 {t}")
+    return True
+
+
 def check_frontend():
     """index.html 의 모든 <script> 블록을 node --check 로 파싱한다.
 
@@ -301,6 +328,8 @@ def main():
         verify(); return
     if not check_frontend():
         raise SystemExit("프론트 문법 오류로 배포를 중단했습니다")
+    if not check_tests():
+        raise SystemExit("단위 테스트 실패로 배포를 중단했습니다")
     ensure_repo()
     has_secret = ensure_secret()
     build_image()
