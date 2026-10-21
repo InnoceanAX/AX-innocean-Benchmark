@@ -221,6 +221,24 @@ def reach_curve(budget: float = 2_000_000_000, media: str = "", market: str = "K
         return JSONResponse({"error": str(e), "points": []}, status_code=500)
 
 
+@app.get("/api/v1/reach/compare_providers")
+def reach_compare_providers(budget: float = 2_000_000_000, media: str = "",
+                            market: str = "KR", universe: int = 0, points: int = 20,
+                            flight_days: int = 30):
+    """쓸 수 있는 도달 제공자 전부를 같은 예산 축에 올려 돌려준다.
+
+    ⚠️ 못 쓰는 제공자도 이유와 함께 내려보낸다 — 빠뜨리면 화면이 지금 가진 것만
+       보여주고, 플래너는 그게 전부라고 생각한다.
+    """
+    try:
+        return JSONResponse(reach.compare_curves(
+            budget=budget, media=media, market=market,
+            universe=universe or None, points=points, flight_days=flight_days))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e), "series": [], "blocked": []},
+                            status_code=500)
+
+
 @app.get("/api/v1/reach/targeting")
 def reach_targeting(market: str = ""):
     """넷플릭스 도달 시뮬레이터의 선택 항목(연령·성별·기기·장르·관심사 등).

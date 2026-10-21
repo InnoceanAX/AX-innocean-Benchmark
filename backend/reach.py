@@ -26,7 +26,15 @@
   아님: "이 캠페인에 돈을 더 쓰면 도달이 어떻게 포화되나"          (캠페인 «안»)
   캠페인 간 자료로 캠페인 내 포화를 말하면 생태학적 오류다. 화면에도 이 구분을 적는다.
 
-DV360 은 reach 컬럼 자체가 없어(수집 안 함) 포함되지 않는다. 디바이스별 도달도 원천에 없다.
+구글·DV360 이 왜 실측 적합에 없나 — «컬럼이 없어서» 가 아니다(2026-10-21 정정)
+  CM360 데이터 전송은 들어와 있다: apac_kr_raw.p_impression_464224 (93,113,676행 · 71.1GB)에
+  User_ID · Campaign_ID · DBM_*(DV360) 가 다 있다. 그런데 User_ID 가 «전부 비어 있다» —
+  하루치 실측에서 식별불가 100.0% · 유니크 1(2026-10-17~20 네 날 모두). 개인정보 정책으로
+  데이터 전송에서 식별자가 제거된 것으로 보인다.
+  → 이 로그로는 유니크 도달을 셀 수 없다. DBM_* 도 같은 로그라 DV360 도 마찬가지다.
+  → 구글·메타의 «예측» 곡선은 각자 별도 API(ReachPlanService · Reach & Frequency)로
+    받아야 하며, 그쪽은 아직 연동되지 않았다.
+디바이스별 도달도 원천에 없다.
 """
 import math
 import os
@@ -149,6 +157,12 @@ class Provider:
     name = "base"
     label = "base"
     fitted = False
+    # 🔑 «예측» 인가 «실측» 인가, 그리고 «무엇을 재는가».
+    #   세 벤더 곡선을 나란히 놓으면 모양이 서로 다르게 나온다. 그게 결함이 아니라
+    #   재는 대상이 달라서라는 것을 제공자마다 글자로 들고 있어야 한다 —
+    #   안 적으면 보는 사람이 «어느 쪽이 틀렸다» 로 읽는다(DB 와 서로 열 번 겪은 자리).
+    kind = "forecast"       # forecast = 벤더 예측 · measured = 우리 실측 · assumption = 가정식
+    measures = ""           # 한 줄: 이 곡선이 답하는 질문
 
     def available(self):
         return False, "미구현"
@@ -160,6 +174,9 @@ class Provider:
 class AssumptionProvider(Provider):
     name = "assumption"
     label = "가정 기반 추정"
+    kind = "assumption"
+    measures = ("가정식 — 한 모집단이 포화되는 «모양» 을 보여줍니다. "
+                "우리 자료로 적합한 값이 아니라, 모집단과 접촉 집중도를 직접 넣어 보는 것입니다.")
     fitted = False
 
     def available(self):
@@ -206,7 +223,10 @@ class AssumptionProvider(Provider):
                 "노출→도달 변환은 **가정**입니다. 우리 데이터로 적합한 곡선이 아닙니다.",
                 "Meta reach 는 일자 단위라 날짜를 더할 수 없어(유니크 값) 곡선 적합에 쓸 수 없습니다. "
                 "실증: 한 캠페인 42일에서 일별 reach 합이 일 최대 reach 의 38배였습니다.",
-                "DV360 은 reach 를 수집하지 않습니다.",
+                "구글·DV360 은 이 적합에 포함되지 않았습니다 — 수집을 안 해서가 아니라, "
+                "CM360 노출 로그의 식별자(User_ID)가 전부 비어 있어 유니크 도달을 셀 수 "
+                "없기 때문입니다(실측 식별불가 100%). 구글의 «예측» 곡선은 별도 API"
+                "(ReachPlanService) 연동이 필요합니다.",
                 "디바이스별(TV/PC/Mobile) 도달은 원천에 reach 가 없어 제공하지 않습니다.",
             ],
         }
@@ -538,6 +558,10 @@ def _fit(market, day, bucket=None):
 
 
 class FittedReachProvider(Provider):
+    kind = "measured"
+    measures = ("캠페인 사이 — 예산 규모가 다른 «실제 집행 캠페인들» 을 가로질러 본 "
+                "관계입니다. 메타 Insights 누적 유니크 도달이 근거입니다. "
+                "«한 조건 안에서 노출만 늘리면» 의 답이 아닙니다.")
     name = "fitted"
     label = "실측 적합 (Meta 캠페인 누적 도달)"
     fitted = True
@@ -682,7 +706,10 @@ class FittedReachProvider(Provider):
                 "훨씬 빨리 꺾이므로, 이 곡선보다 보수적으로 보셔야 합니다.",
                 "NBD(단일 모집단 포화) 모형은 이 자료에 맞지 않아 쓰지 않았습니다 — 캠페인마다 타겟 모집단이 달라 "
                 "R² 가 0 으로 붕괴합니다. «가정 기반 추정» 제공자가 그 형태를 대신 보여 줍니다.",
-                "DV360 은 reach 를 수집하지 않아 포함되지 않았습니다.",
+                "구글·DV360 은 이 적합에 포함되지 않았습니다 — 수집을 안 해서가 아니라, "
+                "CM360 노출 로그의 식별자(User_ID)가 전부 비어 있어 유니크 도달을 셀 수 "
+                "없기 때문입니다(실측 식별불가 100%). 구글의 «예측» 곡선은 별도 API"
+                "(ReachPlanService) 연동이 필요합니다.",
                 "디바이스별(TV/PC/Mobile) 도달은 원천에 reach 가 없어 제공하지 않습니다.",
             ],
         }
@@ -849,6 +876,9 @@ class NetflixReachProvider(Provider):
     name = "netflix"
     label = "Netflix Reach Curve API"
     fitted = True
+    kind = "forecast"
+    measures = ("한 조건 안 — 같은 타게팅에서 노출을 늘렸을 때 넷플릭스가 예측하는 "
+                "도달입니다. 우리 실측이 아니라 «넷플릭스의 예측» 입니다.")
 
     # 🔴 토큰이 아니라 «캐시» 가 가용 조건이다(DB f5 2026-10-06).
     #    호출 한도가 일 50 이라 요청 경로에서 부를 수 없다. 토큰만 보고 available=True 를
@@ -881,7 +911,91 @@ class NetflixReachProvider(Provider):
             f"{NETFLIX_RATE_LIMITS['day']}회입니다.")
 
 
-_PROVIDERS = [AssumptionProvider(), FittedReachProvider(), NetflixReachProvider()]
+# ── 벤더 예측 곡선 — 구글 · 메타 ────────────────────────────────────
+# 🔑 세 벤더 모두 «예측 API» 를 가지고 있다. 넷플릭스만 특별한 게 아니다.
+#     넷플릭스  Reach Curve API
+#     구글      Google Ads ReachPlanService  (YouTube·디스플레이)
+#     메타      Reach & Frequency API
+#   셋은 모두 «한 조건 안에서 노출을 늘리면» 을 답하고, 우리 멱함수 적합은
+#   «캠페인 사이» 를 답한다. 질문이 달라 모양이 다른 것이 정상이다.
+#
+# ⚠️ 구글·메타 예측 API 는 아직 «요청도 안 된» 상태다. 수집되면 DB 가 아래 테이블을
+#   채우고, 그러면 이 제공자들이 스스로 켜진다. 넷플릭스와 같은 구조로 둔 이유는
+#   토큰·권한이 오는 순서를 우리가 통제할 수 없기 때문이다.
+# ⚠️ 게이트는 «테이블 존재» 가 아니라 «쓸 수 있는 곡선이 있나» 다. 빈 스키마가 먼저
+#   만들어져도 화면이 곡선 0개로 열리지 않는다(넷플릭스에서 겪은 그 함정).
+GOOGLE_CURVE_VIEW = f"`{PROJECT}.{MART_DS}.v_google_reach_plan`"
+META_RF_CURVE_VIEW = f"`{PROJECT}.{MART_DS}.v_meta_rf_curve`"
+
+
+def _vendor_curve_counts(view, market=""):
+    """(쓸 수 있는 곡선 수, 격자 전체 수). 뷰가 없으면 (0, 0)."""
+    if not _view_exists(view):
+        return 0, 0
+    c = _client()
+    where = "WHERE country = @mk" if market else ""
+    job = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ScalarQueryParameter("mk", "STRING", market or "KR")])
+    try:
+        rows = list(c.query(f"SELECT IFNULL(curve_status,'not_requested') st, COUNT(*) n "
+                            f"FROM {view} {where} GROUP BY st", job_config=job).result())
+    except Exception:
+        return 0, 0
+    n_all = sum(r["n"] for r in rows)
+    n_ok = sum(r["n"] for r in rows if CURVE_STATUS.get(r["st"], {}).get("usable"))
+    return n_ok, n_all
+
+
+class _VendorForecastProvider(Provider):
+    """벤더 예측 곡선의 공통 틀. 캐시가 채워지면 켜진다."""
+    kind = "forecast"
+    view = ""
+    api_name = ""
+    blocked_reason = ""
+
+    def available(self, market=""):
+        n_ok, n_all = _vendor_curve_counts(self.view, market)
+        if n_ok:
+            return True, f"사용 가능 — 곡선 {n_ok:,}개" + (f" / 격자 {n_all:,}" if n_all else "")
+        if n_all:
+            return False, (f"격자 {n_all:,}개가 등록됐지만 아직 쓸 수 있는 곡선이 없습니다.")
+        return False, self.blocked_reason
+
+    def curve(self, **kw):
+        ok, why = self.available(kw.get("market", ""))
+        raise RuntimeError(why if not ok else
+                           f"{self.api_name} 곡선 조회 구현이 남았습니다(캐시 스키마 확정 후).")
+
+
+class GoogleReachPlanProvider(_VendorForecastProvider):
+    name = "google_reachplan"
+    label = "Google Ads ReachPlanService"
+    fitted = True
+    view = GOOGLE_CURVE_VIEW
+    api_name = "ReachPlanService"
+    measures = ("한 조건 안 — 같은 타게팅에서 예산을 늘렸을 때 구글이 예측하는 "
+                "YouTube·디스플레이 도달입니다. 우리 실측이 아니라 «구글의 예측» 입니다.")
+    blocked_reason = ("Google Ads ReachPlanService 가 아직 연동되지 않았습니다. "
+                      "우리 구글 데이터는 Data Transfer(실적 테이블)로 들어오는데, "
+                      "도달 예측은 Google Ads API 의 별도 서비스라 개발자 토큰과 "
+                      "API 접근 권한이 따로 필요합니다 — 미요청 상태입니다.")
+
+
+class MetaRFProvider(_VendorForecastProvider):
+    name = "meta_rf"
+    label = "Meta Reach & Frequency API"
+    fitted = True
+    view = META_RF_CURVE_VIEW
+    api_name = "Reach & Frequency API"
+    measures = ("한 조건 안 — 같은 타게팅에서 예산을 늘렸을 때 메타가 예측하는 "
+                "도달입니다. 아래 «메타 실측 적합» 과 다른 것입니다(이쪽은 예측).")
+    blocked_reason = ("Meta Reach & Frequency API 가 아직 연동되지 않았습니다. "
+                      "우리 메타 수집은 Insights(집행 실적)이고, 도달 예측은 별도 "
+                      "엔드포인트라 광고계정 자격과 권한이 따로 필요합니다 — 미요청 상태입니다.")
+
+
+_PROVIDERS = [AssumptionProvider(), FittedReachProvider(), NetflixReachProvider(),
+              GoogleReachPlanProvider(), MetaRFProvider()]
 
 
 def providers():
@@ -889,6 +1003,8 @@ def providers():
     for p in _PROVIDERS:
         ok, why = p.available()
         out.append({"name": p.name, "label": p.label, "fitted": p.fitted,
+                    "kind": getattr(p, "kind", "forecast"),
+                    "measures": getattr(p, "measures", ""),
                     "available": ok, "status": why})
     return {"providers": out,
             "default": "assumption",
@@ -914,6 +1030,62 @@ def markets():
     return {"markets": _markets_cached(datetime.date.today().isoformat()),
             "min_campaigns": FIT_MIN_CAMPAIGNS,
             "note": "표본이 적은 시장은 적합이 흔들려 목록에서 제외했습니다."}
+
+
+def compare_curves(budget=2_000_000_000, media="", market="KR", universe=None,
+                   points=20, k=DEFAULT_K, flight_days=30):
+    """쓸 수 있는 제공자 전부를 «같은 예산 축» 에 올려 돌려준다.
+
+    ★ 왜 나란히 놓는가
+      넷플릭스·구글·메타가 각각 예측 API 를 가지고 있고, 우리는 메타 실측 적합을 따로
+      가지고 있다. 플래너가 「이 예산이면 어디서 얼마나 닿나」를 물을 때 한 벤더만
+      보여주면 그 벤더 기준으로만 판단한다.
+
+    🔴 모양이 서로 «다르게» 나오는 것이 정상이다 — 재는 대상이 다르다.
+      예측(forecast)  한 조건 안에서 노출을 늘렸을 때의 포화. 벤더가 계산한다
+      실측(measured)  캠페인 사이의 관계. 예산이 큰 캠페인은 타겟도 넓게 잡는다
+      가정(assumption) 우리 자료가 아니라 가정식의 모양
+      그래서 제공자마다 «무엇을 재는가» 를 같이 내려보낸다. 이 줄이 없으면 보는 사람이
+      차이를 «어느 쪽이 틀렸다» 로 읽는다.
+
+    ⚠️ «못 쓰는 제공자» 도 이유와 함께 돌려준다. 빠뜨리면 화면이 지금 가진 것만
+      보여주고, 플래너는 그게 전부라고 생각한다.
+    """
+    series, blocked = [], []
+    for p in _PROVIDERS:
+        try:
+            ok, why = (p.available(market) if p.name in ("netflix", "google_reachplan",
+                                                         "meta_rf") else p.available())
+        except TypeError:
+            ok, why = p.available()
+        meta = {"name": p.name, "label": p.label, "kind": getattr(p, "kind", "forecast"),
+                "measures": getattr(p, "measures", ""), "fitted": p.fitted}
+        if not ok:
+            blocked.append(dict(meta, reason=why))
+            continue
+        try:
+            d = p.curve(budget=budget, media=media, market=market, universe=universe,
+                        points=points, k=k, flight_days=flight_days)
+        except Exception as e:  # noqa: BLE001
+            blocked.append(dict(meta, reason=str(e)))
+            continue
+        series.append(dict(meta,
+                           badge=d.get("estimate_badge", ""),
+                           points=d.get("points", []),
+                           measured=d.get("measured"),
+                           fit=d.get("fit"),
+                           caveats=d.get("caveats", [])))
+    return {
+        "budget": budget, "points": points, "market": market, "media": media,
+        "flight_days": int(flight_days),
+        "series": series, "blocked": blocked,
+        "n_available": len(series), "n_blocked": len(blocked),
+        "read_me": ("곡선 모양이 서로 다른 것은 결함이 아닙니다 — 각 곡선이 «재는 대상» 이 "
+                    "다릅니다. 예측(벤더가 한 조건 안에서 계산)과 실측(우리가 캠페인 사이에서 "
+                    "관찰)은 같은 질문의 답이 아닙니다. 아래 «재는 것» 을 함께 보십시오."),
+        "axis_note": ("가로축은 같은 예산입니다. 다만 예산→노출 환산 CPM 은 제공자마다 "
+                      "다를 수 있으니 각 곡선의 CPM 출처를 확인하십시오."),
+    }
 
 
 def curve(budget=2_000_000_000, media="", market="KR", universe=None, points=20,

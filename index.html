@@ -1694,6 +1694,15 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
           <div style="height:340px"><canvas id="rsChart"></canvas></div>
         </div>
         <div class="dptw" style="max-height:320px"><table class="dptbl" id="rsTbl"><thead><tr></tr></thead><tbody></tbody></table></div>
+        <div id="rsCmpBox" style="margin-top:26px;border-top:2px solid var(--bdr);padding-top:20px">
+          <h3 style="font-size:15px;margin:0 0 4px">제공자 나란히 비교</h3>
+          <p style="font-size:12px;color:var(--tm);margin:0 0 12px">같은 예산 축에 쓸 수 있는 곡선을 전부 올립니다. 위 조건을 그대로 씁니다.</p>
+          <div style="border:2px solid var(--bdr);padding:16px;margin-bottom:14px">
+            <div style="height:320px"><canvas id="rsCmpChart"></canvas></div>
+          </div>
+          <div id="rsCmpWhat"></div>
+          <div id="rsCmpBlocked"></div>
+        </div>
         <div class="note" id="rsCaveat" style="margin-top:16px"></div>
       </div>
     </div>
@@ -2202,6 +2211,59 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     box.innerHTML=h+body+extra;
     host.parentNode.insertBefore(box, host.nextSibling);
   }
+  // 제공자 나란히 비교 — 넷플릭스·구글·메타 예측 + 우리 실측을 같은 축에.
+  // 🔴 곡선 모양이 서로 다른 것은 결함이 아니다 — 각 곡선이 «재는 대상» 이 다르다.
+  //   그래서 범례만 두지 않고 «재는 것» 을 표로 같이 띄운다. 이 줄이 없으면
+  //   보는 사람이 차이를 «어느 쪽이 틀렸다» 로 읽는다.
+  // ⚠️ 못 쓰는 제공자도 이유와 함께 보여준다. 빠뜨리면 지금 가진 것이 전부로 보인다.
+  var rsCmpChart=null;
+  var CMP_COLOR={netflix:'#E50914',google_reachplan:'#1A73E8',meta_rf:'#0866FF',
+                 fitted:'#1F7A3D',assumption:'#B45309'};
+  var KIND_LABEL={forecast:'벤더 예측',measured:'우리 실측',assumption:'가정식'};
+  function rsCompare(){
+    if(!el('rsCmpChart')) return;
+    var q=qs({budget:el('rsBudget').value||2000000000, media:el('rsMedia').value||'',
+              market:(el('rsMarket')&&el('rsMarket').value)||'',
+              universe:el('rsUniverse').value||0, points:14,
+              flight_days:(el('rsDays')&&el('rsDays').value)||30});
+    j(API+'/reach/compare_providers?'+q).then(function(d){
+      if(d.error){ el('rsCmpWhat').innerHTML='<p class="note">'+esc(d.error)+'</p>'; return; }
+      var ser=d.series||[], labels=[];
+      if(ser.length&&ser[0].points) labels=ser[0].points.map(function(p){
+        return (p.cost/100000000).toFixed(0)+'억'; });
+      var usePct=ser.some(function(x){ return (x.points||[]).some(function(p){ return p.reach_pct!=null; }); });
+      var ds=ser.map(function(x){
+        var col=CMP_COLOR[x.name]||'#6B7280';
+        return {label:x.label, data:(x.points||[]).map(function(p){
+                  return usePct?(p.reach_pct!=null?p.reach_pct:null):p.reach; }),
+                borderColor:col, backgroundColor:'transparent', fill:false, tension:.3,
+                pointRadius:2, borderDash:(x.kind==='assumption'?[5,4]:[])};
+      });
+      if(rsCmpChart) rsCmpChart.destroy();
+      rsCmpChart=new Chart(el('rsCmpChart'),{type:'line',data:{labels:labels,datasets:ds},
+        options:{responsive:true,maintainAspectRatio:false,
+          scales:{y:{beginAtZero:true,ticks:{callback:function(v){
+                    return usePct?(v+'%'):(v>=10000?(v/10000).toFixed(0)+'만':v);}},
+                  title:{display:true,text:usePct?'Reach 1+ (%)':'Reach 1+ (명)'}},
+                  x:{title:{display:true,text:'예산'}}},
+          plugins:{legend:{display:true,position:'bottom',labels:{boxWidth:12,font:{size:11}}}}}});
+      el('rsCmpWhat').innerHTML='<div class="note"><b>'+esc(d.read_me)+'</b></div>'+
+        '<table class="dptbl" style="font-size:11px;margin-top:8px"><thead><tr>'+
+        '<th style="text-align:left">곡선</th><th style="text-align:left">성격</th>'+
+        '<th style="text-align:left">재는 것</th></tr></thead><tbody>'+
+        ser.map(function(x){
+          return '<tr><td style="color:'+(CMP_COLOR[x.name]||'#6B7280')+';font-weight:700">'+
+            esc(x.label)+'</td><td>'+esc(KIND_LABEL[x.kind]||x.kind)+'</td><td>'+
+            esc(x.measures||'')+'</td></tr>'; }).join('')+'</tbody></table>'+
+        '<p style="font-size:11px;color:var(--tm);margin:6px 0 0">'+esc(d.axis_note)+'</p>';
+      var bl=d.blocked||[];
+      el('rsCmpBlocked').innerHTML=!bl.length?'':
+        '<div class="note" style="border-left-color:#B45309;background:#FFFBEB;margin-top:12px">'+
+        '<b>아직 그릴 수 없는 곡선 '+bl.length+'개</b><ul>'+bl.map(function(x){
+          return '<li><b>'+esc(x.label)+'</b> ('+esc(KIND_LABEL[x.kind]||x.kind)+') — '+
+                 esc(x.reason)+'</li>'; }).join('')+'</ul></div>';
+    }).catch(function(){});
+  }
   function rsRun(){
     var q=qs({budget:el('rsBudget').value||2000000000, media:el('rsMedia').value||'',
               flight_days:(el('rsDays')&&el('rsDays').value)||30,
@@ -2221,6 +2283,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
         '<p>예산→노출 환산은 <b>실측 CPM ₩'+Number(d.measured.cpm).toLocaleString()+'</b> 입니다 ('+esc(d.measured.cpm_source)+').<br>'+
         line2+'</p>';
       rsPeriodNote(d);
+      rsCompare();
       var pts=d.points;
       var tl=el('rsTbl').querySelector('thead tr'), tb=el('rsTbl').querySelector('tbody');
       var hasPct=pts.some(function(p){return p.reach_pct!=null;});
