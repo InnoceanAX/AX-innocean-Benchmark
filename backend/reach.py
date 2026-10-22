@@ -993,11 +993,16 @@ def _vendor_curve_counts(view, market=""):
 CURVE_SCOPE_V1_NOTE = ("ℹ️ 이 곡선은 광고 계정과 무관합니다 — 넷플릭스 v1 은 광고주·브랜드를 "
                        "예측 입력으로 쓰지 않습니다(서로 다른 세 광고주로 호출해 86개 점이 "
                        "모두 같았습니다). 전사 공용으로 읽으셔도 됩니다.")
-CURVE_SCOPE_NOTE = {
-    "advertiser": "",
-    "agency_shared": "",
-    "unknown": "",
-}
+# 🔴 ad_account_scope 는 v1 에서 «항상 unknown» 이다 — DB 실측 22/22 (2026-10-22).
+#   v1 요청에 광고 계정이 아예 없고(advertiser·brand 자유 텍스트뿐) ad_account_id 도
+#   뷰에 없으므로 다른 값이 나올 수 없다. 이 열은 v2 용이다.
+#
+#   전에 여기 {advertiser, agency_shared, unknown} → '' 인 dict 가 있었고 분기도
+#   있었다. 세 키가 전부 빈 문자열이라 그 가지는 «절대 안 탔다» — 동작은 맞았지만
+#   dict 가 «살아 있는 구분» 이 있다고 말했다. 다음 사람이 그 값으로 분기하면
+#   다른 가지에 영원히 안 들어간다(「조건이 틀려서 0」 과 같은 자리).
+#   그래서 dict 를 지우고, 값은 원값 그대로 올린다(숨기지 않는다).
+CURVE_SCOPE_V1_ONLY = "unknown"   # v1 에서 관측되는 유일한 값
 
 
 def _interp_reach(pairs, imps):
@@ -1053,10 +1058,15 @@ def points_from_cache(rows, cpm, budget, points=20):
     if npts is not None and npts < 4:
         warn.append(f"곡선 점이 {npts}개뿐입니다 — 보간할 수 없어 믿기 어렵습니다.")
     scope = (row.get("ad_account_scope") or "unknown")
-    if CURVE_SCOPE_NOTE.get(scope):
-        warn.append(CURVE_SCOPE_NOTE[scope])
-    else:
-        warn.append(CURVE_SCOPE_V1_NOTE)
+    # v1 에서는 계정이 모델 입력이 아니라(E1: 세 광고주로 호출해 86점 동일) 범위가
+    #   무엇이든 곡선이 같다. 그래서 분기하지 않고 같은 안내를 붙인다.
+    warn.append(CURVE_SCOPE_V1_NOTE)
+    # ⚠️ 예상 밖의 값이 오면 그 사실만 알린다 — v2 로 넘어갔거나 격자가 바뀐
+    #   신호다. 조용히 같은 안내를 붙이면 전제가 깨진 것을 모른다.
+    if scope != CURVE_SCOPE_V1_ONLY:
+        warn.append(f"⚠️ 곡선의 광고계정 범위가 «{scope}» 로 기록됐습니다 — v1 에서는 "
+                    "«unknown» 만 나오던 값입니다. API 버전이나 격자 구성이 바뀌었을 "
+                    "수 있어, 광고주별 해석 전에 출처를 확인하십시오.")
 
     pairs = []
     for x in arr:
@@ -1161,6 +1171,9 @@ def points_from_cache(rows, cpm, budget, points=20):
                             f"«프로필»(벤더 제공, 폭 ±{pop['spread_pct']/2:.0f}%). "
                             "단일 %가 아니라 띠로 읽으십시오. 프로필은 사람 수가 아닙니다.")
     return {"points": out, "warnings": warn, "scope": scope,
+            # ⚠️ v1 에서는 항상 'unknown' 이다(실측 22/22). 이 값으로 분기하지 마십시오 —
+            #   다른 가지에 영원히 안 들어갑니다. v2 에서 의미가 생깁니다.
+            "scope_informative": False,
             "max_imp": round(max_imp), "max_reach": round(pairs[-1][1]),
             # 🔑 원곡선(노출,도달) 쌍을 그대로 올린다 — 셀 합성과 기간 보간은
             #   «예산축으로 자른 점» 이 아니라 원점에서 보간해야 한다. 자른 점에서
@@ -1215,7 +1228,10 @@ def _cache_curve_response(provider, view, media, market, flight_days, budget, po
         "points": pts,
         "measured": {"cpm": round(cpm, 2), "cpm_source": cpm_src,
                      "note": "예산→노출은 실측 CPM, 노출→도달은 벤더 예측 곡선입니다."},
-        "cache": {"scope": parsed["scope"], "max_imp": parsed["max_imp"],
+        "cache": {"scope": parsed["scope"],
+                  # v1 에서는 항상 'unknown' 이다(실측 22/22) — 분기하지 마십시오
+                  "scope_informative": parsed.get("scope_informative", False),
+                  "max_imp": parsed["max_imp"],
                   "max_reach": parsed["max_reach"], "flight_days": int(flight_days or 0),
                   "population": pop},
         "measures": provider.measures,

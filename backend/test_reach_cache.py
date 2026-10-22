@@ -23,7 +23,10 @@ def _ir(n=100, scale=1.0):
     return out
 
 
-def _row(status="ok", pts=100, scope="advertiser", arr=None):
+# 🔴 기본 scope 는 «unknown» 이다 — v1 격자 22/22 가 그 값이다(DB 실측).
+#   전에 "advertiser" 였는데 그건 프로덕션에 없는 값이고, 기본값이 현실과
+#   다르면 모든 테스트가 «없는 모양» 위에서 돈다.
+def _row(status="ok", pts=100, scope="unknown", arr=None):
     return {"curve_status": status, "points": pts, "ad_account_scope": scope,
             "impression_reach": _ir(pts) if arr is None else arr,
             "country": "KR", "flight_days": 30}
@@ -49,7 +52,11 @@ ck("도달이 단조증가", d and all(d["points"][i]["reach"] <= d["points"][i 
                             for i in range(len(d["points"]) - 1)))
 ck("예산 축 상한을 넘지 않는다", d and d["points"][-1]["cost"] <= BUD)
 ck("빈도가 계산된다", d and d["points"][-1]["frequency"] is not None)
-ck("advertiser 범위면 경고 없음", d and not any("공용 계정" in w for w in d["warnings"]))
+ck("기본 행에 «공용 계정» 류 경고가 없다",
+   d and not any("공용 계정" in w for w in d["warnings"]))
+ck("기본 행에 «예상 밖 범위» 경고가 없다(실제 값이므로)",
+   d and not any("범위가" in w for w in d["warnings"]),
+   [w[:50] for w in (d or {}).get("warnings", [])])
 
 print("\n=== 쓸 수 없는 상태 네 가지 — 점을 만들지 않고 이유를 준다 ===")
 for st, kw in (("suppressed", "억제"), ("not_permitted", "쓸 수 없는"),
@@ -63,10 +70,22 @@ print("\n=== 경고가 붙는 경우 ===")
 #   지웠으므로 이 테스트도 바뀐다 — DB 실측(E1)에서 서로 다른 세 광고주로 호출한
 #   86개 점이 «전부» 동일했다. 계정은 v1 모델의 입력이 아니다.
 #   틀린 경고를 지킨 테스트는 틀린 코드를 지킨다.
-d3, _ = reach.points_from_cache([_row(scope="agency_shared")], CPM, BUD, points=5)
+# 🔴 전에 여기서 scope="agency_shared" 를 넣고 댔다. 그 값은 «프로덕션에 없다» —
+#   v1 격자 22/22 가 unknown 이다(DB 실측). 없는 축에 대한 신뢰를 만드는 테스트였다.
+#   실제로 나오는 값으로 대고, «밖의 값이 오면 알리는가» 를 따로 댄다.
+d3, _ = reach.points_from_cache([_row(scope="unknown")], CPM, BUD, points=5)
+ck("v1 실제 값(unknown)에서 계정 무관 안내",
+   d3 and any("광고 계정과 무관" in w for w in d3["warnings"]), (d3 or {}).get("warnings"))
 ck("공용 계정이라고 겁주지 않는다", d3 and not any("분모가 다른" in w for w in d3["warnings"]))
-ck("계정과 무관하다고 적는다", d3 and any("광고 계정과 무관" in w for w in d3["warnings"]),
-   (d3 or {}).get("warnings"))
+ck("unknown 은 «예상 밖» 경고를 띄우지 않는다",
+   d3 and not any("범위가" in w for w in d3["warnings"]))
+ck("이 값으로 분기하지 말라고 표시한다", d3 and d3.get("scope_informative") is False)
+# ⚠️ v2 로 넘어가거나 격자가 바뀌면 다른 값이 올 수 있다. 조용히 같은 안내를 붙이면
+#   전제가 깨진 것을 모른다 — 그 사실만 알리는지 댄다.
+d3b, _ = reach.points_from_cache([_row(scope="agency_shared")], CPM, BUD, points=5)
+ck("예상 밖 범위 값이 오면 알린다",
+   d3b and any("v1 에서는" in w and "unknown" in w for w in d3b["warnings"]),
+   [w[:60] for w in (d3b or {}).get("warnings", [])])
 # 🔴 «100점» 규칙을 버렸다 — DB 첫 실호출이 86점이었고 간격도 로그였다(2026-10-22).
 #   개수로 판정하면 멀쩡한 곡선마다 경고가 떠서 그 경고가 곧 무시된다.
 d4, _ = reach.points_from_cache([_row(pts=86)], CPM, BUD, points=5)
