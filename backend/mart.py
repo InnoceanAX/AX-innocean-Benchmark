@@ -958,5 +958,41 @@ def check():
         print(dict(r))
 
 
+def smoke():
+    """공짜 스모크 — «도는가» 를 확인한다. 마트를 쓰지 않는다.
+
+    ★ 왜 있나
+      배포가 Job 정의를 갱신하고 「갱신 완료」를 찍지만, 그 이미지가 실제로
+      «실행되는지» 는 확인하지 않았다. 풀 빌드는 프로덕션 마트 표를 다시 쓰므로
+      매 배포에 돌릴 수 없다(느려서가 아니다 — 실측 ~130초다).
+      그런데 확인하고 싶은 것 대부분은 공짜다 — import 되는가 · 경로가 맞는가 ·
+      자격증명이 되는가 · 상류 뷰에 닿는가. 스키마 조회는 «메타데이터» 라
+      테이블 스캔이 없다.
+
+    ⚠️ 이것이 확인하지 «않는» 것: 빌드가 끝까지 도는가 · 숫자가 맞는가.
+      스모크가 통과해도 그건 모른다. 적어 두지 않으면 통과를 그것으로 읽는다.
+    """
+    print("=== 마트 스모크 (빌드하지 않는다) ===")
+    c = _client()
+    print(f"· BigQuery 클라이언트 OK · 프로젝트 {c.project}")
+    # 상류 뷰 스키마 — 메타데이터 조회라 스캔이 0바이트다
+    check_upstream_contract(c)
+    # 마트가 읽히는가 — 작은 질의 하나. 없으면 «아직 안 만들어진 것» 이므로 통과다
+    try:
+        n = list(c.query(
+            f"SELECT COUNT(*) n FROM `{PROJECT}.{MART_DS}.bm_campaign_monthly`"
+        ).result())[0].n
+        print(f"· 마트 읽기 OK · bm_campaign_monthly {n:,}행")
+    except Exception as e:  # noqa: BLE001
+        print(f"· 마트 아직 없음(통과) — {str(e)[:70]}")
+    print("✅ 스모크 통과 — import·경로·자격증명·상류 접근")
+    print("⚠️ 확인하지 않음 — 빌드가 끝까지 도는가 · 숫자가 맞는가")
+
+
 if __name__ == "__main__":
-    check() if "--check" in sys.argv else build()
+    if "--smoke" in sys.argv:
+        smoke()
+    elif "--check" in sys.argv:
+        check()
+    else:
+        build()

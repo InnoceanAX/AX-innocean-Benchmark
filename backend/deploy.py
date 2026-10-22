@@ -188,11 +188,18 @@ def deploy_service(with_secret=True, digest=""):
 MART_JOB = "benchmark-mart-builder"
 
 
-def deploy_mart_job():
-    """마트 일일 갱신용 Cloud Run Job (같은 이미지, command=python mart.py)."""
+def deploy_mart_job(digest=""):
+    """마트 일일 갱신용 Cloud Run Job (같은 이미지, command=python mart.py).
+
+    🔴 전에는 태그(IMG_URI)로 올렸다. Job 은 실행 시점에 태그를 다시 당기므로
+      서비스처럼 «리비전이 안 생기는» 고장은 아니지만, 「빌드한 것과 도는 것이
+      같은가」를 기계가 확인하지 않는다는 점은 같다. 다이제스트로 고정하고 되읽는다.
+    """
     base = f"https://{REGION}-run.googleapis.com/v2/projects/{PROJECT}/locations/{REGION}/jobs"
+    img = (f"{REGION}-docker.pkg.dev/{PROJECT}/{REPO}/{IMAGE}@{digest}"
+           if digest else IMG_URI)
     body = {"template": {"template": {
-        "containers": [{"image": IMG_URI, "command": ["python", "mart.py"],
+        "containers": [{"image": img, "command": ["python", "mart.py"],
                         "resources": {"limits": {"cpu": "1", "memory": "512Mi"}}}],
         "serviceAccount": RUNTIME_SA, "maxRetries": 1, "timeout": "600s",
     }}}
@@ -202,7 +209,39 @@ def deploy_mart_job():
     else:
         r = _ok(S.post(f"{base}?jobId={MART_JOB}", json=body))
     _wait_op(f"https://{REGION}-run.googleapis.com/v2/{r.json()['name']}")
-    print(f"· Cloud Run Job {'갱신' if exists else '생성'}: {MART_JOB}")
+    # «보냈다» 는 «저장됐다» 가 아니다 — 되읽어 댄다
+    if digest:
+        jd = S.get(f"{base}/{MART_JOB}").json()
+        imgs = [c.get("image", "") for c in
+                (((jd.get("template") or {}).get("template") or {}).get("containers") or [])]
+        if not any(digest in i for i in imgs):
+            raise RuntimeError(f"마트 Job 에 방금 빌드한 {digest[:19]}… 가 없습니다"
+                               f"(현재 {imgs}) — 옛 이미지로 돕니다.")
+    print(f"· Cloud Run Job {'갱신' if exists else '생성'}: {MART_JOB}"
+          + (" (다이제스트 고정·되읽음)" if digest else ""))
+
+
+def smoke_mart_job():
+    """🔑 공짜 스모크 — 마트 Job 을 «--smoke» 로 클라우드에서 1회 돌린다.
+
+    DB 가 `--dry-run` 으로 같은 걸 했다. 「스모크가 공짜가 아니라서 안 넣었다」고
+    적어 뒀던 자리에 공짜인 길이 있었다 — 스키마 조회는 메타데이터라 스캔이 없다.
+
+    확인하는 것: 이미지가 «실행되는가» · import·경로 · 자격증명 · 상류 뷰 접근
+    ⚠️ 확인하지 않는 것: 빌드가 끝까지 도는가 · 숫자가 맞는가
+    """
+    base = f"https://{REGION}-run.googleapis.com/v2/projects/{PROJECT}/locations/{REGION}/jobs"
+    body = {"overrides": {"containerOverrides": [{"args": ["--smoke"]}]}}
+    r = _ok(S.post(f"{base}/{MART_JOB}:run", json=body))
+    name = r.json().get("metadata", {}).get("name") or r.json().get("name", "")
+    if not name:
+        print("· [경고] 스모크 실행 이름을 못 읽었습니다 — 건너뜁니다")
+        return
+    ok = wait_job_exec(name if name.startswith("projects/") else name)
+    if not ok:
+        raise RuntimeError("마트 Job 스모크 실패 — 이미지가 실행되지 않습니다. "
+                           "Job 로그를 보십시오(빌드 이전 단계 문제입니다).")
+    print("· 마트 Job 스모크 통과 (벤더·풀스캔 없음)")
 
 
 def deploy_scheduler():
@@ -407,17 +446,26 @@ def main():
     #     플래그로 막는 방식이 두 번 실패했으므로 기본 동작으로 올린다.
     #   이미지 갱신은 멱등하고 몇 초다. 안 하는 쪽의 비용이 «조용한 데이터 파손» 이다.
     if not a.service_only:
-        deploy_mart_job()
+        deploy_mart_job(digest=_digest)
+        # 🔑 공짜 스모크 — Job 을 --smoke 로 1회 돌려 «실행되는가» 를 본다.
+        #   전에는 「갱신 완료」만 찍고 그 이미지가 실행되는지는 안 봤다. 풀 빌드가
+        #   20분이라 못 한다고 생각했는데, 확인하고 싶은 것 대부분은 공짜다 —
+        #   스키마 조회는 메타데이터라 테이블 스캔이 0바이트다(DB 의 --dry-run 과 같은 길).
+        smoke_mart_job()
     if a.full:
         run_mart_job_now_wait()  # 마트 즉시 재빌드(야간을 기다리지 않을 때)
     verify()
     # 🔴 「✅ 배포 완료」 는 «안 한 검사» 까지 했다고 읽히게 한다. 확인한 것과
     #   확인하지 않은 것을 나눠 적는다 — 뺀 것을 잊으면 그게 구멍이 된다.
     print("\n✅ 확인함 — 이미지 다이제스트 고정 · 리비전 반영(되읽음) · "
-          "엔드포인트 7종 200 · 프론트 문법 · 테스트")
-    print("⚠️ 확인하지 않음 — 마트 Job 이 «실제로 도는가»(실행 20분+, 여기서는 "
-          "트리거만 한다) · 야간 넷플릭스 수집이 «벤더 응답을 받는가»(쿼터를 "
-          "먹는다) · 브라우저에서 «화면이 그려지는가»(별도 probe 로 본다)")
+          "엔드포인트 7종 200 · 프론트 문법 · 테스트"
+          + ("" if a.service_only else " · 마트 Job 스모크(실행·import·자격증명·상류 접근)"))
+    # ⚠️ 스모크가 덮은 부분은 이 목록에서 뺀다. 이미 확인한 것을 「확인하지 않음」에
+    #   남겨 두면 그 목록 전체를 안 믿게 되고, 그러면 진짜 빈자리도 안 읽힌다.
+    print("⚠️ 확인하지 않음 — 마트 «빌드가 끝까지 도는가»와 «숫자가 맞는가»"
+          "(--full 에서만 돈다. 실측 ~130초로 느리지는 않은데, 프로덕션 마트 표를 "
+          "다시 쓰므로 매 배포에 돌리지 않는다) · 야간 넷플릭스 수집이 «벤더 응답을 "
+          "받는가»(쿼터를 먹는다) · 브라우저에서 «화면이 그려지는가»(별도 probe)")
 
 
 if __name__ == "__main__":
