@@ -1472,11 +1472,40 @@ SYNTH_FULLCOVER_GAP_PCT = 10.4
 ACTIVE_SQL = "IFNULL(is_active, TRUE)"
 
 
-def _rows_sql(limit=5):
-    """격자 조회 SQL — 순수 함수로 둬서 필터가 빠지면 테스트가 잡게 한다."""
+# 내가 만든 키에서 enum 값만 뽑아 정렬한 문자열. DB 키를 «파싱» 하는 것이 아니라
+#   «내 키를 변환» 하는 것이다 — 그래서 DB 형식이 바뀌어도 이 함수는 멀쩡하다.
+def _key_values(key):
+    """'age=A,B|gender=C' → 'A,B,C'(정렬). 'none' 이나 빈 값은 ''."""
+    if not key or key == "none":
+        return ""
+    vals = []
+    for part in str(key).split("|"):
+        _n, _eq, v = part.partition("=")
+        vals += [x.strip() for x in v.split(",") if x.strip()]
+    return ",".join(sorted(vals))
+
+
+# 값 배열을 정렬 문자열로 만드는 SQL. 🔴 IFNULL 이 필요하다 — 빈 배열의
+#   STRING_AGG 는 '' 이 아니라 NULL 이다(실측). 없으면 조건이 영원히 거짓이 된다.
+VALUES_SQL = ("IFNULL((SELECT STRING_AGG(x, ',' ORDER BY x) "
+              "FROM UNNEST(IFNULL(targeting_value_ids, [])) x), '')")
+
+
+def _rows_sql(limit=5, with_values=False):
+    """격자 조회 SQL — 순수 함수로 둬서 조건이 빠지면 테스트가 잡게 한다.
+
+    with_values 면 «문자열 키 또는 값 집합» 으로 맞춘다. 키 형식이 바뀌어도
+    값으로 찾는다 — 형식이 아니라 내용이라 접두사·구분자·축 순서에 안 묶인다.
+
+    ⚠️ 값 조건은 «값이 있을 때만» 켠다. 빈 문자열로 켜면 value_ids 가 안 채워진
+      타게팅 행까지 «타게팅 없음» 으로 잡혀, 타게팅된 곡선을 전체 도달로 쓴다.
+    """
+    match = "IFNULL(targeting_key,'none')=@tk"
+    if with_values:
+        match = f"({match} OR {VALUES_SQL}=@tv)"
     return (f"SELECT * FROM {CURVE_VIEW} "
             f"WHERE country=@mk AND flight_days=@fd "
-            f"AND IFNULL(targeting_key,'none')=@tk "
+            f"AND {match} "
             f"AND {ACTIVE_SQL} "
             f"ORDER BY IF(IFNULL(curve_status,'')='ok',0,1), fetched_at DESC "
             f"LIMIT {int(limit)}")
@@ -1490,11 +1519,14 @@ def _curve_rows(market, flight_days, key, limit=5):
       달라질 수 있다는 뜻이고, 그러면 되물을 수 없다.
     """
     c = _client()
+    tv = _key_values(key)
     prm = [bigquery.ScalarQueryParameter("mk", "STRING", (market or "KR").upper()),
            bigquery.ScalarQueryParameter("fd", "INT64", int(flight_days or 30)),
            bigquery.ScalarQueryParameter("tk", "STRING", key)]
+    if tv:
+        prm.append(bigquery.ScalarQueryParameter("tv", "STRING", tv))
     return [dict(r) for r in c.query(
-        _rows_sql(limit),
+        _rows_sql(limit, with_values=bool(tv)),
         job_config=bigquery.QueryJobConfig(query_parameters=prm)).result()]
 
 

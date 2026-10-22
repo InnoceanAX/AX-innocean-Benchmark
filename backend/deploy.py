@@ -261,8 +261,17 @@ def verify():
     bad = []
     for path, name in CHECKS:
         st, body = hit(path)
+        # ⚠️ 연결 단계 오류(ERR)만 다시 시도한다 — 새 리비전이 깨어나는 중이면
+        #   첫 요청이 TLS 핸드셰이크에서 끊긴다(00145 에서 실제로 났다).
+        #   HTTP 오류 코드는 «앱이 답한 것» 이라 다시 시도하지 않는다 — 500 을
+        #   재시도로 덮으면 진짜 실패를 감춘다.
+        retried = ""
+        if st == "ERR":
+            time.sleep(5)
+            st, body = hit(path)
+            retried = " (재시도)"
         ok = (st == 200)
-        print(f" {'OK  ' if ok else 'FAIL'} {name:<10} {st}  {path[:56]}")
+        print(f" {'OK  ' if ok else 'FAIL'} {name:<10} {st}{retried}  {path[:50]}")
         if not ok:
             bad.append(f"{name} {path[:58]} -> {st} {body[:70]}")
     if bad:

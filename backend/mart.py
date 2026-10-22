@@ -753,10 +753,24 @@ def build_fx(c):
     return True
 
 
+# (데이터셋, 뷰) 로 둔다 — 전에는 apac_kr_unified 로 «고정» 돼 있었다.
+# 🔴 그래서 하루에 두 번 계약이 바뀐 뷰를 못 보고 있었다: apac_kr_benchmark 의
+#   v_netflix_reach (31→33열 · 43→41행 · _all 뷰 신설). 두 번 다 DB 가 «말로»
+#   알려 줘서 알았다 — 말이 없으면 못 알았다.
+#   감시를 만들어 놓고 «새로 생긴 의존» 을 목록에 안 넣으면 감시가 없는 것과 같다.
+# ⚠️ 새 의존이 더 위험하다. 오래된 뷰는 바뀔 일이 적고 새 뷰는 모양이 아직 흔들린다.
 UPSTREAM_VIEWS = [
-    "v_perf_unified", "v_perf_unified_meta_ext", "v_perf_unified_video",
-    "v_perf_unified_device", "v_perf_unified_age", "v_perf_unified_gender",
-    "v_meta_campaign_reach", "v_dplan_creative",
+    ("apac_kr_unified", "v_perf_unified"),
+    ("apac_kr_unified", "v_perf_unified_meta_ext"),
+    ("apac_kr_unified", "v_perf_unified_video"),
+    ("apac_kr_unified", "v_perf_unified_device"),
+    ("apac_kr_unified", "v_perf_unified_age"),
+    ("apac_kr_unified", "v_perf_unified_gender"),
+    ("apac_kr_unified", "v_meta_campaign_reach"),
+    ("apac_kr_unified", "v_dplan_creative"),
+    # DB 가 쓰는 넷플릭스 격자 — 도달 화면이 이것만 읽는다
+    ("apac_kr_benchmark", "v_netflix_reach"),
+    ("apac_kr_benchmark", "v_netflix_reach_all"),
 ]
 
 
@@ -778,9 +792,9 @@ def check_upstream_contract(c):
     """
     tbl = f"`{PROJECT}.{MART_DS}.bm_upstream_contract`"
     cur = {}
-    for v in UPSTREAM_VIEWS:
+    for ds, v in UPSTREAM_VIEWS:
         try:
-            t = c.get_table(f"{PROJECT}.apac_kr_unified.{v}")
+            t = c.get_table(f"{PROJECT}.{ds}.{v}")
             cur[v] = sorted(f.name for f in t.schema)
         except Exception:
             cur[v] = None   # 없음 — 그것도 기록한다(사라진 것을 알아야 한다)
@@ -793,7 +807,7 @@ def check_upstream_contract(c):
         prev = {}
 
     changed = 0
-    for v in UPSTREAM_VIEWS:
+    for _ds, v in UPSTREAM_VIEWS:
         now, was = cur[v], prev.get(v, "__first__")
         if was == "__first__":
             continue                     # 첫 기록 — 비교 대상 없음
@@ -814,19 +828,18 @@ def check_upstream_contract(c):
                       "화면에서 지표가 없어진 것을 확인하십시오.")
             changed += 1
 
-    rows = [{"view_name": v, "columns": cur[v], "_checked_at": None} for v in UPSTREAM_VIEWS]
     try:
         c.query(f"""CREATE OR REPLACE TABLE {tbl} AS
         SELECT * FROM UNNEST([{','.join(
             "STRUCT('" + v + "' AS view_name, " +
             ("[" + ','.join("'" + x + "'" for x in cur[v]) + "]" if cur[v] is not None
              else "CAST(NULL AS ARRAY<STRING>)") + " AS columns)"
-            for v in UPSTREAM_VIEWS)}])""").result()
+            for _d, v in UPSTREAM_VIEWS)}])""").result()
     except Exception as e:
         print(f"· [경고] 계약 스냅샷 저장 실패: {str(e)[:90]}")
 
     if not changed:
-        n_ok = sum(1 for v in UPSTREAM_VIEWS if cur[v] is not None)
+        n_ok = sum(1 for _d, v in UPSTREAM_VIEWS if cur[v] is not None)
         print(f"· 업스트림 계약 변화 없음 ({n_ok}/{len(UPSTREAM_VIEWS)}개 뷰)")
 
 

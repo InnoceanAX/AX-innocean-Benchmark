@@ -385,6 +385,32 @@ print(chr(10) + "=== 🔴 내려 둔 행(is_active=FALSE)을 쓰지 않는다 ==
 #   «틀려서» 내린 행이면 그대로 쓴다 — 그러면 is_active 가 아무 일도 하지 않는다.
 _sql = reach._rows_sql(5)
 ck("조회 SQL 이 is_active 를 거른다", "is_active" in _sql, _sql[:140])
+
+# ── 조회를 «문자열 키» 하나에 묶어 두지 않는다 ──────────────────────
+# 🔴 내 조회는 DB 의 targeting_key 형식에 묶여 있었다. 그 계약이 하루에 두 번
+#   바뀌었다. 형식이 바뀌면 내 조회는 「없다」 를 돌려주고 화면은 「계산 대기」
+#   라고 적는다 — 곡선이 있는데 아직이라고 말하고, DB 쪽 문제로 보인다.
+ck("내 키 → 값 집합 변환(단일)",
+   reach._key_values("age=AGE_25_34|gender=MALE") == "AGE_25_34,MALE")
+ck("내 키 → 값 집합 변환(다중)",
+   reach._key_values("age=AGE_25_34,AGE_35_49|gender=MALE")
+   == "AGE_25_34,AGE_35_49,MALE")
+ck("값 집합은 정렬된다(고른 순서 무관)",
+   reach._key_values("gender=MALE|age=AGE_35_49,AGE_25_34")
+   == "AGE_25_34,AGE_35_49,MALE")
+ck("none 은 빈 값", reach._key_values("none") == "")
+
+# 🔴 빈 배열의 STRING_AGG 는 '' 이 아니라 NULL 이다(실측). IFNULL 이 없으면
+#   조건이 영원히 거짓이 되고, 하필 「타게팅 없음」 행이 89.6% 의 분모다.
+ck("값 SQL 에 IFNULL 이 있다(빈 배열은 NULL 이다)",
+   "IFNULL" in reach.VALUES_SQL, reach.VALUES_SQL[:60])
+# ⚠️ 값 조건은 «값이 있을 때만» 켠다. 빈 문자열로 켜면 value_ids 가 안 채워진
+#   타게팅 행까지 「타게팅 없음」 으로 잡혀, 타게팅된 곡선을 전체 도달로 쓴다.
+ck("값이 없으면 값 조건을 켜지 않는다", "@tv" not in reach._rows_sql(5, False))
+ck("값이 있으면 키 «또는» 값으로 맞춘다",
+   "@tv" in reach._rows_sql(5, True) and "OR" in reach._rows_sql(5, True))
+ck("값 조건이 targeting_value_ids 를 쓴다",
+   "targeting_value_ids" in reach._rows_sql(5, True))
 # ⚠️ IFNULL(is_active, TRUE) 여야 한다. NULL 을 비활성으로 보면 컬럼이 안 채워진
 #   행이 전부 사라져 화면이 조용히 빈다 — 「없다」와 「내렸다」는 다르다.
 ck("NULL 은 활성으로 본다(IFNULL ... TRUE)",
