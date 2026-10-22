@@ -1149,5 +1149,16 @@ def get_summary_context(media="G", dim="market", date_from="2025-01-01", date_to
             q = r.get(k + "_q")
             if q:
                 parts.append(f"{KU[k]}(평균 {q['avg']}/중앙 {q['median']}/상위25% {q['top25']}/상위10% {q['top10']})")
-        lines.append(f"- {r['name']} (캠페인 {r['n']}개, 지출 {r['spend']}): " + ", ".join(parts))
+        # 🔴 화면이 띄우는 경고는 AI 답변에도 가야 한다. 안 그러면 화면은 «브랜드 아님» 이라
+        #   적는데 AI 는 「네이버 브랜드의 CPM 은…」 이라고 답한다 — 같은 제품의 두 입이
+        #   다른 말을 한다. 사용자는 문장으로 오는 쪽을 더 믿는다.
+        warn = ""
+        if r.get("media_like_brand"):
+            warn = (" ⚠️ 이것은 브랜드가 아니라 «매체 이름» 입니다. 서로 다른 광고주 여럿이 "
+                    "한 줄에 묶여 있으니 브랜드로 비교하지 말고, 질문자에게 그 사실을 "
+                    "먼저 알려주십시오.")
+        if r.get("n_low"):
+            warn += " (표본이 적어 분위수가 캠페인 한둘에 흔들립니다)"
+        lines.append(f"- {r['name']} (캠페인 {r['n']}개, 지출 {r['spend']}): "
+                     + ", ".join(parts) + warn)
     return "\n".join(lines)
