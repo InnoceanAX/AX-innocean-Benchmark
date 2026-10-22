@@ -20,6 +20,30 @@ PROJECT = "innocean-perf-apac-kr"
 OK, NO, WAIT = "[O]", "[X]", "[.]"
 
 
+# ── NetKey 만료 추적 ──────────────────────────────────────────────
+# ⚠️ 발급일은 «확인된 값이 아니다». 미데전이 NetKey 를 공유한 메일 날짜(2026-10-02)를
+#   발급일로 «가정» 했다 — 사용자 판단으로 그렇게 진행하기로 했다.
+#   실제 발급일이 확인되면 이 상수를 고치고, DB 의 만료 알림(D-30)도 같이 옮겨야 한다.
+# 🔴 왜 적어두나: NetKey 유효기간이 1년이고, 만료되면 수집이 «조용히» 실패한다.
+#   그때 화면은 「쓸 수 있는 곡선이 없다」로만 바뀌고 「토큰 만료」라고는 말하지 않는다.
+#   날짜를 모르면 1년 뒤 아무도 원인을 못 찾는다. 가정이라도 적어두는 쪽이 낫다.
+NETKEY_ISSUED_ASSUMED = "2026-10-02"   # 공유 메일 날짜 · 확인 아님
+NETKEY_VALID_DAYS = 365
+
+
+def _netkey_expiry_line():
+    from datetime import date, timedelta
+    try:
+        y, m, d = (int(x) for x in NETKEY_ISSUED_ASSUMED.split("-"))
+        exp = date(y, m, d) + timedelta(days=NETKEY_VALID_DAYS)
+        left = (exp - date.today()).days
+        mark = OK if left > 60 else (WAIT if left > 0 else NO)
+        return (f"  {mark} 만료      {exp} 까지 (D-{left})  "
+                f"⚠️ 발급일 {NETKEY_ISSUED_ASSUMED} 는 «가정» 입니다 — 공유 메일 날짜 기준")
+    except Exception:
+        return None
+
+
 def _sm_names():
     try:
         from google.cloud import secretmanager as sm
@@ -108,6 +132,11 @@ def main():
             ok_n, all_n = rows
             mark = OK if ok_n else (WAIT if all_n else NO)
             print(f"  {mark} 캐시      쓸 수 있는 곡선 {ok_n:,} / 격자 {all_n:,}")
+        # 2-b) NetKey 만료 — 자격증명이 들어온 뒤부터 의미가 있다
+        if v["key"] == "netflix" and names is not None and                 any(x in names for x in v["secrets"]):
+            ln = _netkey_expiry_line()
+            if ln:
+                print(ln)
         # 3) 화면
         try:
             import reach
