@@ -13,6 +13,7 @@ DB 가 자기 테스트 38개를 만든 뒤 코드를 하나씩 틀어 봤고, �
 ⚠️ 전부 사본에서 한다. 원본은 손대지 않는다.
 """
 import io
+import re
 import shutil
 import subprocess
 import sys
@@ -71,9 +72,9 @@ MUTATIONS = [
      "    if missing:\n        return {\"found\": False, \"state\": \"incomplete\"",
      "    if False:\n        return {\"found\": False, \"state\": \"incomplete\""),
 
-    ("interp-identity", "보간 가중치를 한쪽으로 쏠리게 한다",
-     "w = (fd - lo) / float(hi - lo)",
-     "w = 0.5 + (fd - lo) / float(hi - lo)"),
+    ("interp-identity", "한쪽 앵커 기여에 계수를 곱해 항등을 깬다",
+     "pts = [(x, _interp_reach(pa, x) * (1 - w) + _interp_reach(pb, x) * w)",
+     "pts = [(x, _interp_reach(pa, x) * (1 - w) * 0.97 + _interp_reach(pb, x) * w)"),
 
     ("interp-rejects-non-monotone", "단조성 검사를 끈다",
      "    if drops:",
@@ -101,6 +102,55 @@ def run_tests(tmp):
     return r.returncode, fails, out
 
 
+# 🔴 「잡혔다」 가 「그 불변식을 쟀다」 를 뜻하지 않는다. 돌연변이가 «엉뚱한» 테스트를
+#   깨뜨려도 종료코드는 1 이다 — DB 가 찾은 「안 잡힘의 세 번째 뜻」 의 거울이다.
+#   실제로 interp-identity 가 그랬다: 가중치를 틀었더니 «다른» 보간 테스트가 걸렸고
+#   항등 검사에 이가 있는지는 모르는 상태였다.
+#   그래서 `# INV(slug)` 아래 딸린 ck() 이름들을 모아 «그 묶음이» 깨졌는지 본다.
+RE_INV_MARK = re.compile(r"^\s*#\s*INV\(([a-z0-9][a-z0-9-]*)\)\s*$")
+RE_CK = re.compile(r'ck\(\s*(?:f?")([^"]+)"')
+
+
+def owned_checks(tmp):
+    """slug → 그 불변식에 딸린 ck() 이름 집합.
+
+    `# INV(slug)` 부터 다음 `# INV(` 또는 섹션 print 까지를 그 불변식의 묶음으로 본다.
+    ⚠️ f-문자열 ck 이름은 중괄호가 들어가 실행 결과와 글자가 다르다 — 그래서
+      «중괄호 앞부분» 으로 맞춘다. 완벽하지 않지만 귀속이 «틀리는» 쪽은 없다.
+    """
+    src = io.open(Path(tmp) / "test_reach_cache.py", encoding="utf-8").read()
+    owned, cur = {}, None
+    for line in src.splitlines():
+        m = RE_INV_MARK.match(line)
+        if m:
+            cur = m.group(1)
+            owned.setdefault(cur, set())
+            continue
+        if line.lstrip().startswith("print("):
+            cur = None
+            continue
+        if cur:
+            c = RE_CK.search(line)
+            if c:
+                owned[cur].add(c.group(1).split("{")[0].strip())
+    return owned
+
+
+def attributed(fails, names):
+    """실패한 테스트 중 «그 불변식 묶음» 의 것을 돌려준다(없으면 None).
+
+    ⚠️ 참/거짓만 돌려주면 출력에 «첫» 실패를 찍게 되고, 그게 귀속된 테스트가 아닐 때
+      읽는 사람이 「엉뚱한 게 잡았다」 로 오해한다 — 실제로 한 번 그랬다.
+      귀속된 줄을 돌려줘서 출력이 «무엇이 잡았는지» 를 말하게 한다.
+    """
+    for f in fails:
+        body = f[4:].strip()
+        for n in names:
+            if n and body.startswith(n[:24]):
+                return f
+    return None
+
+
 print("--- ① 손대지 않은 사본 (돌연변이 없이 통과해야 한다) ---")
 d = setup()
 code, fails, out = run_tests(d)
@@ -111,6 +161,8 @@ assert code == 0, out[-500:]
 print()
 print("--- ② 불변식마다 코드를 틀어 본다 ---")
 caught, escaped, skipped = [], [], []
+misattributed, unowned = [], []
+OWNED = owned_checks(setup())
 for slug, desc, find, repl in MUTATIONS:
     d = setup()
     p = d / "reach.py"
@@ -121,16 +173,42 @@ for slug, desc, find, repl in MUTATIONS:
         continue
     io.open(p, "w", encoding="utf-8", newline="\n").write(s.replace(find, repl, 1))
     code, fails, out = run_tests(d)
-    if code != 0:
-        caught.append(slug)
-        first = fails[0][:72] if fails else "(예외로 죽음)"
-        print(f"  [O] {slug:<30} 잡힘 {len(fails)}건 · {first}")
-    else:
+    names = OWNED.get(slug, set())
+    if code == 0:
         escaped.append((slug, desc))
         print(f"  [X] {slug:<30} 🔴 «안 잡힘» — {desc}")
+    elif not names:
+        unowned.append((slug, desc))
+        print(f"  [?] {slug:<30} ⚠️ 잡혔지만 이 불변식에 딸린 테스트를 못 찾음 "
+              f"(# INV({slug}) 표시 확인)")
+    elif attributed(fails, names):
+        caught.append(slug)
+        hit = attributed(fails, names)
+        extra = f" (+{len(fails) - 1}건 더)" if len(fails) > 1 else ""
+        print(f"  [O] {slug:<30} 잡힘 · {hit[:62]}{extra}")
+    else:
+        misattributed.append((slug, desc, fails[:2]))
+        print(f"  [~] {slug:<30} 🔴 «엉뚱한 테스트가» 잡음 — 이 불변식은 재지 못했다")
+        for f in fails[:2]:
+            print(f"        {f[:88]}")
 
 print()
-print(f"잡힘 {len(caught)} · 안 잡힘 {len(escaped)} · 못 넣음 {len(skipped)}")
+print(f"잡힘 {len(caught)} · 안 잡힘 {len(escaped)} · 귀속 불명 "
+      f"{len(misattributed)} · 묶음 없음 {len(unowned)} · 못 넣음 {len(skipped)}")
+if misattributed:
+    print()
+    print("🔴 «엉뚱한 테스트가» 잡은 것 — 종료코드는 1 이지만 그 불변식은 재지 "
+          "못했다. 돌연변이가 다른 가드를 먼저 건드리는 것이다(DB 가 찾은 모양):")
+    for slug, desc, fs in misattributed:
+        print(f"     {slug}: {desc}")
+        print(f"        → 돌연변이를 «그 불변식만» 건드리게 좁히거나, 그 불변식의 "
+              f"테스트를 더 날카롭게 하십시오.")
+if unowned:
+    print()
+    print("⚠️ 잡혔지만 어느 테스트가 잡았는지 귀속할 수 없는 것 "
+          "(# INV(slug) 표시가 ck 위에 없음):")
+    for slug, desc in unowned:
+        print(f"     {slug}: {desc}")
 if escaped:
     print()
     print("🔴 안 잡힌 것 — 둘 중 하나다. 먼저 ②를 확인한다:")
@@ -148,7 +226,7 @@ if skipped:
 #   「상태코드를 찍기만 하던」 라이브 검증과 같은 자리다.
 # ⚠️ 앵커를 못 찾은 것도 실패로 본다. 돌연변이가 «안 들어갔으면» 그 불변식을
 #   재지 못한 것이고, 「모른다」 를 「통과」 로 세면 이 파일이 아무 일도 안 한다.
-if escaped or skipped or not caught:
+if escaped or skipped or misattributed or unowned or not caught:
     sys.exit(1)
 print()
 print(f"✅ 돌연변이 {len(caught)}개 전부 테스트가 잡습니다 — 검사에 이가 있습니다.")

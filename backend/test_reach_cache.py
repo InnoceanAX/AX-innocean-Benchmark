@@ -305,6 +305,10 @@ bad_sets = [
     ("한 칸뿐", [{"age": "25-34", "gender": "Male"}], "두 칸 이상"),
 ]
 # INV(synth-exclusive-only)
+# ⚠️ 아래 루프도 f-문자열 이름이라 귀속이 안 된다. 리터럴로 하나 단정한다.
+ck("축이 겹치는 선택은 합성을 거절한다",
+   reach.synth_curve([{"age": "25-34"}, {"gender": "Male"}],
+                     media="넷플릭스").get("state") == "not_synthesizable")
 for nm, cs, kw in bad_sets:
     r = reach.synth_curve(cs, media="넷플릭스")
     ck(f"{nm} → 거절", not r.get("found") and r.get("state") == "not_synthesizable",
@@ -389,7 +393,6 @@ ck(f"45일 끝점이 두 앵커의 중간({MID:,.0f})",
    i45 and abs(i45["max_reach"] - MID) <= 2, (i45 or {}).get("max_reach"))
 ck("보간 경고가 붙는다", i45 and any("보간한 값" in w for w in i45["warnings"]))
 # ⚠️ 앵커 밖으로 늘리지 않는다 — 90일 밖은 재지 않았고 체감하므로 과대해진다
-# INV(no-extrapolation)
 ck("120일은 보간하지 않는다(None)", reach._interp_duration(
     "KR", 120, "none", "넷플릭스", 10 ** 15, 8) is None)
 ck("20일은 보간하지 않는다(None)", reach._interp_duration(
@@ -443,6 +446,10 @@ print("\n=== 보간 헬퍼 ===")
 pp = [(1000.0, 100.0), (2000.0, 180.0), (4000.0, 300.0)]
 ck("구간 안은 선형", abs(reach._interp_reach(pp, 1500.0) - 140.0) < 1e-6)
 ck("왼쪽 밖은 첫 값", reach._interp_reach(pp, 10.0) == 100.0)
+# INV(no-extrapolation)
+# ⚠️ 표시를 「120일은 보간하지 않는다」 위에 달아 뒀었다. 그건 «앵커 밖
+#   기간» 을 거절하는 것이고, 곡선 끝 밖 외삽을 막는 성질은 여기다.
+#   돌연변이가 이 테스트를 깨뜨리는데 귀속이 엉뚱한 데로 갔다.
 ck("오른쪽 밖은 끝 값(외삽 안 함)", reach._interp_reach(pp, 10 ** 9) == 300.0)
 ck("빈 곡선은 0", reach._interp_reach([], 100.0) == 0.0)
 
@@ -469,10 +476,22 @@ CASES = (
      "⚠️ 시도가 많아도 뷰가 멈췄다고 안 하면 안 멈춘 것이다"),
 )
 # INV(fetch-failed-two-answers)
+# ⚠️ 아래 루프는 ck 이름이 f-문자열이라 «어느 불변식이 잡았는지» 귀속이 안 된다.
+#   리터럴 이름으로 하나 단정해 둔다 — 귀속이 되는 검사가 적어도 하나는 있어야 한다.
+ck("캡 도달과 재시도 남음을 다른 상태로 판정한다",
+   reach.fetch_failed_state({"retry_exhausted": True, "attempts": 4})[0]
+   != reach.fetch_failed_state({"retry_exhausted": False, "attempts": 1})[0])
 for row, want, why in CASES:
     got, n = reach.fetch_failed_state(row)
     ck(f"{row} → {want} ({why})", got == want, got)
 # INV(no-retry-cap-mirror)
+# 🔴 「hasattr 로 상수가 없는지」 만 보면 «숫자를 인라인으로 베낀» 경우를 못 잡는다.
+#   뷰 판정과 시도 횟수가 «어긋나는» 자료를 대면 베낀 쪽만 걸린다 —
+#   retry_exhausted=False 인데 attempts 가 캡을 넘는 경우다.
+ck("뷰가 아니라고 하면 시도 횟수가 캡을 넘어도 멈춤이 아니다",
+   reach.fetch_failed_state({"retry_exhausted": False, "attempts": 9})[0]
+   == "fetch_failed",
+   reach.fetch_failed_state({"retry_exhausted": False, "attempts": 9}))
 ck("거울 상수를 들고 있지 않다", not hasattr(reach, "RETRY_CAP_MIRROR"))
 ck("캡 도달은 «기다려도 안 생긴다» 고 적는다",
    "기다려도 생기지 않습니다"
