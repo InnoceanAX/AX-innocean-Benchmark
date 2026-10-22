@@ -1712,6 +1712,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
         <div class="pvbox" style="margin-top:16px">
           <h4>넷플릭스 타게팅 조건</h4>
           <div id="rsNfx"></div>
+          <div id="rsPick" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--bdr)"></div>
         </div>
       </div>
       <div>
@@ -2141,6 +2142,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
         '넷플릭스 도달 API 는 호출 한도가 있어 야간에 미리 계산한 값만 조회합니다 — '+
         '준비되면 위 «제공자 상태» 에서 켜집니다.</p><div id="rsNfxSt"></div>';
       rsCurveStatus(mk||'KR');
+      rsPickInit(d.dimensions);
     }).catch(function(){
       box.innerHTML='<p style="font-size:12px;color:var(--tm);margin:0">사전을 읽을 수 없습니다.</p>';
     });
@@ -2152,6 +2154,56 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   // «사용 불가 조건»(403, 조건을 바꿔야 함) 과 «아직 조회 전»(기다리면 생김) 은
   // 플래너가 취할 행동이 다르다. 한 칸에 섞으면 둘 다 «안 됨» 으로 읽힌다.
   // 진행률의 분모는 격자 전체다 — 채워진 것만 세면 늘 100% 가 된다.
+  // 넷플릭스 조합 선택 — 1차 격자(연령×성별×기기)에 맞춰 세 축만 둔다.
+  // 🔴 «격자에 없음» · «아직 안 부름» · «벤더가 거절» 을 다른 말로 보여준다.
+  //   한 칸에 넣으면 플래너가 «안 되는 것» 과 «아직인 것» 을 구분 못 한다 —
+  //   전자는 조건을 바꿔야 하고 후자는 기다리면 생긴다.
+  var NFX_PICK={age:'',gender:'',device:''};
+  function rsPickInit(dims){
+    var box=el('rsPick'); if(!box||!dims) return;
+    var AX=[['age','Age','연령'],['gender','Gender','성별'],['device','Device','기기']];
+    var html='<div style="font-size:11px;font-weight:700;margin-bottom:6px">조합 선택</div>';
+    AX.forEach(function(a){
+      var vals=dims[a[1]]||[];
+      html+='<div class="fcell" style="margin-bottom:6px"><label>'+a[2]+'</label>'+
+        '<select data-nfx="'+a[0]+'"><option value="">전체</option>'+
+        vals.map(function(v){ return '<option value="'+esc(v.id)+'">'+esc(v.name)+'</option>'; }).join('')+
+        '</select></div>';
+    });
+    html+='<div id="rsPickOut" style="font-size:11px;margin-top:6px"></div>';
+    box.innerHTML=html;
+    Array.prototype.forEach.call(box.querySelectorAll('[data-nfx]'), function(sel){
+      sel.addEventListener('change', function(){
+        NFX_PICK[sel.getAttribute('data-nfx')]=sel.value; rsPickLoad();
+      });
+    });
+    rsPickLoad();
+  }
+  function rsPickLoad(){
+    var out=el('rsPickOut'); if(!out) return;
+    var q=qs({market:(el('rsMarket')&&el('rsMarket').value)||'KR',
+              flight_days:(el('rsDays')&&el('rsDays').value)||30,
+              media:el('rsMedia')?el('rsMedia').value:'',
+              age:NFX_PICK.age, gender:NFX_PICK.gender, device:NFX_PICK.device});
+    out.innerHTML='<span style="color:var(--tm)">조회 중…</span>';
+    j(API+'/reach/lookup?'+q).then(function(d){
+      if(d.found){
+        var last=(d.points||[])[d.points.length-1]||{};
+        out.innerHTML='<b style="color:#1F7A3D">곡선 있음</b> — 최대 도달 '+
+          (d.max_reach||0).toLocaleString()+'명'+
+          (last.cost?(' · 예산 '+(last.cost/100000000).toFixed(1)+'억 기준'):'')+
+          ((d.warnings||[]).length?('<br><span style="color:#B45309">'+
+            esc(d.warnings[0])+'</span>'):'');
+        return;
+      }
+      var wait=(d.state==='not_in_grid'||d.state==='not_requested'||
+                d.state==='fetch_failed'||d.state==='no_cache');
+      out.innerHTML='<b style="color:'+(wait?'#B45309':'#9CA3AF')+'">'+
+        (wait?'계산 대기':'사용 불가')+'</b> — '+esc(d.note||'')+
+        (wait?'<br><span style="color:var(--tm)">이 조합이 필요하시면 알려주십시오 — '+
+              '다음 야간 목록에 넣으면 그 다음 날부터 바로 나옵니다.</span>':'');
+    }).catch(function(){ out.innerHTML=''; });
+  }
   function rsCurveStatus(mk){
     var box=el('rsNfxSt'); if(!box) return;
     j(API+'/reach/curve_status?market='+encodeURIComponent(mk||'KR')).then(function(d){
@@ -2290,7 +2342,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
         options:{responsive:true,maintainAspectRatio:false,
           scales:{y:{beginAtZero:true,ticks:{callback:function(v){
                     return usePct?(v+'%'):(v>=10000?(v/10000).toFixed(0)+'만':v);}},
-                  title:{display:true,text:usePct?'Reach 1+ (%)':'Reach 1+ (명)'}},
+                  title:{display:true,text:usePct?'Reach 1+ (%, 프로필 기준)':'Reach 1+ (프로필)'}},
                   x:{title:{display:true,text:'예산'}}},
           plugins:{legend:{display:true,position:'bottom',labels:{boxWidth:12,font:{size:11}}}}}});
       el('rsCmpWhat').innerHTML='<div class="note"><b>'+esc(d.read_me)+'</b></div>'+
@@ -2302,8 +2354,13 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
           // 🔴 vendor_api 와 assumed 를 같은 칸에 쓰면 화면에서 신뢰도가 같아 보인다
           var pop=(x.cache&&x.cache.population)||null, pd='—';
           if(pop){
+            // 🔴 단위가 «사람» 이 아니라 «프로필» 이다(넷플릭스 스펙). 안 적으면 사람 비율로 읽는다.
+            //   그리고 «곡선의 마지막 점» 은 모집단이 아니다 — 그 지점에서도 도달이 늘고 있다.
+            var src = pop.is_vendor ? '<b>(벤더 제공)</b>'
+                    : pop.is_curve_last ? '<span style="color:#B45309">(곡선 마지막 점 · 모집단 아님)</span>'
+                    : '<span style="color:#B45309">(가정)</span>';
             pd=(pop.lower/10000).toFixed(0)+'만~'+(pop.upper/10000).toFixed(0)+'만 '+
-               (pop.is_vendor?'<b>(벤더 제공)</b>':'<span style="color:#B45309">(가정)</span>');
+               (pop.unit||'')+' '+src;
           }
           return '<tr><td style="color:'+(CMP_COLOR[x.name]||'#6B7280')+';font-weight:700">'+
             esc(x.label)+'</td><td>'+esc(KIND_LABEL[x.kind]||x.kind)+'</td><td>'+pd+'</td><td>'+
@@ -2352,14 +2409,14 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
         if(rsChart) rsChart.destroy();
         rsChart=new Chart(el('rsChart'),{type:'line',data:{
           labels:pts.map(function(p){return (p.cost/100000000).toFixed(0)+'억';}),
-          datasets:[{label:hasPct?'Reach 1+ (%)':'Reach 1+ (명)',
+          datasets:[{label:hasPct?'Reach 1+ (%, 프로필 기준)':'Reach 1+ (프로필)',
             data:pts.map(function(p){return hasPct?p.reach_pct:p.reach;}),
             borderColor:getComputedStyle(document.documentElement).getPropertyValue('--ind').trim()||'#4F46E5',
             backgroundColor:'rgba(79,70,229,.08)',fill:true,tension:.3,pointRadius:3}]},
           options:{responsive:true,maintainAspectRatio:false,
             scales:{y:{beginAtZero:true,ticks:{callback:function(v){
                       return hasPct?(v+'%'):(v>=10000?(v/10000).toFixed(0)+'만':v);}},
-                    title:{display:true,text:hasPct?'Reach 1+ (%)':'Reach 1+ (명)'}},
+                    title:{display:true,text:hasPct?'Reach 1+ (%, 프로필 기준)':'Reach 1+ (프로필)'}},
                     x:{title:{display:true,text:'예산'}}},
             plugins:{legend:{display:false}}}});
       }

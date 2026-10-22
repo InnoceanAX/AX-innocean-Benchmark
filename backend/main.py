@@ -239,6 +239,25 @@ def reach_compare_providers(budget: float = 2_000_000_000, media: str = "",
                             status_code=500)
 
 
+@app.get("/api/v1/reach/lookup")
+def reach_lookup(market: str = "KR", flight_days: int = 30, media: str = "",
+                 age: str = "", gender: str = "", device: str = "",
+                 budget: float = 2_000_000_000, points: int = 20):
+    """고른 타게팅 조합의 곡선 조회 — 없으면 «왜 없는지» 를 답한다.
+
+    ⚠️ «격자에 없음» · «아직 안 부름» · «벤더가 거절» 은 서로 다른 상태다.
+       한 칸에 넣으면 플래너가 «안 되는 것» 과 «아직인 것» 을 구분하지 못한다.
+    """
+    try:
+        return JSONResponse(reach.lookup_curve(
+            market=market, flight_days=flight_days, media=media,
+            value_ids=[x for x in (age, gender, device) if x],
+            budget=budget, points=points))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"found": False, "state": "error", "note": str(e)},
+                            status_code=500)
+
+
 @app.get("/api/v1/reach/targeting")
 def reach_targeting(market: str = ""):
     """넷플릭스 도달 시뮬레이터의 선택 항목(연령·성별·기기·장르·관심사 등).

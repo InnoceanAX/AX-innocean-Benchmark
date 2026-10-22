@@ -1082,8 +1082,19 @@ def points_from_cache(rows, cpm, budget, points=20):
     #     전역으로 두면 뒤에 다시 부를 때 과거 도달률이 «조용히» 바뀐다.
     #   ⚠️ population_source 를 반드시 끌고 올라간다. vendor_api 와 assumed 를 한 칸에
     #     섞으면 화면에서 둘이 같은 신뢰도로 보인다.
+    # 🔴 «마지막 점» 을 모집단이라고 부르지 않는다 (DB 정정, 2026-10-22)
+    #   첫 호출의 도달 6,482,607 은 점근선이 아니라 «API 가 돌려준 마지막 점» 이다.
+    #   그 구간의 한계도달이 아직 3.4/천 이라 0 이 아니고, 멱 모형(b≈0.89)에는
+    #   점근선 자체가 없다. 분모로 쓰면 도달률이 약 +0.3% 과대해진다.
+    #   작지만, «모집단» 이라고 이름 붙이면 넷플릭스가 실제 가입자 수를 주는 순간
+    #   둘이 어긋나고 다음 사람이 결함으로 읽는다.
     pop_lo = row.get("population_lower")
     pop_hi = row.get("population_upper")
+    if pop_lo is None and pop_hi is None:
+        clr = row.get("curve_last_reach")
+        if clr:
+            pop_lo = pop_hi = clr
+            row = dict(row, population_source="derived_from_curve")
     pop_src = (row.get("population_source") or "").strip() or None
     pop = None
     if pop_lo or pop_hi:
@@ -1098,14 +1109,24 @@ def points_from_cache(rows, cpm, budget, points=20):
                 p["reach_pct_upper"] = round(p["reach"] / lo * 100, 2)
             pop = {"lower": round(lo), "upper": round(hi), "source": pop_src or "unknown",
                    "is_vendor": pop_src == "vendor_api",
+                   "unit": "프로필",   # 사람·가구가 아니다 (넷플릭스 스펙)
+                   "is_curve_last": pop_src == "derived_from_curve",
                    "spread_pct": round((hi - lo) / ((hi + lo) / 2) * 100, 1)}
-            if pop_src != "vendor_api":
+            # 🔴 단위가 «사람» 이 아니라 «프로필» 이다 (넷플릭스 스펙 명시).
+            #   가구도 사람도 아니다. «도달률 %» 로만 띄우면 보는 사람은 사람 비율로 읽는다.
+            if pop_src == "derived_from_curve":
+                warn.append(f"도달률의 분모는 «곡선의 마지막 점»({round(hi):,} 프로필)입니다 "
+                            "— 모집단이 아닙니다. 그 지점에서도 도달이 아직 늘고 있어 "
+                            "실제 비율은 이보다 조금 낮습니다. 단위는 «프로필» 이고 "
+                            "사람 수가 아닙니다.")
+            elif pop_src != "vendor_api":
                 warn.append(f"도달률의 분모가 «가정» 입니다(출처 {pop_src or '미기록'}) — "
-                            "벤더가 준 모집단이 아닙니다. 비율보다 절대 도달로 읽으십시오.")
+                            "벤더가 준 모집단이 아닙니다. 비율보다 절대 도달로 읽으십시오. "
+                            "단위는 «프로필» 이고 사람 수가 아닙니다.")
             else:
-                warn.append(f"도달률은 범위입니다 — 모집단 {round(lo):,}~{round(hi):,}명"
-                            f"(벤더 제공, 폭 ±{pop['spread_pct']/2:.0f}%). "
-                            "단일 %가 아니라 띠로 읽으십시오.")
+                warn.append(f"도달률은 범위입니다 — 모집단 {round(lo):,}~{round(hi):,} "
+                            f"«프로필»(벤더 제공, 폭 ±{pop['spread_pct']/2:.0f}%). "
+                            "단일 %가 아니라 띠로 읽으십시오. 프로필은 사람 수가 아닙니다.")
     return {"points": out, "warnings": warn, "scope": scope,
             "max_imp": round(max_imp), "max_reach": round(pairs[-1][1]),
             "n_cache_points": len(pairs), "population": pop}, None
@@ -1290,6 +1311,65 @@ def markets():
     return {"markets": _markets_cached(datetime.date.today().isoformat()),
             "min_campaigns": FIT_MIN_CAMPAIGNS,
             "note": "표본이 적은 시장은 적합이 흔들려 목록에서 제외했습니다."}
+
+
+def lookup_curve(market="KR", flight_days=30, value_ids=None, media="",
+                 budget=2_000_000_000, points=20):
+    """고른 타게팅 조합의 곡선을 캐시에서 찾는다. 없으면 «왜 없는지» 를 돌려준다.
+
+    ★ 조합을 «라벨» 이 아니라 «타게팅 값 ID 배열» 로 맞춘다.
+      라벨 형식(문자열 조합 규칙)은 DB 가 정하는 것이고, 내가 추측하면 한쪽이 바꿀 때
+      조용히 안 맞는다. ID 배열은 양쪽이 같은 것을 가리킨다.
+
+    ⚠️ 못 찾은 것과 «계산 실패» 는 다르다.
+      미등록   격자에 이 조합이 없다 → 다음 야간 목록에 넣으면 생긴다
+      미조회   격자엔 있는데 아직 안 불렀다 → 기다리면 생긴다(일 50회라 며칠 걸린다)
+      불가     벤더가 거절한 조건이다 → 기다려도 안 생긴다. 조건을 바꿔야 한다
+      이 셋을 한 칸에 넣으면 플래너가 «안 되는 것» 과 «아직인 것» 을 구분 못 한다.
+    """
+    ids = [x for x in (value_ids or []) if x]
+    if not _view_exists(CURVE_VIEW):
+        return {"found": False, "state": "no_cache",
+                "note": ("도달 곡선 캐시가 아직 만들어지지 않았습니다. "
+                         "야간 선계산이 시작되면 조합별로 채워집니다.")}
+    c = _client()
+    where = ["country = @mk", "flight_days = @fd"]
+    prm = [bigquery.ScalarQueryParameter("mk", "STRING", (market or "KR").upper()),
+           bigquery.ScalarQueryParameter("fd", "INT64", int(flight_days or 30))]
+    if ids:
+        # 고른 값이 «전부» 들어 있고, 개수도 같은 행 (부분 일치를 같은 조합으로 보지 않는다)
+        where.append("ARRAY_LENGTH(targeting_value_ids) = @n")
+        prm.append(bigquery.ScalarQueryParameter("n", "INT64", len(ids)))
+        for i, v in enumerate(ids):
+            where.append(f"@v{i} IN UNNEST(targeting_value_ids)")
+            prm.append(bigquery.ScalarQueryParameter(f"v{i}", "STRING", v))
+    else:
+        where.append("ARRAY_LENGTH(IFNULL(targeting_value_ids, [])) = 0")
+    try:
+        rows = [dict(r) for r in c.query(
+            f"SELECT * FROM {CURVE_VIEW} WHERE {' AND '.join(where)} LIMIT 5",
+            job_config=bigquery.QueryJobConfig(query_parameters=prm)).result()]
+    except Exception as e:
+        return {"found": False, "state": "error", "note": f"조회 실패: {str(e)[:120]}"}
+
+    if not rows:
+        return {"found": False, "state": "not_in_grid",
+                "note": ("이 조합은 아직 «계산 대기» 입니다 — 미리 계산된 목록에 없습니다. "
+                         "호출 한도가 일 50회라 자주 쓰는 조합부터 채웁니다. "
+                         "이 조합이 필요하시면 다음 야간 목록에 넣어 드립니다.")}
+    import datetime
+    cpm, cpm_src = _cpm(media or "", market or "", datetime.date.today().isoformat())
+    parsed, why = points_from_cache(rows, cpm, budget, points)
+    if parsed is None:
+        st = (rows[0].get("curve_status") or "not_requested")
+        meta = CURVE_STATUS.get(st, {})
+        return {"found": False, "state": st, "note": why,
+                "can_wait": st in ("not_requested", "fetch_failed"),
+                "label": meta.get("label", st)}
+    return {"found": True, "state": "ok", "points": parsed["points"],
+            "warnings": parsed["warnings"], "population": parsed.get("population"),
+            "max_reach": parsed["max_reach"],
+            "cpm": round(cpm, 2), "cpm_source": cpm_src}
 
 
 def compare_curves(budget=2_000_000_000, media="", market="KR", universe=None,
