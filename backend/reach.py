@@ -978,14 +978,45 @@ def _vendor_curve_counts(view, market=""):
 # 🔑 «질의» 와 «해석» 을 나눈다. 해석기는 순수 함수라 실제 데이터가 오기 전에
 #   가짜 행으로 검증할 수 있다. 안 나누면 「구현했다」가 검증되지 않은 주장이 된다.
 #   (DB 와 서로 열 번 겪은 자리 — 못 쟀으면 못 쟀다고 적는다)
+# 🔑 광고주는 v1 모델의 «입력이 아니다» — DB 실측 (2026-10-22, 실험 E1)
+#   INNOCEAN/TEST · HYUNDAI MOTOR/IONIQ · KIA/EV6 세 값으로 호출했더니
+#   끝점만이 아니라 86개 점이 «전부» 동일했다(도달 6,482,607 · b=0.8903).
+#   advertiser·brand 는 모델 입력이 아니라 감사용 메타다.
+#
+#   🔴 그래서 전에 여기 있던 «대행사 공용 계정이라 분모가 다른 집단» 경고를 지웠다.
+#     그 경고는 측정하지 않은 것을 단정했고, 방향도 틀렸다 — 계정이 곡선에 안 들어가므로
+#     계정을 공유해도 곡선이 섞이지 않는다. 틀린 경고는 멀쩡한 숫자를 못 쓰게 만든다.
+#
+#   ⚠️ 측정한 것은 «세 값에서 불변이었다» 이고 «어떤 이름에도 불변» 이 아니다.
+#     그리고 v1 한정이다 — v2 는 /v2/ad-accounts/{id}/… 로 계정이 경로에 들어가므로
+#     그때 다시 재야 한다. 그 전에 v2 로 옮기면 이 전제가 조용히 깨진다.
+CURVE_SCOPE_V1_NOTE = ("ℹ️ 이 곡선은 광고 계정과 무관합니다 — 넷플릭스 v1 은 광고주·브랜드를 "
+                       "예측 입력으로 쓰지 않습니다(서로 다른 세 광고주로 호출해 86개 점이 "
+                       "모두 같았습니다). 전사 공용으로 읽으셔도 됩니다.")
 CURVE_SCOPE_NOTE = {
     "advertiser": "",
-    "agency_shared": ("⚠️ 이 곡선은 «대행사 공용 계정» 기준입니다. 미등록 광고주 여러 곳이 "
-                      "한 계정을 쓰므로 특정 광고주의 도달로 읽지 마십시오 — "
-                      "분모가 다른 집단입니다."),
-    "unknown": ("⚠️ 이 곡선이 어느 광고 계정 기준인지 기록되지 않았습니다. "
-                "광고주별 플래닝 근거로 쓰기 전에 출처를 확인하십시오."),
+    "agency_shared": "",
+    "unknown": "",
 }
+
+
+def _interp_reach(pairs, imps):
+    """원곡선에서 노출 imps 의 도달. 구간 선형 보간 — 양 끝은 끝값으로 고정한다.
+
+    ⚠️ 바깥으로 «늘려 그리지» 않는다. 끝점을 넘는 노출은 끝점 도달을 돌려주고,
+      넘었다는 사실은 부르는 쪽이 max_imp 로 판단한다 — 여기서 조용히 외삽하면
+      화면에는 «답» 으로 보이고 그게 추정인지 알 수 없다.
+    """
+    if not pairs:
+        return 0.0
+    if imps <= pairs[0][0]:
+        return pairs[0][1]
+    for j in range(1, len(pairs)):
+        x0, y0 = pairs[j - 1]
+        x1, y1 = pairs[j]
+        if imps <= x1:
+            return y0 + (y1 - y0) * ((imps - x0) / (x1 - x0)) if x1 > x0 else y1
+    return pairs[-1][1]
 
 
 def points_from_cache(rows, cpm, budget, points=20):
@@ -1024,6 +1055,8 @@ def points_from_cache(rows, cpm, budget, points=20):
     scope = (row.get("ad_account_scope") or "unknown")
     if CURVE_SCOPE_NOTE.get(scope):
         warn.append(CURVE_SCOPE_NOTE[scope])
+    else:
+        warn.append(CURVE_SCOPE_V1_NOTE)
 
     pairs = []
     for x in arr:
@@ -1129,6 +1162,10 @@ def points_from_cache(rows, cpm, budget, points=20):
                             "단일 %가 아니라 띠로 읽으십시오. 프로필은 사람 수가 아닙니다.")
     return {"points": out, "warnings": warn, "scope": scope,
             "max_imp": round(max_imp), "max_reach": round(pairs[-1][1]),
+            # 🔑 원곡선(노출,도달) 쌍을 그대로 올린다 — 셀 합성과 기간 보간은
+            #   «예산축으로 자른 점» 이 아니라 원점에서 보간해야 한다. 자른 점에서
+            #   다시 보간하면 보간을 두 번 한 오차가 쌓이고, 그 오차는 안 보인다.
+            "pairs": pairs,
             "n_cache_points": len(pairs), "population": pop}, None
 
 
@@ -1343,6 +1380,337 @@ def targeting_key(age_name="", gender_name=""):
     return "|".join(parts) if parts else "none", [x for x in (a, g) if x]
 
 
+# ───────────────────────── 기간 앵커 · 셀 합성 ─────────────────────────
+# DB 실측 2026-10-22 (QA/40_DB_NETFLIX_REACH_P1_MEASURED.md) 에서 나온 것을
+# 여기에 그대로 옮긴다. 「가정」 이 아니라 「쟀다」 인 것만 쓴다.
+DUR_ANCHORS = (30, 60, 90)   # 실측한 기간. 이 밖은 외삽이므로 답하지 않는다.
+
+# 🔑 셀 합성 규칙 — DB 가 명시한 그대로다. 다른 규칙을 쓰면 숫자가 갈린다.
+#     총 노출 I 를 셀들의 «끝점 노출» 비율로 배분 → 각 곡선에서 보간 → 도달을 더한다
+#   실측 대조: 합본 호출 1,920,479  vs  합성(단순합) 1,921,121  → 차이 -0.033%
+#   곡선 중간에서도 쟀고 -0.06% ~ -0.17% 였다.
+#
+# 🔴 방향: «합성이 실제보다 높다». 오차가 전부 음수인데, 그 음수는
+#   (합본 - 합성) 이다 — 즉 실제가 합성보다 작다. 체계적이고 잡음이 아니다.
+#   DB 보고서는 이걸 「보수적」 이라고 적었는데 라벨이 뒤집혔다. 보수적이라면
+#   합성 ≤ 실제여야 한다.
+#   ⚠️ 그리고 이쪽이 «위험한» 방향이다 — 도달을 높게 보여 주면 플래너가
+#     예산을 적게 잡는다. 0.2% 는 작지만, 화면에 「낮게 나온다」 고 적으면
+#     보는 사람이 여유를 반대쪽으로 둔다. 그래서 방향을 그대로 적는다.
+SYNTH_ERR_PCT = 0.2
+# ⚠️ 노출 정의역은 단순합이 «아니다» — 실측 1건에서 합본 13,170,000 vs 단순합
+#   13,657,000 으로 3.57% 작았다. 단순합 끝까지 그리면 벤더가 답하지 않을 구간을
+#   답으로 보여 준다. 1건뿐이므로 상수로 깎지 않고 «경고» 로 남긴다.
+SYNTH_DOMAIN_SHRINK_PCT = 3.57
+
+# 🔴 데모 칸을 «전부» 더해도 「타게팅 없음」이 되지 않는다 — DB 실측 (2026-10-22, §8)
+#     단일 12칸 합        도달 5,808,511   노출끝 40,746,000
+#     실측 전연령·전성별    도달 6,482,607   노출끝 47,047,000   → 89.6%
+#
+#   🔵 합성 자체는 멀쩡하다. 같은 날 배타적 2칸 합성은 100.033% 였다
+#     (25-34M + 35-49M = 1,921,121 vs 합본 1,920,479). 두 양은 다른 것이다:
+#       «이 데모 칸들의 합집합»  → 합성이 0.2% 이내로 맞는다
+#       «모든 데모 칸의 합»      → 타게팅 없음의 89.6% 다
+#     그래서 전부 고른 경우에만 따로 적는다. 0.2% 경고를 그대로 쓰면 50배 틀린다.
+#
+#   측정한 것: 어떤 연령×성별 칸에도 안 드는 프로필이 ~10.4%(674,096) 있다.
+#   ⚠️ 왜 그런지는 모른다. 가설 둘 다 «안 쟀다»:
+#       ① 연령·성별 미상(가구 공유 프로필은 신고 정보가 없을 수 있다)
+#       ② 18세 미만 — AGE_18_24 가 최저 구간이고 «프로필» 에는 키즈가 포함된다
+#     ①이면 「닿지만 타게팅 불가」, ②면 「광고 대상이 아닐 수 있음」이라 해석이
+#     갈린다. 미데전 문의 중이므로 화면에 «모른다» 를 그대로 적는다.
+SYNTH_FULLCOVER_PCT = 89.6
+SYNTH_FULLCOVER_GAP_PCT = 10.4
+
+
+def _curve_rows(market, flight_days, key, limit=5):
+    """격자에서 한 (국가·기간·조합) 의 행을 읽는다. ok 를 먼저 올린다."""
+    c = _client()
+    prm = [bigquery.ScalarQueryParameter("mk", "STRING", (market or "KR").upper()),
+           bigquery.ScalarQueryParameter("fd", "INT64", int(flight_days or 30)),
+           bigquery.ScalarQueryParameter("tk", "STRING", key)]
+    return [dict(r) for r in c.query(
+        f"SELECT * FROM {CURVE_VIEW} "
+        f"WHERE country=@mk AND flight_days=@fd AND IFNULL(targeting_key,'none')=@tk "
+        f"ORDER BY IF(IFNULL(curve_status,'')='ok',0,1) LIMIT {int(limit)}",
+        job_config=bigquery.QueryJobConfig(query_parameters=prm)).result()]
+
+
+def _ok_pairs(market, flight_days, key):
+    """한 조합의 «원곡선» (노출,도달) 쌍. 쓸 수 없으면 (None, 이유).
+
+    points_from_cache 를 그대로 거친다 — 상태 판정·단조성 검사를 두 번 쓰지 않기
+    위해서다. 여기서 따로 구현하면 한쪽만 고쳐지고 두 경로가 갈린다.
+    """
+    rows = _curve_rows(market, flight_days, key)
+    if not rows:
+        return None, "격자에 없습니다"
+    parsed, why = points_from_cache(rows, 1000.0, 10 ** 18, 2)
+    if parsed is None:
+        return None, why
+    return (parsed["pairs"], rows[0]), None
+
+
+def _slice_synthetic(pairs, src_row, cpm, budget, points, extra_warn):
+    """합성·보간으로 만든 원곡선을 예산축에 올린다.
+
+    points_from_cache 를 다시 태운다 — 예산 환산·단조성·모집단 밴드·«프로필» 표기가
+    전부 거기 있다. 여기서 복사하면 한쪽만 고쳐질 자리를 하나 더 만드는 셈이다.
+    """
+    arr = [{"impression": float(x), "reach": float(y)} for x, y in pairs]
+    row = dict(src_row or {})
+    row.update({"curve_status": "ok", "impression_reach": arr, "points": len(arr),
+                "curve_last_reach": pairs[-1][1],
+                "population_lower": None, "population_upper": None,
+                "population_source": None})
+    parsed, why = points_from_cache([row], cpm, budget, points)
+    if parsed is None:
+        return None, why
+    parsed["warnings"] = list(extra_warn) + list(parsed.get("warnings") or [])
+    return parsed, None
+
+
+def _interp_duration(market, flight_days, key, media, budget, points):
+    """격자에 없는 기간을 «실측 앵커 사이» 에서만 보간한다. 밖이면 None.
+
+    ⚠️ 앵커 바깥으로 늘리지 않는다. 90일 밖은 재지 않았고, 도달 증가가 체감하므로
+      바깥으로 직선을 뻗으면 과대해진다 — 과대한 도달은 예산을 과소하게 만든다.
+    """
+    fd = int(flight_days or 30)
+    lo = hi = None
+    for i in range(len(DUR_ANCHORS) - 1):
+        if DUR_ANCHORS[i] < fd < DUR_ANCHORS[i + 1]:
+            lo, hi = DUR_ANCHORS[i], DUR_ANCHORS[i + 1]
+            break
+    if lo is None:
+        return None
+    a, _ea = _ok_pairs(market, lo, key)
+    b, _eb = _ok_pairs(market, hi, key)
+    if a is None or b is None:
+        return None
+    pa, ra = a
+    pb, _rb = b
+    w = (fd - lo) / float(hi - lo)
+    # 양쪽 정의역의 «교집합» 안에서만 보간한다. 한쪽 끝을 넘으면 그쪽은 끝값으로
+    #   고정되는데(=_interp_reach), 그러면 기간 보간이 아니라 «한쪽 곡선» 이 된다.
+    cap = min(pa[-1][0], pb[-1][0])
+    grid = sorted({x for x, _y in pa} | {x for x, _y in pb})
+    grid = [x for x in grid if x <= cap] or [cap]
+    pts = [(x, _interp_reach(pa, x) * (1 - w) + _interp_reach(pb, x) * w) for x in grid]
+    import datetime
+    cpm, cpm_src = _cpm(media or "", market or "", datetime.date.today().isoformat())
+    warn = [(f"ℹ️ 집행 {fd}일은 직접 부른 값이 아니라 실측한 {lo}일·{hi}일 "
+             f"사이를 보간한 값입니다(가중치 {w:.2f}). 도달 증가가 기간에 따라 "
+             "체감하므로 이 보간은 실제보다 «조금 낮게» 나옵니다."),
+            (f"⚠️ 두 앵커의 노출 정의역이 겹치는 구간({round(cap):,} 노출)까지만 "
+             "그립니다 — 그 바깥은 한쪽 기간만의 곡선이 됩니다.")]
+    parsed, why = _slice_synthetic(pts, ra, cpm, budget, points, warn)
+    if parsed is None:
+        return {"found": False, "state": "error", "key": key, "note": why}
+    return {"found": True, "state": "ok", "key": key, "basis": "duration_interp",
+            "anchor_days": [lo, hi], "requested_days": fd,
+            "targeting_label": ra.get("targeting_label"),
+            "points": parsed["points"], "warnings": parsed["warnings"],
+            "population": parsed.get("population"), "max_reach": parsed["max_reach"],
+            "cpm": round(cpm, 2), "cpm_source": cpm_src}
+
+
+def _exclusive(cells):
+    """합성해도 되는 조합인가. 배타적이 아니면 거절한다.
+
+    🔴 겹치는 조합(「25-34 전성별」 × 「전연령 Male」)은 DB 가 «안 쟀다» 고 명시했다.
+      겹치면 랜덤중복 가정이 필요하고 그 가정은 검증되지 않았다. 검증 안 된 가정을
+      화면에서 숫자로 내면 보는 사람은 그게 가정인지 알 수 없다 — 그래서 막는다.
+
+    규칙: 고른 셀들이 «같은 축 집합» 을 제한하고 서로 달라야 한다.
+      age+gender 끼리  → 배타 (25-34 Male vs 35-49 Male)
+      age 끼리         → 배타 (25-34 전체 vs 35-49 전체)
+      age vs gender    → 겹친다 → 거절
+      «전체» 가 섞임    → 다른 모두를 품는다 → 거절
+    """
+    axes, seen = None, set()
+    for cl in cells:
+        a = (cl.get("age") or "").strip()
+        g = (cl.get("gender") or "").strip()
+        ax = frozenset([n for n, v in (("age", a), ("gender", g)) if v])
+        if not ax:
+            return False, ("«전체»(조건 없음) 가 들어 있어 합성할 수 없습니다 — "
+                           "다른 조건을 모두 품으므로 더하면 중복됩니다. "
+                           "전체는 격자에 직접 들어 있으니 그대로 조회하십시오.")
+        if axes is None:
+            axes = ax
+        elif axes != ax:
+            return False, ("서로 겹치는 조건을 고르셨습니다 — 연령만 지정한 칸과 "
+                           "성별만 지정한 칸은 같은 사람을 두 번 셉니다. "
+                           "같은 축을 쓰는 칸끼리만 더할 수 있습니다(검증된 범위입니다).")
+        if (a, g) in seen:
+            return False, "같은 조건이 두 번 들어 있습니다."
+        seen.add((a, g))
+    if len(seen) < 2:
+        return False, "합성은 두 칸 이상에서 의미가 있습니다 — 한 칸이면 그대로 조회하십시오."
+    return True, ""
+
+
+def _is_full_cover(cells):
+    """고른 칸들이 데모 격자를 «전부» 덮는가.
+
+    🔴 전부 덮으면 플래너는 그걸 「전체」 로 읽는다. 그런데 실측으로 89.6% 다.
+      그 10.4% 를 말없이 빼고 「전체」 라고 보여 주면 플래너는 전체 캠페인의
+      도달을 10% 낮게 잡는다 — 그러면 예산을 과다하게 쓴다.
+    """
+    # ⚠️ 축별로 «나온 값» 만 보면 안 된다. 11칸(65+ Female 만 뺀)도 연령 6종·성별
+    #   2종이 다 등장하므로 축별 검사는 «전체» 라고 답한다 — 실제로는 한 칸이 빈다.
+    #   그러면 89.6% 라는 실측 관계를 성립하지 않는 선택에 붙이게 된다.
+    #   그래서 «칸의 곱집합» 이 다 들어왔는지로 본다.
+    got = {((c.get("age") or "").strip(), (c.get("gender") or "").strip()) for c in cells}
+    has_a = any(a for a, _g in got)
+    has_g = any(g for _a, g in got)
+    if has_a and has_g:
+        need = {(a, g) for a in V1_AGE_ENUM for g in V1_GENDER_ENUM}
+    elif has_a:
+        need = {(a, "") for a in V1_AGE_ENUM}
+    elif has_g:
+        need = {("", g) for g in V1_GENDER_ENUM}
+    else:
+        return False
+    return got >= need
+
+
+def synth_curve(cells, market="KR", flight_days=30, media="",
+                budget=2_000_000_000, points=20):
+    """고른 «배타적» 셀들의 곡선을 더해 조합 곡선을 만든다 — 벤더 호출 없이.
+
+    ★ 왜 필요한가
+      넷플릭스 v1 은 호출 한도가 일 50회다. 연령 6 × 성별 2 = 12칸을 받아 두면
+      그 조합들은 더해서 답할 수 있다 — 조합마다 부르면 한도가 먼저 끝난다.
+      DB 실측(E2)으로 이 더하기가 0.2% 이내로 맞는 것을 확인했다.
+
+    ⚠️ 이것은 «벤더가 답한 값이 아니다». 그래서 basis='synthesis' 를 끌고 올라가고
+      화면이 그 사실을 적는다. 벤더 값과 합성 값이 한 칸에 같은 모양으로 섞이면
+      플래너는 둘을 같은 근거로 읽는다.
+    """
+    okx, why = _exclusive(cells or [])
+    if not okx:
+        return {"found": False, "state": "not_synthesizable", "note": why}
+    got, missing = [], []
+    for cl in (cells or []):
+        key, _enums = targeting_key(cl.get("age", ""), cl.get("gender", ""))
+        try:
+            res, err = _ok_pairs(market, flight_days, key)
+        except Exception as e:  # noqa: BLE001
+            return {"found": False, "state": "error", "note": f"조회 실패: {str(e)[:120]}"}
+        if res is None:
+            missing.append({"key": key, "why": err})
+        else:
+            got.append((key, res[0], res[1]))
+    # 🔴 한 칸이라도 없으면 «빼고 더하지» 않는다. 빼면 도달이 낮게 나오고, 낮게 나온
+    #   이유는 화면에 안 보인다 — 플래너는 그 조합이 약하다고 읽는다.
+    if missing:
+        return {"found": False, "state": "incomplete", "missing": missing,
+                "note": (f"고른 {len(cells)}칸 중 {len(missing)}칸이 격자에 없습니다 — "
+                         "없는 칸을 빼고 더하면 도달이 실제보다 낮게 나오므로 "
+                         "합성하지 않았습니다. 그 칸이 채워지면 바로 답할 수 있습니다.")}
+
+    ends = [pr[-1][0] for _k, pr, _r in got]
+    etot = sum(ends)
+    if etot <= 0:
+        return {"found": False, "state": "error", "note": "셀 곡선의 끝점 노출이 0입니다."}
+    # 총 노출 I 를 끝점 비율로 배분 → 각 곡선에서 보간 → 더한다 (DB 명시 규칙)
+    grid = set()
+    for (_k, pr, _r), e in zip(got, ends):
+        for x, _y in pr:
+            grid.add(min(x * etot / e, etot))
+    pts = []
+    for imp_tot in sorted(grid):
+        tot = 0.0
+        for (_k, pr, _r), e in zip(got, ends):
+            tot += _interp_reach(pr, imp_tot * e / etot)
+        pts.append((imp_tot, tot))
+    import datetime
+    cpm, cpm_src = _cpm(media or "", market or "", datetime.date.today().isoformat())
+    labels = [(r.get("targeting_label") or k) for k, _p, r in got]
+    warn = [(f"ℹ️ 이 곡선은 벤더 호출이 아니라 고른 {len(got)}칸의 곡선을 더한 "
+             f"«합성» 입니다. 실측 대조에서 차이는 {SYNTH_ERR_PCT}% 이내였고, "
+             "방향은 «합성이 실제보다 조금 높은» 쪽이었습니다 — 도달을 "
+             "넉넉하게 읽지 마십시오."),
+            (f"⚠️ 노출 정의역은 단순합({round(etot):,})까지 그렸습니다. 실측 1건에서는 "
+             f"합본의 정의역이 단순합보다 {SYNTH_DOMAIN_SHRINK_PCT}% 작았으므로, "
+             "끝 쪽 구간은 벤더가 답하지 않을 범위일 수 있습니다."),
+            "ℹ️ 더한 칸: " + " + ".join(labels)]
+    # 🔴 데모 격자를 전부 덮었으면 «전체» 가 아니라고 먼저 적는다 (DB 실측 §8)
+    full = _is_full_cover(cells or [])
+    if full:
+        warn.insert(0, (
+            f"🔴 데모 칸을 전부 고르셨지만 이것은 «타게팅 없음» 이 아닙니다 — "
+            f"실측에서 데모 12칸의 합은 타게팅 없는 전체의 {SYNTH_FULLCOVER_PCT}% 였습니다"
+            f"(차이 {SYNTH_FULLCOVER_GAP_PCT}%). 어떤 연령×성별 칸에도 안 드는 "
+            "프로필이 그만큼 있습니다. 전체 도달이 궁금하시면 조건을 모두 비우고 "
+            "«전체» 를 조회하십시오 — 그 값은 따로 받아 둡니다."))
+        warn.insert(1, (
+            "⚠️ 그 10.4% 가 «왜» 안 드는지는 아직 모릅니다. 연령·성별이 미상인 "
+            "프로필일 수도 있고(그러면 닿지만 타게팅은 못 합니다), 18세 미만일 "
+            "수도 있습니다(그러면 광고 대상이 아닐 수 있습니다). 넷플릭스에 "
+            "문의 중이며, 둘 중 무엇이냐에 따라 해석이 달라집니다."))
+    parsed, why2 = _slice_synthetic(pts, got[0][2], cpm, budget, points, warn)
+    if parsed is None:
+        return {"found": False, "state": "error", "note": why2}
+    return {"found": True, "state": "ok", "basis": "synthesis",
+            "full_cover": full,
+            "fullcover_pct_of_untargeted": SYNTH_FULLCOVER_PCT if full else None,
+            "cells": [k for k, _p, _r in got], "cell_labels": labels,
+            "points": parsed["points"], "warnings": parsed["warnings"],
+            "population": parsed.get("population"), "max_reach": parsed["max_reach"],
+            "max_imp_sum": round(etot),
+            "cpm": round(cpm, 2), "cpm_source": cpm_src}
+
+
+def synth_selfcheck(market="KR", flight_days=30):
+    """데모 커버리지 — 연령×성별 12칸의 합이 «타게팅 없음» 의 몇 %인가.
+
+    🔴 이것은 «검산» 이 아니다. 처음엔 「합이 전체와 맞으면 기준선 호출을 뺄 수
+      있다」는 검산으로 설계했는데, DB 가 돌려 보니 89.6% 였다 — 그 설계는 기각이다.
+      기준선은 기간마다 «따로» 받아야 한다. 합성으로 만들 수 없다.
+
+    그래서 이 함수의 일이 바뀌었다: 어긋남을 «결함» 으로 보고하는 것이 아니라
+    «데모 타게팅으로 닿을 수 없는 구간» 을 플래너에게 알려 주는 것이다.
+    12칸을 다 사도 전체의 89.6% 라는 사실이 곧 쓸 수 있는 정보다.
+
+    ⚠️ 합성이 틀린 것이 아니다 — 같은 날 배타적 2칸 합성은 100.033% 였다.
+      「모든 데모 칸의 합」과 「타게팅 없음」이 다른 양인 것이다.
+    """
+    cells = [{"age": a, "gender": g} for a in V1_AGE_ENUM for g in V1_GENDER_ENUM]
+    base, err = None, None
+    try:
+        res, err = _ok_pairs(market, flight_days, "none")
+        if res is not None:
+            base = res[0][-1][1]
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "note": f"조회 실패: {str(e)[:120]}"}
+    syn = synth_curve(cells, market=market, flight_days=flight_days,
+                      media="넷플릭스", budget=10 ** 15, points=2)
+    if not syn.get("found"):
+        return {"ok": False, "state": syn.get("state"), "note": syn.get("note"),
+                "missing": syn.get("missing"), "cells_needed": len(cells)}
+    if base is None:
+        return {"ok": False, "note": f"«전체» 곡선이 아직 없습니다({err}) — 비교 대상이 없습니다.",
+                "synth_reach": syn.get("max_reach")}
+    syn_r = float(syn.get("max_reach") or 0)
+    cov = syn_r / base * 100 if base else None
+    gap = base - syn_r
+    return {"ok": True, "measured_all": round(base), "synth_cells": round(syn_r),
+            "coverage_pct": round(cov, 1) if cov is not None else None,
+            "gap_profiles": round(gap), "flight_days": int(flight_days or 30),
+            "note": (f"연령×성별 {len(cells)}칸을 다 더하면 {round(syn_r):,} 프로필이고, "
+                     f"타게팅 없이 부른 전체는 {round(base):,} 프로필입니다 "
+                     f"— {cov:.1f}%. 나머지 {round(gap):,} 프로필({100 - cov:.1f}%)은 "
+                     "연령·성별로는 닿을 수 없습니다."
+                     if cov is not None else ""),
+            # ⚠️ «왜» 안 닿는지는 측정하지 않았다. 둘 중 무엇이냐로 해석이 갈린다.
+            "gap_cause": "unknown",
+            "gap_hypotheses": ["연령·성별 미상 프로필 — 닿지만 타게팅 불가",
+                               "18세 미만 — AGE_18_24 가 최저 구간이고 키즈 프로필 포함"]}
+
+
 def lookup_curve(market="KR", flight_days=30, age_name="", gender_name="",
                  media="", budget=2_000_000_000, points=20):
     """고른 조합의 곡선을 캐시에서 찾는다. 없으면 «왜 없는지» 를 돌려준다.
@@ -1358,19 +1726,20 @@ def lookup_curve(market="KR", flight_days=30, age_name="", gender_name="",
         return {"found": False, "state": "no_cache", "key": key,
                 "note": ("도달 곡선 캐시가 아직 만들어지지 않았습니다. "
                          "야간 선계산이 시작되면 조합별로 채워집니다.")}
-    c = _client()
-    prm = [bigquery.ScalarQueryParameter("mk", "STRING", (market or "KR").upper()),
-           bigquery.ScalarQueryParameter("fd", "INT64", int(flight_days or 30)),
-           bigquery.ScalarQueryParameter("tk", "STRING", key)]
     try:
-        rows = [dict(r) for r in c.query(
-            f"SELECT * FROM {CURVE_VIEW} "
-            f"WHERE country=@mk AND flight_days=@fd AND IFNULL(targeting_key,'none')=@tk "
-            f"ORDER BY IF(IFNULL(curve_status,'')='ok',0,1) LIMIT 5",
-            job_config=bigquery.QueryJobConfig(query_parameters=prm)).result()]
+        rows = _curve_rows(market, int(flight_days or 30), key)
     except Exception as e:
         return {"found": False, "state": "error", "key": key,
                 "note": f"조회 실패: {str(e)[:120]}"}
+
+    # 🔑 격자에 그 «기간» 이 없으면 앵커 사이를 보간한다 (DB 실측 E4, 2026-10-22)
+    #   기간은 합성으로 대체할 수 없다 — 30/60/90 일에 도달이 1.000/1.166/1.273 배로
+    #   «체감하며» 오른다. 축을 빼면 60일 계획에 30일 숫자를 보여 주게 된다.
+    #   그래서 축은 남기고, 앵커를 재서 그 사이만 보간한다.
+    if not rows:
+        itp = _interp_duration(market, int(flight_days or 30), key, media, budget, points)
+        if itp is not None:
+            return itp
 
     if not rows:
         n = ("" if not unverified else

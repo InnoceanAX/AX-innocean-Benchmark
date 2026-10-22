@@ -118,12 +118,24 @@ def build_image():
             print("· 빌드 상태:", st["status"])
             if st["status"] != "SUCCESS":
                 raise RuntimeError("빌드 실패 로그: " + st.get("logUrl", ""))
-            return
+            # 🔴 태그가 아니라 «다이제스트» 를 돌려준다. 태그로 배포하면 내용이
+            #   바뀌어도 image 문자열이 같아서 Cloud Run 이 리비전을 안 만든다 —
+            #   그러면 아무것도 배포되지 않은 채 «배포 완료» 가 찍힌다(2026-10-22 실제).
+            dg = ""
+            for im in ((st.get("results") or {}).get("images") or []):
+                if im.get("digest"):
+                    dg = im["digest"]
+                    break
+            if not dg:
+                raise RuntimeError("빌드는 성공했는데 이미지 다이제스트가 없습니다 — "
+                                   "다이제스트 없이 배포하면 옛 이미지가 그대로 돕니다.")
+            print(f"· 이미지 다이제스트 {dg[:19]}…")
+            return dg
         time.sleep(10)
     raise RuntimeError("빌드 타임아웃")
 
 
-def deploy_service(with_secret=True):
+def deploy_service(with_secret=True, digest=""):
     base = f"https://{REGION}-run.googleapis.com/v2/projects/{PROJECT}/locations/{REGION}/services"
     env = []   # PORT 는 Cloud Run 이 자동 주입(예약어) → 설정 금지
     if with_secret:
@@ -134,7 +146,10 @@ def deploy_service(with_secret=True):
         "template": {
             "serviceAccount": SERVICE_SA,   # 최소권한: 마트 읽기 + 시크릿만
             "containers": [{
-                "image": IMG_URI,
+                # 다이제스트가 있으면 그걸로 고정한다 — 내용이 바뀌면 문자열도 바뀌므로
+                #   리비전이 «반드시» 돈다. 없으면(= --service-only) 태그로 둔다.
+                "image": (f"{REGION}-docker.pkg.dev/{PROJECT}/{REPO}/{IMAGE}@{digest}"
+                          if digest else IMG_URI),
                 "ports": [{"containerPort": 8080}],
                 "env": env,
                 "resources": {"limits": {"cpu": "1", "memory": "512Mi"}},
@@ -148,6 +163,19 @@ def deploy_service(with_secret=True):
     else:
         r = _ok(S.post(f"{base}?serviceId={SERVICE}", json=body))
     _wait_op(f"https://{REGION}-run.googleapis.com/v2/{r.json()['name']}")
+    # 🔴 «갱신 완료» 를 찍기 전에 트래픽을 받는 리비전의 이미지를 읽어서 댄다.
+    #   이 검사가 없어서 2026-10-22 에 배포가 아무 일도 안 하고 성공을 보고했다.
+    #   사람이 태그 번호를 올렸는지에 기대지 않고 기계가 확인한다.
+    if digest:
+        d = S.get(f"{base}/{SERVICE}").json()
+        live = (d.get("latestReadyRevision") or "").split("/")[-1]
+        imgs = [c.get("image", "") for c in
+                ((d.get("template") or {}).get("containers") or [])]
+        if not any(digest in i for i in imgs):
+            raise RuntimeError(
+                f"배포가 반영되지 않았습니다 — 방금 빌드한 {digest[:19]}… 가 "
+                f"서비스 템플릿에 없습니다(현재 {imgs}). 옛 리비전이 계속 돕니다.")
+        print(f"· 리비전 확인 {live} ← 방금 빌드한 이미지")
     # 공개 접근 (allUsers invoker)
     pol = {"policy": {"bindings": [{"role": "roles/run.invoker", "members": ["allUsers"]}]}}
     _ok(S.post(f"{base}/{SERVICE}:setIamPolicy", json=pol))
@@ -332,10 +360,10 @@ def main():
         raise SystemExit("단위 테스트 실패로 배포를 중단했습니다")
     ensure_repo()
     has_secret = ensure_secret()
-    build_image()
+    _digest = build_image()
     if a.build:
         print("빌드 완료 (배포 생략)"); return
-    deploy_service(with_secret=has_secret)
+    deploy_service(with_secret=has_secret, digest=_digest)
 
     # 🔴 마트 Job 이미지 갱신은 «기본» 이다 (2026-10-21 사고로 바꿨다)
     #   전에는 --full 에서만 돌렸다. 그 결과 서비스는 새 코드, 야간 마트 빌더 Job 은

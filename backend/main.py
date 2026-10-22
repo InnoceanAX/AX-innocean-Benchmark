@@ -259,6 +259,53 @@ def reach_lookup(market: str = "KR", flight_days: int = 30, media: str = "",
                             status_code=500)
 
 
+@app.get("/api/v1/reach/synth")
+def reach_synth(market: str = "KR", flight_days: int = 30, media: str = "",
+                cells: str = "", budget: float = 2_000_000_000, points: int = 20):
+    """고른 «배타적» 데모 칸들을 더해 조합 곡선을 만든다 — 벤더 호출 없이.
+
+    cells: '25-34:Male,35-49:Male' 처럼 연령:성별 을 쉼표로. 성별만/연령만도 된다.
+
+    ★ 왜 있나 — 넷플릭스 v1 은 일 50회다. 조합마다 부르면 한도가 먼저 끝난다.
+      단일 12칸만 받아 두면 그 조합들은 더해서 답할 수 있다(DB 실측 오차 0.2% 이내).
+
+    🔴 겹치는 조합은 거절한다. 「25-34 전성별」 × 「전연령 Male」 은 같은 사람을
+      두 번 세고, 그 중복 비율은 «측정되지 않았다».
+    """
+    try:
+        cs = []
+        for tok in (cells or "").split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            a, _, g = tok.partition(":")
+            cs.append({"age": a.strip(), "gender": g.strip()})
+        if not cs:
+            return JSONResponse({"found": False, "state": "no_cells",
+                                 "note": "합성할 칸을 고르지 않았습니다."})
+        return JSONResponse(reach.synth_curve(
+            cs, market=market, flight_days=flight_days, media=media,
+            budget=budget, points=points))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"found": False, "state": "error", "note": str(e)},
+                            status_code=500)
+
+
+@app.get("/api/v1/reach/demo_coverage")
+def reach_demo_coverage(market: str = "KR", flight_days: int = 30):
+    """연령×성별 12칸의 합이 «타게팅 없음» 의 몇 %인가 — 실측 89.6%.
+
+    🔴 이건 결함 보고가 아니라 플래너에게 주는 정보다. 데모 칸을 다 사도 전체의
+      89.6% 이고, 나머지 10.4% 는 연령·성별로는 닿을 수 없다.
+      «왜» 닿지 않는지는 아직 모른다(연령·성별 미상이거나 18세 미만) — 둘 중
+      무엇이냐에 따라 「닿지만 타게팅 불가」와 「광고 대상 아님」으로 해석이 갈린다.
+    """
+    try:
+        return JSONResponse(reach.synth_selfcheck(market=market, flight_days=flight_days))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "note": str(e)}, status_code=500)
+
+
 @app.get("/api/v1/reach/targeting")
 def reach_targeting(market: str = ""):
     """넷플릭스 도달 시뮬레이터의 선택 항목(연령·성별·기기·장르·관심사 등).
