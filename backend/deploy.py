@@ -234,7 +234,25 @@ def check_contract_here():
     try:
         from google.cloud import bigquery as _bq
         import mart as _mart
-        _mart.check_upstream_contract(_bq.Client(project=PROJECT))
+        cl = _bq.Client(project=PROJECT)
+        _mart.check_upstream_contract(cl)
+        # 🔴 스냅샷 대조는 «직전 기록 이후» 만 말한다. 야간 빌드(05:00)가 먼저
+        #   읽으면 여기서는 「변화 없음」 이 나온다 — 변화가 있었는데도.
+        #   그래서 이력을 따로 묻는다. 누가 먼저 읽었는지와 무관하게 남아 있다.
+        recent = _mart.recent_contract_changes(cl, days=7)
+        if recent is None:
+            print("· [알림] 계약 변화 이력을 못 읽었습니다 — "
+                  "«변화가 없다는 뜻이 아닙니다»")
+        elif recent:
+            print(f"· 최근 7일 상류 계약 변화 {len(recent)}건:")
+            for r in recent[:8]:
+                a = ", ".join(r.get("added") or [])
+                rm = ", ".join(r.get("removed") or [])
+                print(f"    {r['t']}  {r['view_name']}"
+                      + (f" · 추가 {a}" if a else "")
+                      + (f" · 🔴 사라짐 {rm}" if rm else ""))
+        else:
+            print("· 최근 7일 상류 계약 변화 없음 (이력을 읽었고 비어 있음)")
     except Exception as e:  # noqa: BLE001
         print(f"· [알림] 상류 계약 대조 실패: {str(e)[:90]} — "
               "«변화가 없다는 뜻이 아닙니다»")

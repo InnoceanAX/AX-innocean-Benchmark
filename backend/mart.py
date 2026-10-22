@@ -774,6 +774,52 @@ UPSTREAM_VIEWS = [
 ]
 
 
+CONTRACT_LOG = "bm_upstream_contract_log"
+
+
+def _log_contract_change(c, view, added, removed, n_cols):
+    """계약 변화 한 건을 이력에 더한다(append-only).
+
+    ⚠️ 실패해도 빌드를 멈추지 않는다 — 이력은 «알림» 이고 마트의 정확성 조건이
+      아니다. 다만 실패했다는 사실은 찍는다(조용히 비면 「변화 없음」 으로 읽힌다).
+    """
+    tbl = f"`{PROJECT}.{MART_DS}.{CONTRACT_LOG}`"
+    try:
+        c.query(f"""CREATE TABLE IF NOT EXISTS {tbl} (
+            detected_at TIMESTAMP, view_name STRING,
+            added ARRAY<STRING>, removed ARRAY<STRING>, n_cols INT64)""").result()
+        prm = [bigquery.ScalarQueryParameter("v", "STRING", view),
+               bigquery.ArrayQueryParameter("a", "STRING", list(added or [])),
+               bigquery.ArrayQueryParameter("r", "STRING", list(removed or [])),
+               bigquery.ScalarQueryParameter("n", "INT64", int(n_cols))]
+        c.query(f"INSERT INTO {tbl} (detected_at, view_name, added, removed, n_cols) "
+                f"VALUES (CURRENT_TIMESTAMP(), @v, @a, @r, @n)",
+                job_config=bigquery.QueryJobConfig(query_parameters=prm)).result()
+    except Exception as e:  # noqa: BLE001
+        print(f"    · [경고] 계약 변화 이력 기록 실패: {str(e)[:80]}")
+
+
+def recent_contract_changes(c, days=7, limit=20):
+    """최근 계약 변화 목록. 누가 먼저 읽었는지와 무관하게 남아 있다.
+
+    ★ 왜 필요한가
+      스냅샷 대조는 «직전 기록 이후» 만 말한다. 야간 빌드가 먼저 읽으면 내 배포는
+      「변화 없음」 을 본다 — 변화가 있었는데도. 이력을 물으면 그게 안 생긴다.
+    """
+    tbl = f"`{PROJECT}.{MART_DS}.{CONTRACT_LOG}`"
+    try:
+        rows = c.query(
+            f"SELECT view_name, added, removed, n_cols, "
+            f"FORMAT_TIMESTAMP('%m-%d %H:%M', detected_at, 'Asia/Seoul') AS t "
+            f"FROM {tbl} "
+            f"WHERE detected_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), "
+            f"INTERVAL {int(days)} DAY) "
+            f"ORDER BY detected_at DESC LIMIT {int(limit)}").result()
+        return [dict(r) for r in rows]
+    except Exception:
+        return None     # None = 모른다. [] = 변화 없음. 둘을 섞지 않는다.
+
+
 def check_upstream_contract(c):
     """내가 소비하는 통합뷰의 «컬럼 집합» 을 기록하고, 바뀌면 알린다.
 
@@ -826,6 +872,9 @@ def check_upstream_contract(c):
             if rem:
                 print("    ⚠️ 컬럼이 사라지면 _has_col 가드가 «조용히» 그 지표를 끕니다 — "
                       "화면에서 지표가 없어진 것을 확인하십시오.")
+            # 🔴 이력에 «더한다». 스냅샷은 덮어쓰기라, 먼저 읽은 쪽이 변화를 먹으면
+            #   뒤에 읽는 쪽은 그 일이 있었던 것조차 모른다(실제로 그랬다).
+            _log_contract_change(c, v, add, rem, len(now))
             changed += 1
 
     try:
