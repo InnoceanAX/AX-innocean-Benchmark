@@ -696,7 +696,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   // 환율 표시 갱신 (fx_rates_daily 최신값)
   function updateExrate(){
     var fx=(window.BM_DATA&&BM_DATA.meta&&BM_DATA.meta.fx)||null, el=document.getElementById('exTxt'); if(!fx||!el)return;
-    el.innerHTML='1 USD = '+(fx.USD||0).toLocaleString()+' KRW &nbsp;|&nbsp; 1 EUR = '+(fx.EUR||0).toLocaleString()+' KRW &nbsp;|&nbsp; 1 JPY = '+(fx.JPY||0)+' KRW'+(fx.asof?' &nbsp;<span style="color:#9CA3AF">('+fx.asof+' 기준)</span>':'');
+    el.innerHTML='1 USD = '+(fx.USD||0).toLocaleString()+' KRW &nbsp;|&nbsp; 1 EUR = '+(fx.EUR||0).toLocaleString()+' KRW &nbsp;|&nbsp; 1 JPY = '+(fx.JPY||0)+' KRW'+(fx.asof?' &nbsp;<span style="color:#9CA3AF">('+fx.asof+' 기준)</span>':' &nbsp;<span style="color:#B45309">(\u26a0\ufe0f 고정 환율 \u2014 최신 환율을 못 불러왔습니다. 달러\u00b7유로 금액은 실제와 다를 수 있습니다)</span>');
   }
   function buildKpiToggle(){
     var bar=document.getElementById('bmKpiTgl'); if(!bar) return;

@@ -1,7 +1,14 @@
 """
 BigQuery 데이터 계층 — 벤치마크 전용 마트만 읽어 다차원 4분위 벤치마크 반환.
 
-⚠️ 로우데이터·통합층 직접 접근 금지. 오직 `apac_kr_benchmark.bm_campaign_monthly` 만 소비.
+⚠️ 통합층(apac_kr_unified) 직접 접근 금지 — 서비스 SA 는 거기 권한이 없다.
+   읽는 것은 `apac_kr_benchmark` 의 마트들이다: bm_campaign_monthly(본체) ·
+   bm_fx · bm_metric_caveats · bm_industry_disclosure · bm_segment_* 등.
+   🔴 예외가 하나 있다 — _fx_load 의 «2차» 폴백이 apac_kr_raw.fx_rates_daily 를
+     시도한다. 서비스 SA 는 그 데이터셋에 권한이 없어 실패하고 정적 폴백으로
+     내려간다(실측 2026-10-22). 1차인 bm_fx 가 있어 실제로는 거기서 멈추지 않는다.
+   ⚠️ 전에 여기 「오직 bm_campaign_monthly 만 소비」 라고 적혀 있었다. 코드가 자란
+     만큼 글을 안 고친 것이고, 그런 글은 다음 사람이 «지켜지는 규칙» 으로 읽는다.
 
 기준차원(dim) × 필터(media·market·objective·brand·industry·기간) 조합으로
 캠페인 KPI 분포(평균·중앙·상위25%·상위10%)를 동적 계산. KPI: CPM/CPC/CTR/CVR.
