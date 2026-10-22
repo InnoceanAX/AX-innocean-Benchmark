@@ -403,13 +403,25 @@ print(chr(10) + "=== 🔴 fetch_failed 는 두 가지 답을 뜻한다 (재시�
 #   가르지 않으면 플래너를 영원히 기다리게 한다.
 # ⚠️ NULL 은 «아직 안 멈췄다» 다. 옛 행 전부가 NULL 이라(실측 41행) NULL 을 캡으로
 #   보면 멀쩡한 대기 칸이 「안 생긴다」 로 나간다.
-for att, want, why in ((None, "fetch_failed", "NULL(옛 행)은 기다릴 수 있다"),
-                       (1, "fetch_failed", "1회면 재시도가 남았다"),
-                       (3, "fetch_failed", "3회는 캡(4) 미만이다"),
-                       (4, "fetch_failed_capped", "4회는 캡 도달이다"),
-                       (9, "fetch_failed_capped", "캡을 넘은 것도 멈춤이다")):
-    got, n = reach.fetch_failed_state(att)
-    ck(f"attempts={att} → {want} ({why})", got == want, got)
+# 🔴 캡 숫자를 베껴 오지 않는다. 뷰가 retry_exhausted 로 유도해 준다 —
+#   MAX_ATTEMPTS 가 수집 쪽에만 있어 내가 유도할 수 없기 때문이다.
+#   전에는 RETRY_CAP_MIRROR=4 를 두고 attempts 를 직접 비교했는데, 그쪽이 캡을
+#   바꾸면 내 쪽이 «조용히 틀린» 쪽으로 간다.
+CASES = (
+    ({"retry_exhausted": False, "attempts": None}, "fetch_failed",
+     "NULL(옛 행)은 기다릴 수 있다 — 뷰가 IFNULL 로 False 를 준다"),
+    ({"retry_exhausted": False, "attempts": 1}, "fetch_failed", "재시도가 남았다"),
+    ({"retry_exhausted": True, "attempts": 4}, "fetch_failed_capped", "재시도를 다 썼다"),
+    ({"retry_exhausted": True, "attempts": 99}, "fetch_failed_capped",
+     "캡이 바뀌어도 뷰 판정을 따른다 — 내가 숫자를 안 들고 있다"),
+    ({}, "fetch_failed", "열이 없으면 «아직 안 멈췄다» 로 본다"),
+    ({"attempts": 7}, "fetch_failed",
+     "⚠️ 시도가 많아도 뷰가 멈췄다고 안 하면 안 멈춘 것이다"),
+)
+for row, want, why in CASES:
+    got, n = reach.fetch_failed_state(row)
+    ck(f"{row} → {want} ({why})", got == want, got)
+ck("거울 상수를 들고 있지 않다", not hasattr(reach, "RETRY_CAP_MIRROR"))
 ck("캡 도달은 «기다려도 안 생긴다» 고 적는다",
    "기다려도 생기지 않습니다"
    in reach.CURVE_STATUS["fetch_failed_capped"]["note"])

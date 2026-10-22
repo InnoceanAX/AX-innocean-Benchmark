@@ -975,8 +975,22 @@ def smoke():
     print("=== 마트 스모크 (빌드하지 않는다) ===")
     c = _client()
     print(f"· BigQuery 클라이언트 OK · 프로젝트 {c.project}")
-    # 상류 뷰 스키마 — 메타데이터 조회라 스캔이 0바이트다
-    check_upstream_contract(c)
+    # 🔴 전에 여기서 check_upstream_contract 를 돌렸다. 그게 «기록» 까지 해서,
+    #   배포가 그 다음에 돌리는 대조는 «항상 변화 없음» 을 봤다 — 스모크가 변화를
+    #   먹은 것이다. 실측으로 35→36열 변화를 놓쳤다(2026-10-22).
+    #   스모크의 일은 «상류에 닿는가» 까지다. 대조와 기록은 출력이 읽히는 자리에서만 한다.
+    reach_ok = 0
+    for ds, v in UPSTREAM_VIEWS:
+        try:
+            t = c.get_table(f"{PROJECT}.{ds}.{v}")   # 메타데이터 — 스캔 0바이트
+            reach_ok += 1
+            if v.startswith("v_netflix"):
+                print(f"· {v} 닿음 · {len(t.schema)}열")
+        except Exception as e:  # noqa: BLE001
+            print(f"· 🔴 {ds}.{v} 에 닿지 못했습니다 — {str(e)[:70]}")
+    print(f"· 상류 접근 {reach_ok}/{len(UPSTREAM_VIEWS)}개 뷰")
+    if reach_ok == 0:
+        raise SystemExit("상류 뷰에 하나도 닿지 못했습니다 — 권한이나 경로 문제입니다.")
     # 마트가 읽히는가 — 작은 질의 하나. 없으면 «아직 안 만들어진 것» 이므로 통과다
     try:
         n = list(c.query(
@@ -986,7 +1000,9 @@ def smoke():
     except Exception as e:  # noqa: BLE001
         print(f"· 마트 아직 없음(통과) — {str(e)[:70]}")
     print("✅ 스모크 통과 — import·경로·자격증명·상류 접근")
-    print("⚠️ 확인하지 않음 — 빌드가 끝까지 도는가 · 숫자가 맞는가")
+    print("⚠️ 확인하지 않음 — 빌드가 끝까지 도는가 · 숫자가 맞는가 · "
+          "상류 «계약이 바뀌었는가»(그건 배포와 야간 빌드가 대조한다. 여기서 하면 "
+          "스냅샷을 갱신해 다음 대조를 눈멀게 한다)")
 
 
 if __name__ == "__main__":

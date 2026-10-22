@@ -1001,25 +1001,35 @@ def _vendor_curve_counts(view, market=""):
 #   ⚠️ 측정한 것은 «세 값에서 불변이었다» 이고 «어떤 이름에도 불변» 이 아니다.
 #     그리고 v1 한정이다 — v2 는 /v2/ad-accounts/{id}/… 로 계정이 경로에 들어가므로
 #     그때 다시 재야 한다. 그 전에 v2 로 옮기면 이 전제가 조용히 깨진다.
-# DB 의 재시도 캡을 «거울» 로 둔다 (DB MAX_ATTEMPTS = 4, 2026-10-22).
-#   ⚠️ 두 코드베이스에 같은 숫자가 있으면 어긋날 수 있다. 그래서 숫자로 단정하지 않고
-#     «실제 시도 횟수» 를 화면에 적고, 이 값을 넘으면 「DB 가 캡을 올렸다」 고 알린다.
-#   NULL 은 «아직 안 멈췄다» 로 본다 — 옛 행 전부가 NULL 이다(실측 41행).
-#   NULL 을 캡 도달로 보면 멀쩡한 대기 칸이 「안 생긴다」 로 나간다.
-RETRY_CAP_MIRROR = 4
+# 🔴 재시도 캡을 «베껴 오지» 않는다. 전에 RETRY_CAP_MIRROR=4 를 뒀는데, 그 숫자는
+#   수집 쪽(MAX_ATTEMPTS)에만 있고 내가 유도할 수 없다 — 그쪽이 캡을 바꾸면 내 쪽이
+#   «조용히 틀린» 쪽으로 간다. 그래서 거울을 지우고 뷰가 유도한 값을 읽는다.
+#
+#   🔑 has_targeting 을 거절한 것과 다른 종류다:
+#       has_targeting     targeting_key 로 내가 «유도할 수 있다»  → 재서술. 거절이 맞았다
+#       retry_exhausted   캡이 수집 쪽에만 있어 «유도할 수 없다»  → 새 정보. 받는다
+#
+#   ⚠️ NULL 처리가 뷰 정의 안에 있다 — IFNULL(attempts,0) >= MAX_ATTEMPTS.
+#     옛 행 41개가 attempts NULL 인데 전부 False(= 아직 안 멈췄다)로 나온다(실측).
+#     내가 NULL 을 캡으로 읽으면 멀쩡한 대기 칸이 「안 생긴다」 로 나갔을 자리다.
 
 
-def fetch_failed_state(attempts):
-    """fetch_failed 한 칸이 «기다릴 수 있는가». (상태키, 시도횟수표시)"""
-    if attempts is None:
-        return "fetch_failed", None
+def fetch_failed_state(row):
+    """fetch_failed 한 칸이 «기다릴 수 있는가». (상태키, 시도횟수표시)
+
+    ⚠️ 열이 없거나 None 이면 «아직 안 멈췄다» 로 본다. 모르는 것을 「멈췄다」 로
+      읽으면 멀쩡한 대기 칸을 포기하게 만든다 — 그쪽이 더 나쁘다.
+      시도 횟수는 화면에 그대로 적어 사람이 판단할 수 있게 둔다.
+    """
+    r = row or {}
+    att = r.get("attempts")
     try:
-        n = int(attempts)
+        att = int(att) if att is not None else None
     except (TypeError, ValueError):
-        return "fetch_failed", None
-    if n >= RETRY_CAP_MIRROR:
-        return "fetch_failed_capped", n
-    return "fetch_failed", n
+        att = None
+    if r.get("retry_exhausted") is True:
+        return "fetch_failed_capped", att
+    return "fetch_failed", att
 
 
 CURVE_SCOPE_V1_NOTE = ("ℹ️ 이 곡선은 광고 계정과 무관합니다 — 넷플릭스 v1 은 광고주·브랜드를 "
@@ -2022,7 +2032,7 @@ def lookup_curve(market="KR", flight_days=30, age_name="", gender_name="",
         if st == "fetch_failed":
             # 🔴 같은 상태값이 두 가지 답을 뜻한다 — 재시도가 남았는가 멈췄는가.
             #   가르지 않으면 멈춘 칸을 두고 플래너가 영원히 기다린다.
-            st, att = fetch_failed_state(rows[0].get("attempts"))
+            st, att = fetch_failed_state(rows[0])
         meta = CURVE_STATUS.get(st, {})
         out = {"found": False, "state": st, "key": key,
                "note": meta.get("note") or why,
@@ -2030,13 +2040,7 @@ def lookup_curve(market="KR", flight_days=30, age_name="", gender_name="",
                "label": meta.get("label", st)}
         if att is not None:
             out["attempts"] = att
-            # ⚠️ 거울 상수를 넘으면 DB 가 캡을 올린 것이다 — 조용히 넘기지 않는다
-            if att > RETRY_CAP_MIRROR:
-                out["note"] += (f" (시도 {att}회 — 저희가 아는 재시도 한도"
-                                f"({RETRY_CAP_MIRROR}회)보다 많습니다. 수집 쪽 설정이 "
-                                "바뀐 것으로 보입니다.)")
-            else:
-                out["note"] += f" (시도 {att}회)"
+            out["note"] += f" (시도 {att}회)"
         return out
     return {"found": True, "state": "ok", "key": key,
             "targeting_label": rows[0].get("targeting_label"),

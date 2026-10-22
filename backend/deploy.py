@@ -261,9 +261,9 @@ def smoke_mart_job():
         print_job_logs(name, head="스모크 실패 로그")
         raise RuntimeError("마트 Job 스모크 실패 — 이미지가 실행되지 않습니다.")
     print("· 마트 Job 스모크 통과 (벤더·풀스캔 없음)")
-    # ⚠️ 스모크의 상류 계약 출력은 Job 로그로 가고 색인이 배포 창보다 늦다
-    #   (실측: 32초 재시도로도 0건). 그래서 긁어오지 않고 check_contract_here() 로
-    #   «여기서» 다시 돌려 내 터미널에 찍는다 — 같은 신원이라 보는 것도 같다.
+    # ⚠️ 스모크는 «상류에 닿는가» 까지만 본다. 계약 대조는 check_contract_here() 가
+    #   한다 — 출력이 읽히는 자리여야 하고, 대조는 «기록» 을 하므로 한 곳에서만
+    #   돌아야 한다. 전에 스모크가 같이 기록해서 그 다음 대조가 영구히 눈멀었다.
 
 
 def print_job_logs(exec_name, only=None, head="Job 로그", limit=40):
