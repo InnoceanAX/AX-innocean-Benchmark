@@ -1014,9 +1014,13 @@ def points_from_cache(rows, cpm, budget, points=20):
         return None, "곡선 점이 비어 있습니다(수집은 성공했는데 값이 없습니다)."
     npts = row.get("points")
     warn = []
-    if npts is not None and npts != 100:
-        # DB 지침: points 가 100 이 아니면 의심하라
-        warn.append(f"곡선 점이 {npts}개입니다(보통 100개) — 수집이 중간에 끊겼을 수 있습니다.")
+    # 🔴 «100점» 은 스펙 문서의 값이고 실제가 아니다 (DB 첫 실호출, 2026-10-22)
+    #   실호출 결과는 86점이고 노출 간격도 등간격이 아니라 «로그 간격»(1,000~5,656,000)이다.
+    #   전에는 points != 100 이면 경고했는데, 그러면 «멀쩡한 곡선마다» 경고가 뜬다 —
+    #   그런 경고는 곧 무시되고, 진짜 문제가 섞여 들어와도 안 보인다.
+    #   그래서 «개수» 가 아니라 «쓸 수 있는가» 로 본다: 점이 너무 적은가 · 단조증가하는가.
+    if npts is not None and npts < 4:
+        warn.append(f"곡선 점이 {npts}개뿐입니다 — 보간할 수 없어 믿기 어렵습니다.")
     scope = (row.get("ad_account_scope") or "unknown")
     if CURVE_SCOPE_NOTE.get(scope):
         warn.append(CURVE_SCOPE_NOTE[scope])
@@ -1033,6 +1037,14 @@ def points_from_cache(rows, cpm, budget, points=20):
     if not pairs:
         return None, "곡선 점을 읽을 수 없습니다(impression_reach 구조가 예상과 다릅니다)."
     pairs.sort()
+    # 노출이 늘었는데 도달이 «줄면» 곡선이 아니다. 이것이 쓸 수 있는가의 실제 조건이다.
+    #   ⚠️ 오목성(한계도달 체감)은 검사하지 않는다 — DB 실측으로 위반 7건이 나오는데
+    #     전부 «정확히 한 양자화 단계» 다(노출 간격 1,000 · 도달 정수 → 기울기 해상도
+    #     0.001, 지역 기울기의 0.12%). 허용오차 없이 걸면 멀쩡한 곡선이 매번 걸린다.
+    drops = sum(1 for i in range(1, len(pairs)) if pairs[i][1] < pairs[i - 1][1])
+    if drops:
+        return None, (f"노출이 늘었는데 도달이 줄어드는 지점이 {drops}곳 있습니다 — "
+                      "곡선으로 쓸 수 없습니다(수집 오류로 보입니다).")
 
     # 예산 축으로 자른다. 곡선은 노출 축이므로 예산 = 노출 × CPM / 1000.
     # ⚠️ 캐시의 최대 노출을 넘는 예산은 «외삽» 이다 — 늘려 그리지 않고 거기서 멈춘다.

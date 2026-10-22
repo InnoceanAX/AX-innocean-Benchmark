@@ -61,8 +61,14 @@ for st, kw in (("suppressed", "억제"), ("not_permitted", "쓸 수 없는"),
 print("\n=== 경고가 붙는 경우 ===")
 d3, _ = reach.points_from_cache([_row(scope="agency_shared")], CPM, BUD, points=5)
 ck("공용 계정이면 경고", d3 and any("공용 계정" in w for w in d3["warnings"]))
-d4, _ = reach.points_from_cache([_row(pts=40)], CPM, BUD, points=5)
-ck("점이 100개가 아니면 경고", d4 and any("40개" in w for w in d4["warnings"]))
+# 🔴 «100점» 규칙을 버렸다 — DB 첫 실호출이 86점이었고 간격도 로그였다(2026-10-22).
+#   개수로 판정하면 멀쩡한 곡선마다 경고가 떠서 그 경고가 곧 무시된다.
+d4, _ = reach.points_from_cache([_row(pts=86)], CPM, BUD, points=5)
+ck("86점(실제 응답)도 경고 없이 통과", d4 and not any("점" in w and "뿐" in w
+                                                  for w in d4["warnings"]))
+d4b, why4b = reach.points_from_cache([_row(pts=3)], CPM, BUD, points=5)
+ck("점이 3개면 경고하거나 거부", (d4b is None) or any("뿐" in w for w in d4b["warnings"]),
+   why4b or "")
 d5, _ = reach.points_from_cache([_row(scope="unknown")], CPM, BUD, points=5)
 ck("범위 미기록이면 경고", d5 and any("기록되지 않" in w for w in d5["warnings"]))
 
@@ -117,6 +123,23 @@ rb = _row(); rb.update({"population_lower": 24_600_000, "population_upper": 20_9
 d12, _ = reach.points_from_cache([rb], CPM, BUD, points=3)
 ck("상하한 뒤집힘을 바로잡는다",
    d12 and d12["population"]["lower"] < d12["population"]["upper"])
+
+print()
+print("=== 쓸 수 있는가 — 단조증가 ===")
+bad = [{"impression": 1_000_000, "reach": 500_000},
+       {"impression": 2_000_000, "reach": 400_000},   # 노출↑ 인데 도달↓
+       {"impression": 3_000_000, "reach": 900_000}]
+d13, why13 = reach.points_from_cache([_row(pts=3, arr=bad)], CPM, BUD, points=5)
+ck("도달이 줄면 거부", d13 is None and bool(why13) and "줄어드는" in (why13 or ""), why13 or "")
+
+# 오목성 위반은 «걸지 않는다» — 양자화 한 단계짜리가 섞여 있다(DB 실측 7건)
+import math as _m
+qz = []
+for i in range(1, 40):
+    imp = i * 1000
+    qz.append({"impression": imp, "reach": int(imp ** 0.89)})   # 정수 양자화
+d14, _ = reach.points_from_cache([_row(pts=len(qz), arr=qz)], CPM, BUD, points=6)
+ck("양자화된 실제 모양(b=0.89)은 통과", d14 is not None and len(d14["points"]) == 6)
 
 print()
 if fails:
