@@ -200,17 +200,30 @@ ck("실측 합본(1,920,479) 대비 0.2% 이내",
    sy.get("max_reach"))
 ck("합성이라고 밝힌다", sy.get("basis") == "synthesis")
 ck("합성 경고가 붙는다", sy.get("found") and any("«합성»" in w for w in sy["warnings"]))
-# 🔴 방향을 테스트로 못 박는다. DB 보고서는 이 차이를 「보수적」 이라고 적었는데
-#   측정값은 합본 1,920,479 < 합성 1,921,121 이다 — 합성이 «높다». 보수적의 반대다.
-#   그리고 높은 쪽이 위험하다: 도달을 넉넉히 보여 주면 예산을 적게 잡는다.
-#   문구만 고치면 다음에 또 뒤집히므로 여기서 걸리게 한다.
-ck("합성이 실측 합본보다 «높다» (방향)",
-   sy.get("found") and sy["max_reach"] > 1_920_479, sy.get("max_reach"))
-ck("화면 문구가 «높다» 고 적는다",
-   sy.get("found") and any("높은" in w for w in sy["warnings"]),
+# 🔴 여기에 «방향» 을 걸었다가 두 번 틀렸다. 세 번째로 고친다 — 조건을 건다.
+#   1,921,121(합성) 과 1,920,479(합본) 는 노출이 3.57% 다른 두 점이다. 부호를
+#   붙일 수 없는 비교였는데 양쪽이 각자 부호를 붙였다(DB 는 「보수적」, 나는 「과대」).
+#   같은 노출에서 재면 합성이 0.045~0.059% «낮다»(DB 전수탐색).
+#
+#   ⚠️ 그래서 방향 단어로 걸면 안 된다 — 나중에 노출 고정 보간을 넣는 순간
+#     부호가 뒤집혀 «멀쩡한 코드» 가 깨진다. 거는 것은 «노출 수준이 함께 적히는가» 다.
+#     두 계산 중 어느 것을 쓰든 이 조건은 그대로 성립한다.
+# ⚠️ DB 실제 격자의 단순합은 13,657,000 이지만 칸별 끝점 분할은 모른다.
+#   합만 맞는 숫자를 지어내 넣으면 재지 않은 것을 테스트에 심는 셈이라,
+#   «픽스처 자신의 합» 으로 건다. 검증하려는 성질은 그 쪽이다.
+EXP_IMP = 2_200_000 + 4_700_000
+ck("끝 도달에 해당하는 «노출 수준» 을 돌려준다",
+   sy.get("found") and sy.get("max_imp_sum") == EXP_IMP, sy.get("max_imp_sum"))
+ck("문구가 «각 칸을 끝까지 사는 경우» 라고 조건을 적는다",
+   sy.get("found") and any("끝까지 사는" in w for w in sy["warnings"]),
    [w[:70] for w in (sy.get("warnings") or [])][:1])
-ck("«낮게 나온다» 고 적지 않는다",
-   sy.get("found") and not any("낮게" in w for w in sy["warnings"]))
+ck("문구가 노출 수준을 숫자로 적는다",
+   sy.get("found") and any(f"{EXP_IMP:,}" in w for w in sy["warnings"]),
+   [w[:90] for w in (sy.get("warnings") or [])][:1])
+# 방향을 단정하는 단어가 첫 문구에 들어오면 걸리게 한다 — 두 번 당한 자리다
+ck("방향을 단정하지 않는다(«높은» 단독 주장 금지)",
+   sy.get("found") and "조금 높은" not in sy["warnings"][0],
+   sy.get("warnings", [""])[0][:60])
 ck("정의역 경고가 붙는다",
    sy.get("found") and any("단순합" in w for w in sy["warnings"]))
 

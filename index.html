@@ -2298,6 +2298,8 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       out.innerHTML='<b style="color:#1F7A3D">합성 곡선</b> '+
         '<span class="bdg" style="background:#EEF2FF;color:#3730A3">합성</span> — 최대 도달 '+
         (d.max_reach||0).toLocaleString()+' 프로필'+
+        (d.max_imp_sum?('<span style="color:var(--tm)"> @ 노출 '+
+          d.max_imp_sum.toLocaleString()+'</span>'):'')+
         (d.full_cover?' <span class="bdg" style="background:#FEF2F2;color:#B91C1C">'+
           '전체 아님 '+d.fullcover_pct_of_untargeted+'%</span>':'')+ws;
     }).catch(function(){ out.innerHTML=''; });
