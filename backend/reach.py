@@ -753,6 +753,7 @@ NETFLIX_RATE_LIMITS = {"month": 1500, "day": 50, "hour": 20, "minute": 5}
 #    일 50회라 격자가 며칠에 걸쳐 채워진다. not_permitted 는 플래너가 조건을 바꿔야 하고,
 #    not_requested 는 기다리면 생긴다 — 다른 행동이다.
 #    suppressed 를 «도달 0» 으로 그리면 플래너가 «효과 없는 조건» 으로 읽는다.
+# INVARIANT(no-unverified-codes): 안 쟀거나 스펙에 없는 코드(예: 422)를 상태 문구에 박지 않는다 — 보는 사람은 확인된 사실로 읽는다.
 CURVE_STATUS = {
     "ok":            {"label": "곡선 있음", "usable": True,  "note": ""},
     # ⚠️ 벤더 중립 문구로 적는다. 처음엔 "넷플릭스가 억제했다" 로 박아뒀는데,
@@ -1014,6 +1015,8 @@ def _vendor_curve_counts(view, market=""):
 #     내가 NULL 을 캡으로 읽으면 멀쩡한 대기 칸이 「안 생긴다」 로 나갔을 자리다.
 
 
+# INVARIANT(no-retry-cap-mirror): 수집 쪽 재시도 캡을 베껴 두지 않는다 — 뷰의 retry_exhausted 를 읽는다(내가 유도할 수 없는 값이다).
+# INVARIANT(fetch-failed-two-answers): fetch_failed 는 «재시도 남음» 과 «멈춤» 두 답을 뜻한다. 가르지 않으면 플래너를 영원히 기다리게 한다.
 def fetch_failed_state(row):
     """fetch_failed 한 칸이 «기다릴 수 있는가». (상태키, 시도횟수표시)
 
@@ -1047,6 +1050,7 @@ CURVE_SCOPE_V1_NOTE = ("ℹ️ 이 곡선은 광고 계정과 무관합니다 �
 CURVE_SCOPE_V1_ONLY = "unknown"   # v1 에서 관측되는 유일한 값
 
 
+# INVARIANT(no-extrapolation): 측정한 구간 밖으로 늘려 그리지 않는다 — 곡선 끝 밖도, 기간 앵커 밖도.
 def _interp_reach(pairs, imps):
     """원곡선에서 노출 imps 의 도달. 구간 선형 보간 — 양 끝은 끝값으로 고정한다.
 
@@ -1097,11 +1101,13 @@ def points_from_cache(rows, cpm, budget, points=20):
     #   전에는 points != 100 이면 경고했는데, 그러면 «멀쩡한 곡선마다» 경고가 뜬다 —
     #   그런 경고는 곧 무시되고, 진짜 문제가 섞여 들어와도 안 보인다.
     #   그래서 «개수» 가 아니라 «쓸 수 있는가» 로 본다: 점이 너무 적은가 · 단조증가하는가.
+    # INVARIANT(no-point-count-gate): «점 수» 로 곡선을 거부하지 않는다 — 실제 응답은 74~86 이고 고정값이 아니다.
     if npts is not None and npts < 4:
         warn.append(f"곡선 점이 {npts}개뿐입니다 — 보간할 수 없어 믿기 어렵습니다.")
     scope = (row.get("ad_account_scope") or "unknown")
     # v1 에서는 계정이 모델 입력이 아니라(E1: 세 광고주로 호출해 86점 동일) 범위가
     #   무엇이든 곡선이 같다. 그래서 분기하지 않고 같은 안내를 붙인다.
+    # INVARIANT(scope-not-informative): v1 의 ad_account_scope 로 분기하지 않는다 — 항상 unknown 이라 다른 가지에 영원히 안 들어간다.
     warn.append(CURVE_SCOPE_V1_NOTE)
     # ⚠️ 예상 밖의 값이 오면 그 사실만 알린다 — v2 로 넘어갔거나 격자가 바뀐
     #   신호다. 조용히 같은 안내를 붙이면 전제가 깨진 것을 모른다.
@@ -1173,6 +1179,7 @@ def points_from_cache(rows, cpm, budget, points=20):
     #   점근선 자체가 없다. 분모로 쓰면 도달률이 약 +0.3% 과대해진다.
     #   작지만, «모집단» 이라고 이름 붙이면 넷플릭스가 실제 가입자 수를 주는 순간
     #   둘이 어긋나고 다음 사람이 결함으로 읽는다.
+    # INVARIANT(population-per-row): 도달률의 분모를 전역 상수로 두지 않고 «행에서» 읽는다 — 타게팅마다 모집단이 다르다.
     pop_lo = row.get("population_lower")
     pop_hi = row.get("population_upper")
     if pop_lo is None and pop_hi is None:
@@ -1511,6 +1518,7 @@ SYNTH_DOMAIN_SHRINK_PCT = 3.57
 #   ①이면 「닿지만 타게팅 불가」, ②면 「광고 대상이 아닐 수 있음」,
 #   ③이면 「간극이 없고 합산 방식을 바꿔야 함」 이다. 해석이 셋으로 갈리므로
 #   화면에 «원인은 모른다» 를 그대로 적는다 — 둘만 제시하면 없는 선택을 강요한다.
+# INVARIANT(gap-cause-unmeasured): 데모 합과 전체의 차이(10.4%)는 «관측» 이고 원인은 안 쟀다. 원인을 단정하지 않고 가설 셋을 그대로 적는다.
 GAP_HYPOTHESES = [
     "① 연령 또는 성별 정보가 없는 프로필이 있다 — 닿지만 타게팅은 못 한다",
     "② 연령 구간이 전체를 덮지 않는다(AGE_18_24 가 최저) — 광고 대상이 아닐 수 있다",
@@ -1527,6 +1535,7 @@ SYNTH_FULLCOVER_GAP_PCT = 10.4
 #   일도 하지 않는 셈이다. 그래서 여기서 거른다.
 # ⚠️ IFNULL(is_active, TRUE) 다. NULL 을 비활성으로 보면 컬럼이 안 채워진 행이
 #   전부 사라져 화면이 조용히 빈다 — 「없다」와 「내렸다」는 다르다.
+# INVARIANT(active-rows-only): 내려 둔 행(is_active=FALSE)을 곡선으로 쓰지 않는다. 뷰가 걸러 주지 않던 때가 있었고, NULL 은 활성으로 본다.
 ACTIVE_SQL = "IFNULL(is_active, TRUE)"
 
 
@@ -1706,6 +1715,7 @@ def _interp_duration(market, flight_days, key, media, budget, points):
             "cpm": round(cpm, 2), "cpm_source": cpm_src}
 
 
+# INVARIANT(vendor-over-synth): 격자에 벤더 실측 합본이 있으면 합성하지 않는다 — 추정이 실측을 가리면 안 된다.
 def combined_key(cells):
     """고른 칸들을 «하나의 다중값 키» 로 만든다 — 격자에 실측 합본이 있는지 보려고.
 
@@ -1753,6 +1763,7 @@ def _receipt(row, label=""):
             "fetched_at": str(row.get("fetched_at") or "")[:19] or None}
 
 
+# INVARIANT(synth-exclusive-only): 겹치는 조합은 합성하지 않는다 — 랜덤중복 가정이 검증되지 않았다.
 def _exclusive(cells):
     """합성해도 되는 조합인가. 배타적이 아니면 거절한다.
 
@@ -1870,6 +1881,7 @@ def synth_curve(cells, market="KR", flight_days=30, media="",
             got.append((key, res[0], res[1]))
     # 🔴 한 칸이라도 없으면 «빼고 더하지» 않는다. 빼면 도달이 낮게 나오고, 낮게 나온
     #   이유는 화면에 안 보인다 — 플래너는 그 조합이 약하다고 읽는다.
+    # INVARIANT(synth-no-partial): 칸이 하나라도 없으면 «빼고 더하지» 않는다 — 빼면 도달이 낮게 나오고 그 이유가 화면에 안 보인다.
     if missing:
         return {"found": False, "state": "incomplete", "missing": missing,
                 "note": (f"고른 {len(cells)}칸 중 {len(missing)}칸이 격자에 없습니다 — "

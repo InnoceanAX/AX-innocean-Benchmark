@@ -82,6 +82,7 @@ ck("v1 실제 값(unknown)에서 계정 무관 안내",
 ck("공용 계정이라고 겁주지 않는다", d3 and not any("분모가 다른" in w for w in d3["warnings"]))
 ck("unknown 은 «예상 밖» 경고를 띄우지 않는다",
    d3 and not any("범위가" in w for w in d3["warnings"]))
+# INV(scope-not-informative)
 ck("이 값으로 분기하지 말라고 표시한다", d3 and d3.get("scope_informative") is False)
 # ⚠️ v2 로 넘어가거나 격자가 바뀌면 다른 값이 올 수 있다. 조용히 같은 안내를 붙이면
 #   전제가 깨진 것을 모른다 — 그 사실만 알리는지 댄다.
@@ -92,6 +93,7 @@ ck("예상 밖 범위 값이 오면 알린다",
 # 🔴 «100점» 규칙을 버렸다 — DB 첫 실호출이 86점이었고 간격도 로그였다(2026-10-22).
 #   개수로 판정하면 멀쩡한 곡선마다 경고가 떠서 그 경고가 곧 무시된다.
 d4, _ = reach.points_from_cache([_row(pts=86)], CPM, BUD, points=5)
+# INV(no-point-count-gate)
 ck("86점(실제 응답)도 경고 없이 통과", d4 and not any("점" in w and "뿐" in w
                                                   for w in d4["warnings"]))
 d4b, why4b = reach.points_from_cache([_row(pts=3)], CPM, BUD, points=5)
@@ -132,6 +134,7 @@ rv = _row(); rv.update({"population_lower": 20_900_000, "population_upper": 24_6
 d9, _ = reach.points_from_cache([rv], CPM, BUD, points=5)
 ck("벤더 모집단이면 밴드가 나온다",
    d9 and all("reach_pct_lower" in p and "reach_pct_upper" in p for p in d9["points"]))
+# INV(population-per-row)
 ck("상한 모집단이 하한 도달률을 만든다",
    d9 and d9["points"][-1]["reach_pct_lower"] < d9["points"][-1]["reach_pct_upper"])
 ck("population.is_vendor 가 참", d9 and d9["population"]["is_vendor"] is True)
@@ -271,6 +274,7 @@ ck("combined_key: 빈 선택은 none", reach.combined_key([]) == "none")
 COMBINED = _pw(13_170_000, 1_920_479, 0.86)
 pairs["age=AGE_25_34,AGE_35_49|gender=MALE"] = COMBINED
 vc = reach.synth_curve(cells2, media="넷플릭스", budget=10 ** 15, points=10)
+# INV(vendor-over-synth)
 ck("실측 합본이 있으면 basis=vendor_combined", vc.get("basis") == "vendor_combined",
    vc.get("basis"))
 ck("실측값(1,920,479)을 쓴다 — 합성값이 아니다",
@@ -300,6 +304,7 @@ bad_sets = [
                     {"age": "25-34", "gender": "Male"}], "두 번"),
     ("한 칸뿐", [{"age": "25-34", "gender": "Male"}], "두 칸 이상"),
 ]
+# INV(synth-exclusive-only)
 for nm, cs, kw in bad_sets:
     r = reach.synth_curve(cs, media="넷플릭스")
     ck(f"{nm} → 거절", not r.get("found") and r.get("state") == "not_synthesizable",
@@ -309,6 +314,7 @@ for nm, cs, kw in bad_sets:
 print("\n=== 빠진 칸이 있으면 «빼고 더하지» 않는다 ===")
 r_inc = reach.synth_curve([{"age": "25-34", "gender": "Male"},
                            {"age": "65+", "gender": "Female"}], media="넷플릭스")
+# INV(synth-no-partial)
 ck("한 칸이 없으면 합성 안 함", not r_inc.get("found") and r_inc.get("state") == "incomplete",
    r_inc.get("state"))
 ck("없는 칸을 알려 준다", len(r_inc.get("missing") or []) == 1, r_inc.get("missing"))
@@ -341,6 +347,7 @@ ck("89.6% 를 숫자로 적는다",
 #   가설 둘만 제시하면 받는 쪽에 «없는 선택» 을 강요한다.
 ck("원인을 측정하지 않았다고 적는다",
    sf.get("found") and any("측정하지 않았습니다" in w for w in sf["warnings"]))
+# INV(gap-cause-unmeasured)
 ck("가설을 셋 다 적는다",
    sf.get("found") and all(h in " ".join(sf["warnings"])
                            for h in ("정보가 없는", "전체를 덮지", "합산되도록")),
@@ -382,6 +389,7 @@ ck(f"45일 끝점이 두 앵커의 중간({MID:,.0f})",
    i45 and abs(i45["max_reach"] - MID) <= 2, (i45 or {}).get("max_reach"))
 ck("보간 경고가 붙는다", i45 and any("보간한 값" in w for w in i45["warnings"]))
 # ⚠️ 앵커 밖으로 늘리지 않는다 — 90일 밖은 재지 않았고 체감하므로 과대해진다
+# INV(no-extrapolation)
 ck("120일은 보간하지 않는다(None)", reach._interp_duration(
     "KR", 120, "none", "넷플릭스", 10 ** 15, 8) is None)
 ck("20일은 보간하지 않는다(None)", reach._interp_duration(
@@ -418,9 +426,11 @@ CASES = (
     ({"attempts": 7}, "fetch_failed",
      "⚠️ 시도가 많아도 뷰가 멈췄다고 안 하면 안 멈춘 것이다"),
 )
+# INV(fetch-failed-two-answers)
 for row, want, why in CASES:
     got, n = reach.fetch_failed_state(row)
     ck(f"{row} → {want} ({why})", got == want, got)
+# INV(no-retry-cap-mirror)
 ck("거울 상수를 들고 있지 않다", not hasattr(reach, "RETRY_CAP_MIRROR"))
 ck("캡 도달은 «기다려도 안 생긴다» 고 적는다",
    "기다려도 생기지 않습니다"
@@ -433,6 +443,7 @@ ck("두 문구가 다르다",
 # 🔴 스펙 에러표에 422 가 없다(200·400·401·404·429·500 뿐). 422 는 v2 검토에서 나온
 #   미회신 질문이고 v1 이 억제를 어떻게 알리는지 모른다 — 화면에 코드를 박으면
 #   보는 사람은 확인된 사실로 읽는다.
+# INV(no-unverified-codes)
 ck("suppressed 문구에 «422» 를 적지 않는다",
    "422" not in reach.CURVE_STATUS["suppressed"]["note"],
    reach.CURVE_STATUS["suppressed"]["note"][:60])
@@ -447,6 +458,7 @@ print(chr(10) + "=== 🔴 내려 둔 행(is_active=FALSE)을 쓰지 않는다 ==
 #   DB 가 내려 둔 칸의 곡선과 영수증을 쓰고 있었다.
 #   이 키는 곡선이 같아서(6,482,607) 숫자가 안 바뀌어 «안 보였다». 하지만 DB 가
 #   «틀려서» 내린 행이면 그대로 쓴다 — 그러면 is_active 가 아무 일도 하지 않는다.
+# INV(active-rows-only)
 _sql = reach._rows_sql(5)
 ck("조회 SQL 이 is_active 를 거른다", "is_active" in _sql, _sql[:140])
 
