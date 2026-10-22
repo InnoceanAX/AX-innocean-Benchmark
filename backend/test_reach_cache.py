@@ -375,6 +375,25 @@ ck("오른쪽 밖은 끝 값(외삽 안 함)", reach._interp_reach(pp, 10 ** 9) 
 ck("빈 곡선은 0", reach._interp_reach([], 100.0) == 0.0)
 
 
+print(chr(10) + "=== 🔴 내려 둔 행(is_active=FALSE)을 쓰지 않는다 ===")
+# 🔴 실측(2026-10-22): 뷰는 is_active=FALSE 행을 걸러 주지 «않는다».
+#     is_active=False 행 2(ok 2) · True 41(ok 20)
+#   그리고 KR·30일·none 을 걸러 보면 3행이 나오는데 하필 «비활성 실험 칸 2개» 가
+#   먼저 왔다 — ok 안에 정렬 기준이 없어 순서가 임의였다. ok[0] 을 쓰므로 나는
+#   DB 가 내려 둔 칸의 곡선과 영수증을 쓰고 있었다.
+#   이 키는 곡선이 같아서(6,482,607) 숫자가 안 바뀌어 «안 보였다». 하지만 DB 가
+#   «틀려서» 내린 행이면 그대로 쓴다 — 그러면 is_active 가 아무 일도 하지 않는다.
+_sql = reach._rows_sql(5)
+ck("조회 SQL 이 is_active 를 거른다", "is_active" in _sql, _sql[:140])
+# ⚠️ IFNULL(is_active, TRUE) 여야 한다. NULL 을 비활성으로 보면 컬럼이 안 채워진
+#   행이 전부 사라져 화면이 조용히 빈다 — 「없다」와 「내렸다」는 다르다.
+ck("NULL 은 활성으로 본다(IFNULL ... TRUE)",
+   "IFNULL(is_active, TRUE)" in _sql, _sql[:140])
+# ok 끼리 순서가 임의면 영수증이 매번 달라질 수 있다 — 그러면 되물을 수 없다
+ck("ok 끼리 순서를 고정한다(fetched_at)", "fetched_at DESC" in _sql, _sql[:200])
+ck("앵커 조회도 활성만 본다", "IFNULL(is_active, TRUE)" in reach.ACTIVE_SQL
+   or reach.ACTIVE_SQL == "IFNULL(is_active, TRUE)", reach.ACTIVE_SQL)
+
 print(chr(10) + "=== 🔴 앵커를 격자에서 읽는다 (조합마다 다르다) ===")
 # 🔴 DB 45일 실측이 두 전제를 깼다.
 #   ① 45일이 들어오면서 앵커가 넷이 됐다 — 하드코딩한 (30,60,90) 은 이미 틀렸다.

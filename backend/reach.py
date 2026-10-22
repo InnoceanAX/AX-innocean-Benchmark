@@ -1463,16 +1463,38 @@ SYNTH_FULLCOVER_PCT = 89.6
 SYNTH_FULLCOVER_GAP_PCT = 10.4
 
 
+# 🔴 뷰는 is_active=FALSE 행을 걸러 주지 «않는다»(2026-10-22 실측). DB 가 실험
+#   칸을 내려도 내 조회에는 그대로 보이고, ok 안에서는 정렬 기준이 없어 하필
+#   «내려 둔 칸» 이 먼저 올 수 있다 — 실제로 그랬다. 그러면 is_active 가 아무
+#   일도 하지 않는 셈이다. 그래서 여기서 거른다.
+# ⚠️ IFNULL(is_active, TRUE) 다. NULL 을 비활성으로 보면 컬럼이 안 채워진 행이
+#   전부 사라져 화면이 조용히 빈다 — 「없다」와 「내렸다」는 다르다.
+ACTIVE_SQL = "IFNULL(is_active, TRUE)"
+
+
+def _rows_sql(limit=5):
+    """격자 조회 SQL — 순수 함수로 둬서 필터가 빠지면 테스트가 잡게 한다."""
+    return (f"SELECT * FROM {CURVE_VIEW} "
+            f"WHERE country=@mk AND flight_days=@fd "
+            f"AND IFNULL(targeting_key,'none')=@tk "
+            f"AND {ACTIVE_SQL} "
+            f"ORDER BY IF(IFNULL(curve_status,'')='ok',0,1), fetched_at DESC "
+            f"LIMIT {int(limit)}")
+
+
 def _curve_rows(market, flight_days, key, limit=5):
-    """격자에서 한 (국가·기간·조합) 의 행을 읽는다. ok 를 먼저 올린다."""
+    """격자에서 한 (국가·기간·조합) 의 «활성» 행을 읽는다. ok 를 먼저 올린다.
+
+    ⚠️ ok 끼리는 fetched_at 내림차순으로 묶는다. 전에는 ok 안에 정렬 기준이 없어
+      같은 조건에 여러 행이 있으면 «어느 것이 올지 몰랐다» — 영수증이 매번
+      달라질 수 있다는 뜻이고, 그러면 되물을 수 없다.
+    """
     c = _client()
     prm = [bigquery.ScalarQueryParameter("mk", "STRING", (market or "KR").upper()),
            bigquery.ScalarQueryParameter("fd", "INT64", int(flight_days or 30)),
            bigquery.ScalarQueryParameter("tk", "STRING", key)]
     return [dict(r) for r in c.query(
-        f"SELECT * FROM {CURVE_VIEW} "
-        f"WHERE country=@mk AND flight_days=@fd AND IFNULL(targeting_key,'none')=@tk "
-        f"ORDER BY IF(IFNULL(curve_status,'')='ok',0,1) LIMIT {int(limit)}",
+        _rows_sql(limit),
         job_config=bigquery.QueryJobConfig(query_parameters=prm)).result()]
 
 
@@ -1492,6 +1514,7 @@ def _grid_anchors(market, key):
             f"SELECT DISTINCT flight_days FROM {CURVE_VIEW} "
             f"WHERE country=@mk AND IFNULL(targeting_key,'none')=@tk "
             f"AND IFNULL(curve_status,'')='ok' AND flight_days IS NOT NULL "
+            f"AND {ACTIVE_SQL} "          # 내려 둔 실험 칸을 앵커로 쓰지 않는다
             f"ORDER BY flight_days",
             job_config=bigquery.QueryJobConfig(query_parameters=prm)).result()
         got = [int(r.flight_days) for r in rows]
