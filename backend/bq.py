@@ -154,6 +154,16 @@ STRAT_MAX_ROWS = 40   # 층화 표의 칸 수 상한(광고비 상위). 넘는 �
 # 필터 화이트리스트 (channel/agency는 캠페인 마트에만 존재 — 세그먼트/영상 소스엔 미적용)
 FILTERS = {"market", "objective", "brand", "industry", "agency", "channel"}
 CAMPAIGN_ONLY_FILTERS = {"agency", "channel"}   # 세그먼트/영상 소스엔 없는 컬럼
+# 🔴 브랜드 축에 «매체명» 이 섞여 있다 (DB 확인 2026-10-22, 수정 대기)
+#   v_perf_unified 의 brand 식이 광고주명과 캠페인명을 «이어붙여» 정규식을 한 번 건다.
+#   그래서 캠페인 이름의 매체 표기(`navergfa` · `네이버랜딩` · `_네이버`)가 브랜드로 읽힌다.
+#   실측: brand='naver' 22캠 ₩1.83억의 실제 광고주는 소니코리아·청정원·롯데칠성·삼양식품·
+#   로보락·스마이즈·광고온 — 서로 다른 회사다. 한 행에 묶으면 «네이버라는 브랜드» 로 읽힌다.
+#   ⚠️ 빼지 않는다. 빼면 ₩1.83억이 조용히 사라진다. 대신 «브랜드가 아니다» 를 화면이 말한다.
+#   DB 가 brand_source 열(ledger/advertiser_name/campaign_name/unresolved)을 노출하면
+#   그때 campaign_name 근거를 걸러 «엄밀한 축» 을 만든다.
+MEDIA_LIKE_BRANDS = {"naver", "kakao", "google", "meta", "youtube", "tiktok", "dv360"}
+
 CHANNEL_NAME = {"SEARCH": "검색", "DISPLAY": "디스플레이(배너)", "VIDEO": "동영상(YouTube)",
                 "DEMAND_GEN": "디맨드젠", "PERFORMANCE_MAX": "실적최대화(PMax)",
                 "MULTI_CHANNEL": "멀티채널", "SHOPPING": "쇼핑", "SMART": "스마트",
@@ -576,7 +586,15 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         if has_video:
             for c in EXTRA_COLS:
                 tex[c] += ex[c]
+        # 매체명이 브랜드 행으로 선 경우를 표시한다(위 MEDIA_LIKE_BRANDS 주석 참조)
+        _media_brand = (dim == "brand"
+                        and str(r["dim"] or "").strip().lower() in MEDIA_LIKE_BRANDS)
         row = {"dim": r["dim"], "name": dim_name(dim, r["dim"]), "n": r["n"],
+               "media_like_brand": _media_brand,
+               "media_like_note": ("이것은 브랜드가 아니라 «매체 이름» 입니다. 캠페인 이름에 "
+                                   "적힌 매체 표기가 브랜드로 잘못 읽힌 행이라, 서로 다른 "
+                                   "광고주 여럿이 한 줄에 묶여 있습니다. 브랜드 비교에 쓰지 "
+                                   "마십시오 — 원천 수정 대기 중입니다.") if _media_brand else None,
                # 표본이 적으면 중앙값·분위수가 흔들린다. 화면에서 경고 표시를 붙이기 위한 플래그.
                "n_low": (r["n"] or 0) < N_MIN_RELIABLE,
                "imp": _num(imp), "clicks": _num(clk), "spend": money(cost), "conv": _num(conv)}

@@ -292,6 +292,25 @@ def build_campaign(c):
         print("· v_perf_unified.objective_layer 감지 → 사전 기반 캠페인목표(정규식은 폴백)")
     else:
         obj = objective_case_sql(name_expr)
+    # ── 영상 형식 — DB 가 노출하면 자동으로 집어온다 (2026-10-22 합의) ──────────
+    # 🔴 서브타입만으로는 못 가른다. DB 실측(VIDEO · 90일): campaign_advertising_channel_
+    #   sub_type 이 UNSPECIFIED 94%(광고비 92%)이고 VIDEO_VIEW·VIDEO_REACH 값은 아예 없다.
+    #   진짜 신호는 «입찰전략» 이고 100% 채워져 있다:
+    #     TARGET_CPV × UNSPECIFIED          조회형   CPM  5,232원
+    #     TARGET_CPM × UNSPECIFIED          도달형   CPM  2,162원
+    #     FIXED_CPM  × VIDEO_NON_SKIPPABLE  예약형   CPM 17,127원
+    #   CPM 이 1,460~17,127원으로 11.7배 벌어진다 — 한 칸에 두면 VTR·CPV 비교가 형식
+    #   차이로 왜곡된다(업종×광고상품 층화와 같은 종류의 교란).
+    # ⚠️ 층화는 «입찰전략» 으로 한다. 서브타입으로 가르면 92%가 한 칸에 남는다.
+    _vb = "video_bidding_type" if _has_col(c, "v_perf_unified", "video_bidding_type") else ""
+    _vs = "video_sub_type" if _has_col(c, "v_perf_unified", "video_sub_type") else ""
+    vfmt = (f"ANY_VALUE(u.{_vb}) AS video_bidding_type," if _vb else
+            "CAST(NULL AS STRING) AS video_bidding_type,")
+    vfmt += (f" ANY_VALUE(u.{_vs}) AS video_sub_type," if _vs else
+             " CAST(NULL AS STRING) AS video_sub_type,")
+    if _vb or _vs:
+        print(f"· 영상 형식 컬럼 감지 → 마트에 적재 ({_vb or '-'} / {_vs or '-'})")
+
     gmap = _gname_union(c)
     join = f"LEFT JOIN ({gmap}) g ON CAST(u.campaign_id AS STRING)=g.cid" if gmap else "LEFT JOIN (SELECT '' cid, '' nm) g ON FALSE"
     cmap = _channel_map(c)
@@ -347,6 +366,7 @@ def build_campaign(c):
       {isrc} AS industry_source,
       {obj} AS objective,
       {osrc} AS objective_source,
+      {vfmt}
       u.brand AS brand,
       IFNULL(NULLIF(u.agency,''),'(미상)') AS agency,
       IFNULL(ch.ct,'(기타)') AS channel,

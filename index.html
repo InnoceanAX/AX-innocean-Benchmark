@@ -448,6 +448,12 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     if(key==='name'){
       var _v = dimDisp(curDim, String(r[key]==null?'':r[key]));
       // 업종 '기타' = 아직 분류되지 않은 것(DB 사전 미등재). 브랜드 'other' 와 달리 진짜 미상이다.
+      // 🔴 브랜드 축에 매체명이 섞여 있다 — 서로 다른 광고주 여럿이 한 줄에 묶여 있다.
+      //   빼면 금액이 조용히 사라지므로, 두되 «브랜드가 아니다» 를 글자로 말한다.
+      if(r.media_like_brand){
+        _v += ' <span class="isrc isrc-unresolved" title="'+esc(r.media_like_note||'')+
+              '">매체명 · 브랜드 아님</span>';
+      }
       if(curDim==='industry' && r[key]==='기타'){
         _v += ' <span class="isrc isrc-unresolved" title="업종이 아직 분류되지 않은 광고주들입니다.'
             + ' 사전(advertiser_industry)에 등재되면 해당 업종으로 옮겨갑니다.">분류 대기</span>';
