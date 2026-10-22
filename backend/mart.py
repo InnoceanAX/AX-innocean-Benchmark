@@ -697,6 +697,83 @@ def build_fx(c):
     return True
 
 
+UPSTREAM_VIEWS = [
+    "v_perf_unified", "v_perf_unified_meta_ext", "v_perf_unified_video",
+    "v_perf_unified_device", "v_perf_unified_age", "v_perf_unified_gender",
+    "v_meta_campaign_reach", "v_dplan_creative",
+]
+
+
+def check_upstream_contract(c):
+    """내가 소비하는 통합뷰의 «컬럼 집합» 을 기록하고, 바뀌면 알린다.
+
+    ★ 왜 필요한가 (DB 통지, 2026-10-22)
+      DB 가 `v_perf_unified` 에 «주인 모듈이 없었다» 는 것을 찾았고, 같은 구조가 8개 더
+      있습니다 — 프로덕션에 쓸 수 있는데 일일 훅에 없는 스크립트들입니다. 그중
+      `_build_meta_ext` · `_build_video_meta_union` · `_build_seg_union_views` 의 산물을
+      내가 읽습니다. 「레포 파일대로 돈다」고 가정하지 말라는 경고를 받았습니다.
+
+      뷰가 조용히 바뀌면 내 마트는 «에러 없이» 다른 숫자를 냅니다. 컬럼이 사라지면
+      _has_col 가드가 조용히 그 지표를 끄고, 컬럼이 생기면 나는 모른 채 안 씁니다.
+      둘 다 «실패» 가 아니라서 아무도 안 봅니다 — 그래서 빌드가 매번 대조합니다.
+
+    ⚠️ 막지 않는다. 알리기만 한다(빌드 실패가 더 나쁘다).
+    ⚠️ 스키마만 본다 — 행수는 뷰 전체 스캔이라 비싸고, 총량 변화는 기존 로그가 이미 잡는다.
+    """
+    tbl = f"`{PROJECT}.{MART_DS}.bm_upstream_contract`"
+    cur = {}
+    for v in UPSTREAM_VIEWS:
+        try:
+            t = c.get_table(f"{PROJECT}.apac_kr_unified.{v}")
+            cur[v] = sorted(f.name for f in t.schema)
+        except Exception:
+            cur[v] = None   # 없음 — 그것도 기록한다(사라진 것을 알아야 한다)
+
+    prev = {}
+    try:
+        for r in c.query(f"SELECT view_name, columns FROM {tbl}").result():
+            prev[r["view_name"]] = list(r["columns"]) if r["columns"] is not None else None
+    except Exception:
+        prev = {}
+
+    changed = 0
+    for v in UPSTREAM_VIEWS:
+        now, was = cur[v], prev.get(v, "__first__")
+        if was == "__first__":
+            continue                     # 첫 기록 — 비교 대상 없음
+        if now is None and was is not None:
+            print(f"· [계약 변경] {v} 가 «사라졌습니다» (이전 컬럼 {len(was)}개)"); changed += 1
+            continue
+        if now is not None and was is None:
+            print(f"· [계약 변경] {v} 가 «생겼습니다» (컬럼 {len(now)}개)"); changed += 1
+            continue
+        if now != was:
+            add = [x for x in now if x not in was]
+            rem = [x for x in was if x not in now]
+            print(f"· [계약 변경] {v}"
+                  + (f" · 추가 {', '.join(add[:6])}" if add else "")
+                  + (f" · 🔴 사라짐 {', '.join(rem[:6])}" if rem else ""))
+            if rem:
+                print("    ⚠️ 컬럼이 사라지면 _has_col 가드가 «조용히» 그 지표를 끕니다 — "
+                      "화면에서 지표가 없어진 것을 확인하십시오.")
+            changed += 1
+
+    rows = [{"view_name": v, "columns": cur[v], "_checked_at": None} for v in UPSTREAM_VIEWS]
+    try:
+        c.query(f"""CREATE OR REPLACE TABLE {tbl} AS
+        SELECT * FROM UNNEST([{','.join(
+            "STRUCT('" + v + "' AS view_name, " +
+            ("[" + ','.join("'" + x + "'" for x in cur[v]) + "]" if cur[v] is not None
+             else "CAST(NULL AS ARRAY<STRING>)") + " AS columns)"
+            for v in UPSTREAM_VIEWS)}])""").result()
+    except Exception as e:
+        print(f"· [경고] 계약 스냅샷 저장 실패: {str(e)[:90]}")
+
+    if not changed:
+        n_ok = sum(1 for v in UPSTREAM_VIEWS if cur[v] is not None)
+        print(f"· 업스트림 계약 변화 없음 ({n_ok}/{len(UPSTREAM_VIEWS)}개 뷰)")
+
+
 def check_upstream_freshness(c):
     """업스트림(google_ads DTS)이 이 빌드보다 늦게 도착했는지 확인해 로그로 남긴다.
 
@@ -792,6 +869,7 @@ def build():
         gaps.ask_db(c)      # 판단이 필요한 질의 발행 + 도착한 회신 로그 출력
     except Exception as _e:
         print(f"· [경고] 데이터-갭 요청 스킵: {str(_e)[:120]}")
+    check_upstream_contract(c)
     check_upstream_freshness(c)
     report_fallback_usage(c)
     n = list(c.query(
