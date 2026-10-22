@@ -467,7 +467,9 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
               String(r.media_like_note||'').replace(/"/g,'&quot;')+
               '">매체명 · 브랜드 아님</span>';
       }
-      if(curDim==='industry' && r[key]==='기타'){
+      // ⚠️ src_label 이 이미 '분류 대기' 를 띄운다. 둘 다 넣으면 '기타 분류 대기 분류 대기'
+      //   가 된다(실제로 그렇게 나갔다). 출처 배지가 없을 때만 우리가 붙인다.
+      if(curDim==='industry' && r[key]==='기타' && !r.src_label){
         _v += ' <span class="isrc isrc-unresolved" title="업종이 아직 분류되지 않은 광고주들입니다.'
             + ' 사전(advertiser_industry)에 등재되면 해당 업종으로 옮겨갑니다.">분류 대기</span>';
       }
@@ -2455,6 +2457,31 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   // ★ 왜 필요한가(실측): 수송/항공 업종의 CPM 이 검색 ₩37,107 vs 동영상 ₩1,668 로 22배다.
   //   업종만 보면 이 둘이 한 칸에 섞여, «업종 차이» 와 «채널 구성 차이» 를 구분할 수 없다.
   //   기본값은 업종이다 — 층화하면 칸이 40개로 늘어 처음 보는 사람에게는 읽기 어렵다.
+  // 표의 배지가 무슨 뜻인지 표 아래에 적는다. 배지만 있고 설명이 없으면
+  // 실무자가 «왜 이 줄만 다른가» 를 알 수 없고, 툴팁은 마우스를 올려야 보인다.
+  function mountLegend(){
+    var pg=document.getElementById('pgBM'); if(!pg) return;
+    var box=document.getElementById('bmLegend');
+    var tw=pg.querySelector('.twrap'); if(!tw) return;
+    if(!box){
+      box=document.createElement('div'); box.id='bmLegend';
+      box.style.cssText='font-size:11px;color:var(--tm);margin:8px 0 0;line-height:1.9';
+      tw.parentNode.insertBefore(box, tw.nextSibling);
+    }
+    var L=[
+      ['표본적음','비교군이 적어 중앙값·상위25%가 캠페인 한둘에 흔들립니다'],
+      ['견줄 수 없음','분자(매출·전환)를 추적한 캠페인이 너무 적어 0 이 아니라 «못 잼» 입니다'],
+      ['분포 넓음','같은 줄 안에서도 캠페인별 편차가 커 중앙값 하나로 보기 어렵습니다'],
+      ['광고주 N곳','그 업종에 광고주가 몇 곳뿐입니다 — 이 줄은 사실상 그 광고주의 성적표입니다'],
+      ['1위 N%','한 광고주가 그 업종 집행의 N% 를 차지합니다 — 업종 평균보다 그 광고주 값에 가깝습니다'],
+      ['추정 분류','업종이 광고주명 기반 추정입니다(운영팀 원장이 오면 확정값으로 바뀝니다)'],
+      ['분류 대기','업종이 아직 분류되지 않았습니다'],
+      ['매체명 · 브랜드 아님','브랜드가 아니라 매체 이름입니다 — 서로 다른 광고주가 한 줄에 묶여 있습니다']
+    ];
+    box.innerHTML='<b style="color:#000">표 안 표시의 뜻</b><br>'+L.map(function(x){
+      return '<span class="isrc isrc-rule" style="margin-right:4px">'+esc(x[0])+'</span>'+esc(x[1]);
+    }).join('<br>');
+  }
   function mountStratToggle(meta){
     var pg=document.getElementById('pgBM'); if(!pg) return;
     var box=document.getElementById('bmStrat');
@@ -2515,6 +2542,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       mountCaveats(m);
       mountBrandBasis();
       mountStratToggle(m);
+      mountLegend();
       var mx=Math.max.apply(null,rows.map(function(r){return r.n||0;}).concat([1]));
       el('bmRelList').innerHTML=
         (m.freshness?'<div style="font-size:11px;color:var(--tm);margin-bottom:10px">마트 최신 집행월 <b style="color:#000">'+
