@@ -240,10 +240,34 @@ def verify():
                 return r.status, r.read(200).decode("utf-8", "ignore")
         except Exception as e:
             return "ERR", str(e)[:120]
-    print("\n=== 라이브 검증:", uri, "===")
-    print(" /healthz:", hit("/api/v1/healthz"))
-    print(" /:", hit("/")[0], "(index)")
-    print(" /api/v1/benchmark?media=M:", hit("/api/v1/benchmark?media=M&date_from=2025-06-01&date_to=2026-06-08")[0])
+    # 🔴 전에는 상태 코드를 «찍기만» 했다. 500 이 나와도 그 아래에서
+    #   «✅ 배포 완료» 가 찍힌다 — 이미지 태그 건과 같은 뿌리다(성공을 보고하는 실패).
+    #   그래서 찍는 데 그치지 않고 200 이 아니면 예외를 던진다.
+    # ⚠️ 새로 만든 엔드포인트를 목록에 «같이» 넣는다. 검증이 옛 경로만 보면 새 기능이
+    #   깨진 채로 통과한다 — 실제로 /reach/synth 가 404 로 나와서야 알게 된 자리가 있다.
+    #   found:false 는 정상이다(격자가 아직 안 찬 조합) — 여기서 보는 것은 «응답하는가» 다.
+    CHECKS = [
+        ("/api/v1/healthz", "헬스"),
+        ("/", "index"),
+        ("/api/v1/benchmark?media=M&date_from=2025-06-01&date_to=2026-06-08", "벤치마크"),
+        ("/api/v1/reach/compare_providers?media=%EB%84%B7%ED%94%8C%EB%A6%AD%EC%8A%A4",
+         "도달 비교"),
+        ("/api/v1/reach/lookup?market=KR&flight_days=30", "곡선 조회"),
+        ("/api/v1/reach/synth?market=KR&flight_days=30&cells=25-34:Male,35-49:Male",
+         "조합 합성"),
+        ("/api/v1/reach/demo_coverage?market=KR&flight_days=30", "데모 커버리지"),
+    ]
+    print(chr(10) + "=== 라이브 검증:", uri, "===")
+    bad = []
+    for path, name in CHECKS:
+        st, body = hit(path)
+        ok = (st == 200)
+        print(f" {'OK  ' if ok else 'FAIL'} {name:<10} {st}  {path[:56]}")
+        if not ok:
+            bad.append(f"{name} {path[:58]} -> {st} {body[:70]}")
+    if bad:
+        raise RuntimeError("라이브 검증 실패 — 배포는 됐지만 동작하지 않습니다: "
+                           + " / ".join(bad))
     return uri
 
 
