@@ -1313,62 +1313,85 @@ def markets():
             "note": "표본이 적은 시장은 적합이 흔들려 목록에서 제외했습니다."}
 
 
-def lookup_curve(market="KR", flight_days=30, value_ids=None, media="",
-                 budget=2_000_000_000, points=20):
-    """고른 타게팅 조합의 곡선을 캐시에서 찾는다. 없으면 «왜 없는지» 를 돌려준다.
+# ── v1 타게팅 enum ────────────────────────────────────────────────
+# 🔴 v1 은 «연령 · 성별» 만 지원한다 (DB 스펙 실측 2026-10-22).
+#   device · genre · interest 는 스펙 전문 검색에서 0건이다 — v2 범위다.
+#   그래서 선택기에 기기 축을 두면 «영원히 격자에 없음» 으로만 답한다.
+# ⚠️ 아래 enum 은 일부만 «관측» 됐다(AGE_25_34 · AGE_35_49 · MALE).
+#   나머지는 같은 규칙으로 «유추» 한 것이고 확인되지 않았다. 안 맞으면 조회가
+#   «격자에 없음» 으로 떨어질 뿐 틀린 곡선을 보여주지는 않는다 — 그 실패는 안전하다.
+#   DB 가 netflix_targeting 에 enum 을 노출하면 유추를 버린다.
+V1_AGE_ENUM = {"18-24": "AGE_18_24", "25-34": "AGE_25_34", "35-49": "AGE_35_49",
+               "50-54": "AGE_50_54", "55-64": "AGE_55_64", "65+": "AGE_65_PLUS"}
+V1_GENDER_ENUM = {"Male": "MALE", "Female": "FEMALE"}
+V1_VERIFIED = {"AGE_25_34", "AGE_35_49", "MALE"}   # 실제 격자에서 본 것
 
-    ★ 조합을 «라벨» 이 아니라 «타게팅 값 ID 배열» 로 맞춘다.
-      라벨 형식(문자열 조합 규칙)은 DB 가 정하는 것이고, 내가 추측하면 한쪽이 바꿀 때
-      조용히 안 맞는다. ID 배열은 양쪽이 같은 것을 가리킨다.
 
-    ⚠️ 못 찾은 것과 «계산 실패» 는 다르다.
-      미등록   격자에 이 조합이 없다 → 다음 야간 목록에 넣으면 생긴다
-      미조회   격자엔 있는데 아직 안 불렀다 → 기다리면 생긴다(일 50회라 며칠 걸린다)
-      불가     벤더가 거절한 조건이다 → 기다려도 안 생긴다. 조건을 바꿔야 한다
-      이 셋을 한 칸에 넣으면 플래너가 «안 되는 것» 과 «아직인 것» 을 구분 못 한다.
+def targeting_key(age_name="", gender_name=""):
+    """선택 → 격자의 targeting_key. 아무것도 안 고르면 'none'.
+
+    형식은 격자에서 관측한 그대로다: 'none' · 'age=AGE_25_34|gender=MALE'
+    ⚠️ 라벨(사람용)로 맞추지 않는다 — DB 가 «맞추는 데 쓰지 말라» 고 명시했다.
     """
-    ids = [x for x in (value_ids or []) if x]
+    parts = []
+    a = V1_AGE_ENUM.get((age_name or "").strip())
+    g = V1_GENDER_ENUM.get((gender_name or "").strip())
+    if a:
+        parts.append(f"age={a}")
+    if g:
+        parts.append(f"gender={g}")
+    return "|".join(parts) if parts else "none", [x for x in (a, g) if x]
+
+
+def lookup_curve(market="KR", flight_days=30, age_name="", gender_name="",
+                 media="", budget=2_000_000_000, points=20):
+    """고른 조합의 곡선을 캐시에서 찾는다. 없으면 «왜 없는지» 를 돌려준다.
+
+    ⚠️ 못 찾은 것과 «계산 실패» 는 다르다 — 셋을 갈라 답한다:
+      미등록   격자에 이 조합이 없다 → 다음 야간 목록에 넣으면 생긴다
+      미조회   격자엔 있는데 아직 안 불렀다 → 기다리면 생긴다(일 50회)
+      불가     벤더가 거절했다 → 기다려도 안 생긴다. 조건을 바꿔야 한다
+    """
+    key, enums = targeting_key(age_name, gender_name)
+    unverified = [e for e in enums if e not in V1_VERIFIED]
     if not _view_exists(CURVE_VIEW):
-        return {"found": False, "state": "no_cache",
+        return {"found": False, "state": "no_cache", "key": key,
                 "note": ("도달 곡선 캐시가 아직 만들어지지 않았습니다. "
                          "야간 선계산이 시작되면 조합별로 채워집니다.")}
     c = _client()
-    where = ["country = @mk", "flight_days = @fd"]
     prm = [bigquery.ScalarQueryParameter("mk", "STRING", (market or "KR").upper()),
-           bigquery.ScalarQueryParameter("fd", "INT64", int(flight_days or 30))]
-    if ids:
-        # 고른 값이 «전부» 들어 있고, 개수도 같은 행 (부분 일치를 같은 조합으로 보지 않는다)
-        where.append("ARRAY_LENGTH(targeting_value_ids) = @n")
-        prm.append(bigquery.ScalarQueryParameter("n", "INT64", len(ids)))
-        for i, v in enumerate(ids):
-            where.append(f"@v{i} IN UNNEST(targeting_value_ids)")
-            prm.append(bigquery.ScalarQueryParameter(f"v{i}", "STRING", v))
-    else:
-        where.append("ARRAY_LENGTH(IFNULL(targeting_value_ids, [])) = 0")
+           bigquery.ScalarQueryParameter("fd", "INT64", int(flight_days or 30)),
+           bigquery.ScalarQueryParameter("tk", "STRING", key)]
     try:
         rows = [dict(r) for r in c.query(
-            f"SELECT * FROM {CURVE_VIEW} WHERE {' AND '.join(where)} LIMIT 5",
+            f"SELECT * FROM {CURVE_VIEW} "
+            f"WHERE country=@mk AND flight_days=@fd AND IFNULL(targeting_key,'none')=@tk "
+            f"ORDER BY IF(IFNULL(curve_status,'')='ok',0,1) LIMIT 5",
             job_config=bigquery.QueryJobConfig(query_parameters=prm)).result()]
     except Exception as e:
-        return {"found": False, "state": "error", "note": f"조회 실패: {str(e)[:120]}"}
+        return {"found": False, "state": "error", "key": key,
+                "note": f"조회 실패: {str(e)[:120]}"}
 
     if not rows:
-        return {"found": False, "state": "not_in_grid",
+        n = ("" if not unverified else
+             " (고른 조건의 내부 코드가 아직 확인되지 않아, 격자에 있어도 못 찾을 수 있습니다)")
+        return {"found": False, "state": "not_in_grid", "key": key,
                 "note": ("이 조합은 아직 «계산 대기» 입니다 — 미리 계산된 목록에 없습니다. "
-                         "호출 한도가 일 50회라 자주 쓰는 조합부터 채웁니다. "
-                         "이 조합이 필요하시면 다음 야간 목록에 넣어 드립니다.")}
+                         "호출 한도가 일 50회라 자주 쓰는 조합부터 채웁니다." + n)}
     import datetime
     cpm, cpm_src = _cpm(media or "", market or "", datetime.date.today().isoformat())
     parsed, why = points_from_cache(rows, cpm, budget, points)
     if parsed is None:
         st = (rows[0].get("curve_status") or "not_requested")
         meta = CURVE_STATUS.get(st, {})
-        return {"found": False, "state": st, "note": why,
+        return {"found": False, "state": st, "key": key, "note": why,
                 "can_wait": st in ("not_requested", "fetch_failed"),
                 "label": meta.get("label", st)}
-    return {"found": True, "state": "ok", "points": parsed["points"],
-            "warnings": parsed["warnings"], "population": parsed.get("population"),
-            "max_reach": parsed["max_reach"],
+    return {"found": True, "state": "ok", "key": key,
+            "targeting_label": rows[0].get("targeting_label"),
+            "points": parsed["points"], "warnings": parsed["warnings"],
+            "population": parsed.get("population"), "max_reach": parsed["max_reach"],
+            "implied_b": rows[0].get("implied_b"),
             "cpm": round(cpm, 2), "cpm_source": cpm_src}
 
 

@@ -2158,18 +2158,25 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   // 🔴 «격자에 없음» · «아직 안 부름» · «벤더가 거절» 을 다른 말로 보여준다.
   //   한 칸에 넣으면 플래너가 «안 되는 것» 과 «아직인 것» 을 구분 못 한다 —
   //   전자는 조건을 바꿔야 하고 후자는 기다리면 생긴다.
-  var NFX_PICK={age:'',gender:'',device:''};
+  var NFX_PICK={age:'',gender:''};
   function rsPickInit(dims){
     var box=el('rsPick'); if(!box||!dims) return;
-    var AX=[['age','Age','연령'],['gender','Gender','성별'],['device','Device','기기']];
+    // 🔴 v1 은 «연령 · 성별» 만 지원한다(DB 스펙 실측 2026-10-22).
+    //   기기·장르·관심사는 v2 범위라, 축을 두면 «영원히 계산 대기» 로만 답한다.
+    //   비활성으로 두되 «왜 없는지» 는 보여준다 — 없애면 다음 사람이 또 넣는다.
+    var AX=[['age','Age','연령'],['gender','Gender','성별']];
     var html='<div style="font-size:11px;font-weight:700;margin-bottom:6px">조합 선택</div>';
     AX.forEach(function(a){
       var vals=dims[a[1]]||[];
       html+='<div class="fcell" style="margin-bottom:6px"><label>'+a[2]+'</label>'+
         '<select data-nfx="'+a[0]+'"><option value="">전체</option>'+
-        vals.map(function(v){ return '<option value="'+esc(v.id)+'">'+esc(v.name)+'</option>'; }).join('')+
+        vals.map(function(v){ return '<option value="'+esc(v.name)+'">'+esc(v.name)+'</option>'; }).join('')+
         '</select></div>';
     });
+    html+='<div class="fcell" style="margin-bottom:6px;opacity:.45">'+
+      '<label>기기</label><select disabled><option>v2 대기</option></select></div>'+
+      '<div style="font-size:10px;color:var(--tm);margin:-2px 0 6px">'+
+      '기기·장르·관심사는 현재 API(v1)가 지원하지 않습니다 — v2 제공 시 열립니다.</div>';
     html+='<div id="rsPickOut" style="font-size:11px;margin-top:6px"></div>';
     box.innerHTML=html;
     Array.prototype.forEach.call(box.querySelectorAll('[data-nfx]'), function(sel){
@@ -2184,13 +2191,15 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     var q=qs({market:(el('rsMarket')&&el('rsMarket').value)||'KR',
               flight_days:(el('rsDays')&&el('rsDays').value)||30,
               media:el('rsMedia')?el('rsMedia').value:'',
-              age:NFX_PICK.age, gender:NFX_PICK.gender, device:NFX_PICK.device});
+              age:NFX_PICK.age, gender:NFX_PICK.gender});
     out.innerHTML='<span style="color:var(--tm)">조회 중…</span>';
     j(API+'/reach/lookup?'+q).then(function(d){
       if(d.found){
         var last=(d.points||[])[d.points.length-1]||{};
-        out.innerHTML='<b style="color:#1F7A3D">곡선 있음</b> — 최대 도달 '+
-          (d.max_reach||0).toLocaleString()+'명'+
+        out.innerHTML='<b style="color:#1F7A3D">곡선 있음</b>'+
+          (d.targeting_label?(' <span style="color:var(--tm)">('+esc(d.targeting_label)+')</span>'):'')+
+          ' — 최대 도달 '+
+          (d.max_reach||0).toLocaleString()+' 프로필'+
           (last.cost?(' · 예산 '+(last.cost/100000000).toFixed(1)+'억 기준'):'')+
           ((d.warnings||[]).length?('<br><span style="color:#B45309">'+
             esc(d.warnings[0])+'</span>'):'');

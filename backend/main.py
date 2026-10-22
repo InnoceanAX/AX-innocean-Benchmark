@@ -241,7 +241,7 @@ def reach_compare_providers(budget: float = 2_000_000_000, media: str = "",
 
 @app.get("/api/v1/reach/lookup")
 def reach_lookup(market: str = "KR", flight_days: int = 30, media: str = "",
-                 age: str = "", gender: str = "", device: str = "",
+                 age: str = "", gender: str = "",
                  budget: float = 2_000_000_000, points: int = 20):
     """고른 타게팅 조합의 곡선 조회 — 없으면 «왜 없는지» 를 답한다.
 
@@ -249,10 +249,11 @@ def reach_lookup(market: str = "KR", flight_days: int = 30, media: str = "",
        한 칸에 넣으면 플래너가 «안 되는 것» 과 «아직인 것» 을 구분하지 못한다.
     """
     try:
+        # ⚠️ v1 은 연령·성별만 지원한다 — 기기 축은 v2 범위다(DB 스펙 실측).
+        #   이름으로 받아 서버가 격자 키(targeting_key)를 만든다. 라벨로 맞추지 않는다.
         return JSONResponse(reach.lookup_curve(
             market=market, flight_days=flight_days, media=media,
-            value_ids=[x for x in (age, gender, device) if x],
-            budget=budget, points=points))
+            age_name=age, gender_name=gender, budget=budget, points=points))
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"found": False, "state": "error", "note": str(e)},
                             status_code=500)
