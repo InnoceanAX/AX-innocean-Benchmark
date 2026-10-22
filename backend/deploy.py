@@ -221,6 +221,25 @@ def deploy_mart_job(digest=""):
           + (" (다이제스트 고정·되읽음)" if digest else ""))
 
 
+def check_contract_here():
+    """🔑 상류 계약 변화를 «내 터미널에» 찍는다.
+
+    스모크 안에서도 돌지만 그 출력은 Job 로그로 가고 색인이 늦다. 계약 감시는
+    메타데이터 조회뿐이라(테이블 스캔 0바이트) 여기서 돌려도 공짜고, 배포 SA 는
+    Job 런타임 SA 와 같은 신원이라 «보는 것» 도 같다.
+
+    ⚠️ 막지 않는다. 알리기만 한다 — 상류가 바뀌었다고 내 배포를 세우면 안 된다
+      (그쪽이 격자를 채우는 것만으로 내 배포가 멈추는 자리를 이미 한 번 겪었다).
+    """
+    try:
+        from google.cloud import bigquery as _bq
+        import mart as _mart
+        _mart.check_upstream_contract(_bq.Client(project=PROJECT))
+    except Exception as e:  # noqa: BLE001
+        print(f"· [알림] 상류 계약 대조 실패: {str(e)[:90]} — "
+              "«변화가 없다는 뜻이 아닙니다»")
+
+
 def smoke_mart_job():
     """🔑 공짜 스모크 — 마트 Job 을 «--smoke» 로 클라우드에서 1회 돌린다.
 
@@ -239,9 +258,74 @@ def smoke_mart_job():
         return
     ok = wait_job_exec(name if name.startswith("projects/") else name)
     if not ok:
-        raise RuntimeError("마트 Job 스모크 실패 — 이미지가 실행되지 않습니다. "
-                           "Job 로그를 보십시오(빌드 이전 단계 문제입니다).")
+        print_job_logs(name, head="스모크 실패 로그")
+        raise RuntimeError("마트 Job 스모크 실패 — 이미지가 실행되지 않습니다.")
     print("· 마트 Job 스모크 통과 (벤더·풀스캔 없음)")
+    # ⚠️ 스모크의 상류 계약 출력은 Job 로그로 가고 색인이 배포 창보다 늦다
+    #   (실측: 32초 재시도로도 0건). 그래서 긁어오지 않고 check_contract_here() 로
+    #   «여기서» 다시 돌려 내 터미널에 찍는다 — 같은 신원이라 보는 것도 같다.
+
+
+def print_job_logs(exec_name, only=None, head="Job 로그", limit=40):
+    """Job 실행의 로그를 가져와 찍는다. only 가 있으면 그 말이 든 줄만.
+
+    ⚠️ 로그 조회가 실패해도 배포를 멈추지 않는다 — 로그는 «알림» 이고 배포 성공의
+      조건이 아니다. 다만 실패했다는 사실은 적는다(조용히 비면 「변화 없음」 으로 읽힌다).
+    """
+    short = (exec_name or "").split("/")[-1]
+    if not short:
+        return
+    try:
+        body = {
+            "resourceNames": [f"projects/{PROJECT}"],
+            "filter": (f'resource.type="cloud_run_job" '
+                       f'labels."run.googleapis.com/execution_name"="{short}"'),
+            "orderBy": "timestamp asc", "pageSize": 200,
+        }
+        # ⚠️ Cloud Logging 색인이 몇 초~수십 초 늦는다. 실측: 배포 직후 0건이었다가
+        #   «같은 필터» 로 몇 분 뒤 7줄이 왔다. 그래서 몇 번 다시 부른다.
+        entries, raw = [], 0
+        for attempt in range(4):
+            r = S.post("https://logging.googleapis.com/v2/entries:list", json=body)
+            if r.status_code != 200:
+                print(f"  · [알림] 스모크 로그를 못 읽었습니다({r.status_code}) — "
+                      f"변화가 없다는 뜻이 아닙니다")
+                return
+            entries = r.json().get("entries") or []
+            raw = len(entries)
+            if raw:
+                break
+            if attempt < 3:
+                time.sleep(8)
+        lines = []
+        for e in entries:
+            t = e.get("textPayload") or ""
+            if not t:
+                continue
+            for ln in t.splitlines():
+                ln = ln.strip()
+                if not ln:
+                    continue
+                if only and not any(k in ln for k in only):
+                    continue
+                lines.append(ln)
+        if not lines:
+            # 🔴 「항목이 하나도 없다」 와 「항목은 있는데 해당 줄이 없다」 는 다르다.
+            #   앞은 «모른다» 이고 뒤만 «변화 없음» 이다. 섞으면 조회 실패가 안심으로
+            #   보인다 — 실제로 그렇게 찍고 있었다(2026-10-22).
+            if raw == 0:
+                print(f"  · {head}: 🔴 로그를 못 가져왔습니다(색인 지연일 수 있음) — "
+                      "«변화가 없다는 뜻이 아닙니다». Job 로그를 직접 보십시오.")
+            elif only:
+                print(f"  · {head}: 없음 (로그 {raw}건을 읽었고 그중 해당 줄 없음 "
+                      "= 상류 계약 변화 없음)")
+            return
+        print(f"  · {head}:")
+        for ln in lines[:limit]:
+            print(f"      {ln[:150]}")
+    except Exception as e:  # noqa: BLE001
+        print(f"  · [알림] 스모크 로그 조회 실패: {str(e)[:70]} — "
+              "변화가 없다는 뜻이 아닙니다")
 
 
 def deploy_scheduler():
@@ -452,6 +536,8 @@ def main():
         #   20분이라 못 한다고 생각했는데, 확인하고 싶은 것 대부분은 공짜다 —
         #   스키마 조회는 메타데이터라 테이블 스캔이 0바이트다(DB 의 --dry-run 과 같은 길).
         smoke_mart_job()
+        # 상류 계약 변화를 내 터미널에 찍는다 (스모크 로그는 색인이 늦어 안 보인다)
+        check_contract_here()
     if a.full:
         run_mart_job_now_wait()  # 마트 즉시 재빌드(야간을 기다리지 않을 때)
     verify()

@@ -26,7 +26,10 @@ def _ir(n=100, scale=1.0):
 # 🔴 기본 scope 는 «unknown» 이다 — v1 격자 22/22 가 그 값이다(DB 실측).
 #   전에 "advertiser" 였는데 그건 프로덕션에 없는 값이고, 기본값이 현실과
 #   다르면 모든 테스트가 «없는 모양» 위에서 돈다.
-def _row(status="ok", pts=100, scope="unknown", arr=None):
+# 🔴 기본 pts 는 82 다 — 실제 응답은 74~86 이다(DB 실측). 전에 100 이었는데
+#   그건 스펙 문서의 값이고 현실에 없다. 「점 수와 무관하다」 를 테스트하면서
+#   «모든» 테스트가 없는 곡선 길이 위에서 돌고 있었다 — scope 와 같은 자리다.
+def _row(status="ok", pts=82, scope="unknown", arr=None):
     return {"curve_status": status, "points": pts, "ad_account_scope": scope,
             "impression_reach": _ir(pts) if arr is None else arr,
             "country": "KR", "flight_days": 30}
@@ -393,6 +396,36 @@ ck("왼쪽 밖은 첫 값", reach._interp_reach(pp, 10.0) == 100.0)
 ck("오른쪽 밖은 끝 값(외삽 안 함)", reach._interp_reach(pp, 10 ** 9) == 300.0)
 ck("빈 곡선은 0", reach._interp_reach([], 100.0) == 0.0)
 
+
+print(chr(10) + "=== 🔴 fetch_failed 는 두 가지 답을 뜻한다 (재시도 남음 / 멈춤) ===")
+# 🔴 DB 가 재시도 캡(4회)과 attempts 열을 넣었다. 같은 상태값인데 답이 다르다 —
+#   재시도가 남았으면 「기다리면 생길 수 있다」, 캡에 걸렸으면 「기다려도 안 생긴다」.
+#   가르지 않으면 플래너를 영원히 기다리게 한다.
+# ⚠️ NULL 은 «아직 안 멈췄다» 다. 옛 행 전부가 NULL 이라(실측 41행) NULL 을 캡으로
+#   보면 멀쩡한 대기 칸이 「안 생긴다」 로 나간다.
+for att, want, why in ((None, "fetch_failed", "NULL(옛 행)은 기다릴 수 있다"),
+                       (1, "fetch_failed", "1회면 재시도가 남았다"),
+                       (3, "fetch_failed", "3회는 캡(4) 미만이다"),
+                       (4, "fetch_failed_capped", "4회는 캡 도달이다"),
+                       (9, "fetch_failed_capped", "캡을 넘은 것도 멈춤이다")):
+    got, n = reach.fetch_failed_state(att)
+    ck(f"attempts={att} → {want} ({why})", got == want, got)
+ck("캡 도달은 «기다려도 안 생긴다» 고 적는다",
+   "기다려도 생기지 않습니다"
+   in reach.CURVE_STATUS["fetch_failed_capped"]["note"])
+ck("재시도 남은 쪽은 «생길 수 있다» 고 적는다",
+   "생길 수 있습니다" in reach.CURVE_STATUS["fetch_failed"]["note"])
+ck("두 문구가 다르다",
+   reach.CURVE_STATUS["fetch_failed"]["note"]
+   != reach.CURVE_STATUS["fetch_failed_capped"]["note"])
+# 🔴 스펙 에러표에 422 가 없다(200·400·401·404·429·500 뿐). 422 는 v2 검토에서 나온
+#   미회신 질문이고 v1 이 억제를 어떻게 알리는지 모른다 — 화면에 코드를 박으면
+#   보는 사람은 확인된 사실로 읽는다.
+ck("suppressed 문구에 «422» 를 적지 않는다",
+   "422" not in reach.CURVE_STATUS["suppressed"]["note"],
+   reach.CURVE_STATUS["suppressed"]["note"][:60])
+ck("어느 상태 문구에도 안 쟀거나 없는 코드를 박지 않는다",
+   not any("422" in (v.get("note") or "") for v in reach.CURVE_STATUS.values()))
 
 print(chr(10) + "=== 🔴 내려 둔 행(is_active=FALSE)을 쓰지 않는다 ===")
 # 🔴 실측(2026-10-22): 뷰는 is_active=FALSE 행을 걸러 주지 «않는다».

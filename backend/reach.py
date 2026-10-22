@@ -759,7 +759,11 @@ CURVE_STATUS = {
     #   이 상태값을 구글·메타 곡선도 쓰게 되면서 틀린 벤더 이름이 화면에 나간다.
     #   테스트(test_reach_cache.py)가 이걸 드러냈다.
     "suppressed":    {"label": "벤더 미공개", "usable": False,
-                      "note": "모집단이 작아 매체가 출력을 억제한 조건입니다(미공개, 422). "
+                      # ⚠️ 전에 「(미공개, 422)」 라고 코드를 박아 뒀다. v1 스펙 에러표에
+                      #   422 가 «없다»(200·400·401·404·429·500 뿐) — 422 는 v2 검토에서
+                      #   나온 미회신 질문이고, v1 이 억제를 어떻게 알리는지 우리는 모른다.
+                      #   화면에 코드를 적으면 보는 사람은 확인된 사실로 읽는다.
+                      "note": "모집단이 작아 매체가 출력을 억제한 조건입니다. "
                               "도달이 0 이라는 뜻이 아닙니다."},
     "not_permitted": {"label": "사용 불가 조건", "usable": False,
                       "note": "이 계정·국가로는 쓸 수 없는 조건입니다(403). "
@@ -767,6 +771,13 @@ CURVE_STATUS = {
     "fetch_failed":  {"label": "수집 실패", "usable": False,
                       "note": "호출이 실패한 조건입니다(429/5xx/타임아웃). 우리 쪽 문제이고, "
                               "다시 부르면 값이 생길 수 있습니다."},
+    # 🔴 fetch_failed 인데 «자동 재시도가 멈춘» 칸. 위와 상태값은 같지만 답이 다르다 —
+    #   위는 「기다리면 생길 수 있다」 이고 이쪽은 「기다려도 안 생긴다」 다.
+    #   가르지 않으면 플래너를 영원히 기다리게 한다.
+    "fetch_failed_capped": {"label": "수집 실패(재시도 중단)", "usable": False,
+                            "note": "여러 번 시도했지만 계속 실패한 조건입니다. 자동 "
+                                    "재시도가 멈췄으므로 «기다려도 생기지 않습니다» — "
+                                    "담당자가 원인을 확인해야 합니다."},
     "not_requested": {"label": "아직 조회 전", "usable": False,
                       "note": "격자에는 있으나 아직 호출하지 않았습니다. 호출 한도가 일 50회라 "
                               "격자가 며칠에 걸쳐 채워집니다 — 기다리면 생깁니다."},
@@ -990,6 +1001,27 @@ def _vendor_curve_counts(view, market=""):
 #   ⚠️ 측정한 것은 «세 값에서 불변이었다» 이고 «어떤 이름에도 불변» 이 아니다.
 #     그리고 v1 한정이다 — v2 는 /v2/ad-accounts/{id}/… 로 계정이 경로에 들어가므로
 #     그때 다시 재야 한다. 그 전에 v2 로 옮기면 이 전제가 조용히 깨진다.
+# DB 의 재시도 캡을 «거울» 로 둔다 (DB MAX_ATTEMPTS = 4, 2026-10-22).
+#   ⚠️ 두 코드베이스에 같은 숫자가 있으면 어긋날 수 있다. 그래서 숫자로 단정하지 않고
+#     «실제 시도 횟수» 를 화면에 적고, 이 값을 넘으면 「DB 가 캡을 올렸다」 고 알린다.
+#   NULL 은 «아직 안 멈췄다» 로 본다 — 옛 행 전부가 NULL 이다(실측 41행).
+#   NULL 을 캡 도달로 보면 멀쩡한 대기 칸이 「안 생긴다」 로 나간다.
+RETRY_CAP_MIRROR = 4
+
+
+def fetch_failed_state(attempts):
+    """fetch_failed 한 칸이 «기다릴 수 있는가». (상태키, 시도횟수표시)"""
+    if attempts is None:
+        return "fetch_failed", None
+    try:
+        n = int(attempts)
+    except (TypeError, ValueError):
+        return "fetch_failed", None
+    if n >= RETRY_CAP_MIRROR:
+        return "fetch_failed_capped", n
+    return "fetch_failed", n
+
+
 CURVE_SCOPE_V1_NOTE = ("ℹ️ 이 곡선은 광고 계정과 무관합니다 — 넷플릭스 v1 은 광고주·브랜드를 "
                        "예측 입력으로 쓰지 않습니다(서로 다른 세 광고주로 호출해 86개 점이 "
                        "모두 같았습니다). 전사 공용으로 읽으셔도 됩니다.")
@@ -1986,10 +2018,26 @@ def lookup_curve(market="KR", flight_days=30, age_name="", gender_name="",
     parsed, why = points_from_cache(rows, cpm, budget, points)
     if parsed is None:
         st = (rows[0].get("curve_status") or "not_requested")
+        att = None
+        if st == "fetch_failed":
+            # 🔴 같은 상태값이 두 가지 답을 뜻한다 — 재시도가 남았는가 멈췄는가.
+            #   가르지 않으면 멈춘 칸을 두고 플래너가 영원히 기다린다.
+            st, att = fetch_failed_state(rows[0].get("attempts"))
         meta = CURVE_STATUS.get(st, {})
-        return {"found": False, "state": st, "key": key, "note": why,
-                "can_wait": st in ("not_requested", "fetch_failed"),
-                "label": meta.get("label", st)}
+        out = {"found": False, "state": st, "key": key,
+               "note": meta.get("note") or why,
+               "can_wait": st in ("not_requested", "fetch_failed"),
+               "label": meta.get("label", st)}
+        if att is not None:
+            out["attempts"] = att
+            # ⚠️ 거울 상수를 넘으면 DB 가 캡을 올린 것이다 — 조용히 넘기지 않는다
+            if att > RETRY_CAP_MIRROR:
+                out["note"] += (f" (시도 {att}회 — 저희가 아는 재시도 한도"
+                                f"({RETRY_CAP_MIRROR}회)보다 많습니다. 수집 쪽 설정이 "
+                                "바뀐 것으로 보입니다.)")
+            else:
+                out["note"] += f" (시도 {att}회)"
+        return out
     return {"found": True, "state": "ok", "key": key,
             "targeting_label": rows[0].get("targeting_label"),
             "points": parsed["points"], "warnings": parsed["warnings"],
