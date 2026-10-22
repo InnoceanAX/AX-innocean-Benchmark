@@ -397,6 +397,48 @@ ck("20일은 보간하지 않는다(None)", reach._interp_duration(
 ck("30일(앵커 자체)은 보간 경로가 아니다", reach._interp_duration(
     "KR", 30, "none", "넷플릭스", 10 ** 15, 8) is None)
 
+print(chr(10) + "=== 보간: 실측 없이 되는 검사 둘 ===")
+# ★ DB 와 정한 순서 — 실측이 필요 없는 검사를 «먼저» 대고 그 다음에 45일 실측에 댄다.
+#   둘 다 벤더 호출 0회로 판정된다.
+
+# INV(interp-identity)
+# 두 앵커가 같은 곡선이면 보간은 그 곡선이어야 한다. 가중치·격자 합성이 값을
+#   흔들면 여기서 틀어진다 — 실측과 대기 «전에» 걸러지는 종류다.
+SAME = _pw(47_047_000, 6_482_607, 0.8903)
+_dur_same = {30: SAME, 60: SAME}
+reach._ok_pairs = lambda mk, fd, k: (
+    ((_dur_same[fd], {"targeting_label": "전체", "ad_account_scope": "unknown"}), None)
+    if fd in _dur_same else (None, "격자에 없습니다"))
+reach._grid_anchors = lambda mk, k: [30, 60]
+for fd in (35, 45, 55):
+    r = reach._interp_duration("KR", fd, "none", "넷플릭스", 10 ** 15, 8)
+    ck(f"같은 앵커 두 개면 {fd}일도 그 곡선 그대로 ({6_482_607:,})",
+       r and abs(r["max_reach"] - 6_482_607) <= 1, (r or {}).get("max_reach"))
+
+# INV(interp-rejects-non-monotone)
+# 🔴 처음에 이 검사를 _ok_pairs 를 «가짜로 덮어» 썼다. 그런데 단조성 가드가 바로
+#   그 안에 있다(points_from_cache) — 가드를 지나쳐 깨진 곡선을 직접 넣었으니
+#   보간이 곡선을 만든 것이 당연했고, 나는 그걸 «코드 결함» 으로 읽을 참이었다.
+#   검사가 «진짜 경로» 를 타는가가 관건이다. 그래서 가드가 있는 자리를 댄다.
+_BROKEN_ROW = {"curve_status": "ok", "points": 4, "ad_account_scope": "unknown",
+               "country": "KR", "flight_days": 60,
+               "impression_reach": [{"impression": 1000, "reach": 500},
+                                    {"impression": 2000, "reach": 900},
+                                    {"impression": 3000, "reach": 700},   # 줄어든다
+                                    {"impression": 4000, "reach": 1200}]}
+_real_curve_rows = reach._curve_rows
+reach._ok_pairs = _real_ok_pairs            # 가드가 든 실제 함수로 되돌린다
+reach._curve_rows = lambda mk, fd, k, limit=5: [_BROKEN_ROW]
+_pairs_bad, _why_bad = reach._ok_pairs("KR", 60, "none")
+ck("깨진 앵커는 «읽는 단계» 에서 걸러진다(보간에 도달하지 않는다)",
+   _pairs_bad is None and "줄어드는" in (_why_bad or ""), _why_bad)
+reach._curve_rows = _real_curve_rows
+
+# ⚠️ 전역을 덮었으니 되돌린다. 안 되돌려서 뒤의 테스트 2건이 깨진 적이 있다 —
+#   테스트가 서로를 오염시키면 어느 것이 진짜 실패인지 모른다.
+reach._ok_pairs = _dur_ok_pairs
+reach._grid_anchors = lambda mk, k: [30, 60, 90]
+
 print("\n=== 보간 헬퍼 ===")
 pp = [(1000.0, 100.0), (2000.0, 180.0), (4000.0, 300.0)]
 ck("구간 안은 선형", abs(reach._interp_reach(pp, 1500.0) - 140.0) < 1e-6)

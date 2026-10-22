@@ -1658,6 +1658,14 @@ def _slice_synthetic(pairs, src_row, cpm, budget, points, extra_warn):
     return parsed, None
 
 
+# INVARIANT(interp-identity): 두 앵커가 «같은» 곡선이면 보간은 그 곡선을 그대로
+#   돌려준다. 가중치나 격자 합성이 값을 흔들면 여기서 틀어진다.
+# INVARIANT(interp-rejects-non-monotone): 단조가 깨진 앵커로는 곡선을 만들지
+#   않는다. 🔑 가드는 points_from_cache 에 있고 _ok_pairs 가 그걸 거친다 —
+#   앵커를 «읽는 단계» 에서 걸러지므로 보간에 깨진 곡선이 도달하지 않는다.
+#   ⚠️ 보간 자체는 그 보장을 못 한다: 깨진 앵커를 섞으면 움푹한 데가 메워져
+#     결과가 단조로 «보일» 수 있다(실측 확인). 가드를 상류에서 옮기면 이
+#     빈자리가 열리므로, 테스트는 가드가 있는 자리를 댄다.
 def _interp_duration(market, flight_days, key, media, budget, points):
     """격자에 없는 기간을 «실측 앵커 사이» 에서만 보간한다. 밖이면 None.
 

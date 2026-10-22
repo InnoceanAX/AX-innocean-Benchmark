@@ -459,7 +459,7 @@ def check_tests():
     # 🔑 불변식 ↔ 테스트 대조를 «같은 게이트에» 둔다. 「주석에 약속하고 테스트를
     #   안 붙인」 것을 막는 검사인데, 게이트에 없으면 그 검사 자체가
     #   «만들고 안 돌리는» 것이 된다 — 오늘 네 번 걸린 그 자리다.
-    for t in ("check_invariants.py", "test_reach_cache.py"):
+    for t in ("check_invariants.py", "test_reach_cache.py", "check_mutations.py"):
         f = os.path.join(here, t)
         if not os.path.exists(f):
             continue
@@ -566,7 +566,7 @@ def main():
     #   확인하지 않은 것을 나눠 적는다 — 뺀 것을 잊으면 그게 구멍이 된다.
     print("\n✅ 확인함 — 이미지 다이제스트 고정 · 리비전 반영(되읽음) · "
           "엔드포인트 7종 200 · 프론트 문법 · 테스트"
-          + " · 불변식↔테스트 대조"
+          + " · 불변식↔테스트 대조 · 돌연변이 14개(테스트에 이가 있는가)"
           + ("" if a.service_only else " · 마트 Job 스모크(실행·import·자격증명·상류 접근)"))
     # ⚠️ 스모크가 덮은 부분은 이 목록에서 뺀다. 이미 확인한 것을 「확인하지 않음」에
     #   남겨 두면 그 목록 전체를 안 믿게 되고, 그러면 진짜 빈자리도 안 읽힌다.
