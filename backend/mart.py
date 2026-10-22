@@ -304,10 +304,14 @@ def build_campaign(c):
     # ⚠️ 층화는 «입찰전략» 으로 한다. 서브타입으로 가르면 92%가 한 칸에 남는다.
     _vb = "video_bidding_type" if _has_col(c, "v_perf_unified", "video_bidding_type") else ""
     _vs = "video_sub_type" if _has_col(c, "v_perf_unified", "video_sub_type") else ""
-    vfmt = (f"ANY_VALUE(u.{_vb}) AS video_bidding_type," if _vb else
-            "CAST(NULL AS STRING) AS video_bidding_type,")
-    vfmt += (f" ANY_VALUE(u.{_vs}) AS video_sub_type," if _vs else
-             " CAST(NULL AS STRING) AS video_sub_type,")
+    # 🔴 업스트림에 없으면 «열 자체를 만들지 않는다» (2026-10-22 정정)
+    #   처음엔 CAST(NULL AS STRING) 로 빈 열을 만들어 뒀다. 그랬더니 A1 이 열 이름을 보고
+    #   쓰려다 5,525행 전부 NULL 인 것을 발견했다 — 이름만 있는 빈 열이 «쓸 수 있다» 는
+    #   신호가 된다. DB 가 「빈 뷰를 먼저 만들지 않는다 · 주인 없는 뷰는 아무도 안 고친다」
+    #   고 한 것과 같은 이유다. 없으면 없는 것이 낫다.
+    #   소비자(bq.py)는 _has_col 로 가드하므로 열이 없어도 깨지지 않는다.
+    vfmt = (f"ANY_VALUE(u.{_vb}) AS video_bidding_type," if _vb else "")
+    vfmt += (f" ANY_VALUE(u.{_vs}) AS video_sub_type," if _vs else "")
     if _vb or _vs:
         print(f"· 영상 형식 컬럼 감지 → 마트에 적재 ({_vb or '-'} / {_vs or '-'})")
 
@@ -652,6 +656,58 @@ def build_reach(c):
 #   열거 삭제를 넣으면 DB 가 넣은 netflix_* 가 모르는 테이블로 보여 사라진다.
 
 
+def build_industry_disclosure(c):
+    """업종별 «지목 가능성» 지표 — 광고주 수와 집중도.
+
+    ★ 왜 필요한가 (DB 통지 2026-10-22, 내 실측으로 확인)
+      업종 벤치마크는 익명 집계처럼 보이지만, 광고주가 한둘인 업종은 그 줄이 곧
+      그 광고주의 성적표다. 디플랜 등 외부와 공유하는 화면이라 그대로 둘 수 없다.
+
+    🔑 «두 잣대가 반대로 간다» — 둘 다 재야 한다 (실측):
+        수송/항공    광고주 199곳 · 1위 10.9%   ← 광고주로는 안전해 보이는데
+                    브랜드로는 hyundai 88.8%     한 «고객» 의 계정이 흩어진 것뿐이다
+        제약/바이오   광고주   3곳 · 1위 70.4%   ← 어떤 잣대로도 지목된다
+        에너지/중공업  광고주   1곳 · 1위 100%
+      익명성의 단위는 «계정» 이 아니라 «고객» 이다(DB 지적). 그래서 광고주 수·광고주
+      1위 비중·브랜드(고객) 1위 비중을 «함께» 싣는다.
+
+    ⚠️ 집계만 저장한다. 광고주 이름·ID 는 마트에 넣지 않는다 — 이 마트에 광고주 열이
+      없는 것이 원래 설계이고, 그걸 깨면서 익명성을 지킬 수는 없다.
+    ⚠️ 가리지 않는다. 가리면 금액이 조용히 사라진다. 숫자를 같이 띄워 읽는 사람이
+      «외부에 내도 되는가» 를 판단하게 한다 — 그건 제품 정책이지 빌더가 정할 일이 아니다.
+    """
+    tbl = f"`{PROJECT}.{MART_DS}.bm_industry_disclosure`"
+    ind_tbl = f"`{PROJECT}.apac_kr_ops.advertiser_industry`"
+    if not _table_exists(c, "apac_kr_ops", "advertiser_industry"):
+        print("· advertiser_industry 없음 → 업종 지목가능성 skip")
+        return False
+    c.query(f"""
+    CREATE OR REPLACE TABLE {tbl} AS
+    WITH j AS (
+      SELECT COALESCE(NULLIF(ai.industry,''),'기타') AS industry,
+             CAST(u.advertiser_id AS STRING) AS aid,
+             IFNULL(u.brand,'(미상)') AS br, u.spend_krw AS sp
+      FROM `{PROJECT}.apac_kr_unified.v_perf_unified` u
+      LEFT JOIN {ind_tbl} ai
+        ON ai.platform = u.platform
+       AND CAST(u.advertiser_id AS STRING) = CAST(ai.advertiser_id AS STRING)
+      WHERE u.spend_krw > 0),
+    a AS (SELECT industry, aid, SUM(sp) s FROM j GROUP BY 1,2),
+    b AS (SELECT industry, br, SUM(sp) s FROM j GROUP BY 1,2),
+    ag AS (SELECT industry, COUNT(*) n_adv, SUM(s) tot, MAX(s) top_adv FROM a GROUP BY 1),
+    bg AS (SELECT industry, COUNT(*) n_brand, MAX(s) top_brand FROM b GROUP BY 1)
+    SELECT ag.industry, ag.n_adv, bg.n_brand,
+           ROUND(SAFE_DIVIDE(ag.top_adv, ag.tot) * 100, 1)   AS top_adv_pct,
+           ROUND(SAFE_DIVIDE(bg.top_brand, ag.tot) * 100, 1) AS top_brand_pct,
+           CURRENT_TIMESTAMP() AS _built_at
+    FROM ag JOIN bg USING (industry)""").result()
+    r = list(c.query(f"""SELECT COUNT(*) n, COUNTIF(n_adv <= 3) ident,
+      COUNTIF(n_adv > 3 AND top_adv_pct >= 50) domin FROM {tbl}""").result())[0]
+    print(f"· bm_industry_disclosure: {r['n']}개 업종 · 🔴 지목가능(광고주 3곳 이하) "
+          f"{r['ident']}개 · ⚠️ 한 곳이 지배(1위 50%+) {r['domin']}개")
+    return True
+
+
 def build_metric_caveats(c):
     """사전 경고를 마트로 복사 — 서비스 SA 는 apac_kr_ops 를 못 읽는다.
 
@@ -862,6 +918,7 @@ def build():
     build_video(c)                                 # 영상(V) — 뷰 있으면 자동 빌드
     build_dplan_creative(c)                        # 디플랜 NAS 소재 grain — raw 있으면 자동 빌드
     build_reach(c)                                 # Meta 캠페인 누적 도달 — 서비스 SA 접근용 복사
+    build_industry_disclosure(c)                   # 업종 지목가능성 — 외부 공유 판단용
     build_metric_caveats(c)                        # 사전 경고 — 서비스가 화면에 띄울 수 있게 복사
     try:                                            # 값 없는 지표 자동 감지 → DB 에이전트 요청 큐 발행
         import gaps

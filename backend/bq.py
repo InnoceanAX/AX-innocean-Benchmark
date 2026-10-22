@@ -421,6 +421,59 @@ def _denominator_ok(cl, src, where, params, revc, convc):
     return out
 
 
+DISCLOSURE_TBL = f"`{PROJECT}.apac_kr_benchmark.bm_industry_disclosure`"
+IDENT_MIN_ADV = 4      # 광고주가 이 미만이면 «지목 가능» — 그 줄이 곧 그 광고주의 성적표다
+DOMINATE_PCT = 50.0    # 1위 광고주가 이 이상이면 «한 곳이 지배»
+
+
+@lru_cache(maxsize=2)
+def _disclosure(day):
+    """업종별 지목 가능성. 마트가 없으면 빈 dict(조용히 넘어간다)."""
+    try:
+        c = _client()
+        return {r["industry"]: {"n_adv": r["n_adv"], "n_brand": r["n_brand"],
+                                "top_adv_pct": r["top_adv_pct"],
+                                "top_brand_pct": r["top_brand_pct"]}
+                for r in c.query(f"SELECT * FROM {DISCLOSURE_TBL}").result()}
+    except Exception:
+        return {}
+
+
+def _disclosure_for(dim, value, day):
+    """행에 붙일 지목 가능성. 업종 축(복합 포함)에서만 의미가 있다.
+
+    🔴 «브랜드 수» 로 판정하면 안 된다 (실측 2026-10-22)
+      brand 는 우리가 이름 붙인 소수 계정만 식별하고 나머지는 전부 'other' 다.
+      그래서 「브랜드 3곳 미만이면 가린다」는 규칙은 엉뚱하게 작동한다:
+        수송/항공  브랜드 hyundai 88.8% → 가려짐.  실제 광고주 199곳 · 1위 10.9% (안전)
+        금융/보험  브랜드 'other' 1곳  → 가려짐.  실제 광고주  34곳 · 1위 21.6% (안전)
+      ₩1,394억이 이유 없이 사라진다. 익명성의 단위는 «계정» 이 아니라 «고객» 이고,
+      brand 는 그 둘 중 어느 것도 아니다.
+    🔑 그래서 둘을 «함께» 본다 — 광고주 수(지목 가능성)와 브랜드 1위 비중(고객 집중).
+      수송/항공처럼 광고주는 많은데 한 고객의 계정이 흩어진 경우가 있다.
+    """
+    if dim not in ("industry", "industry_channel"):
+        return None
+    key = str(value or "").split(" · ")[0]      # 복합 차원이면 업종 부분만
+    d = _disclosure(day).get(key)
+    if not d:
+        return None
+    n_adv = d["n_adv"] or 0
+    top = d["top_adv_pct"] or 0.0
+    level = ("identifiable" if n_adv < IDENT_MIN_ADV else
+             "dominated" if top >= DOMINATE_PCT else "ok")
+    note = None
+    if level == "identifiable":
+        note = (f"이 업종은 광고주가 {n_adv}곳뿐입니다 — 이 줄은 사실상 특정 광고주의 "
+                f"성적표입니다(1위 {top:.0f}%). 외부 공유 시 주의하십시오.")
+    elif level == "dominated":
+        note = (f"광고주 {n_adv}곳 중 한 곳이 집행의 {top:.0f}% 를 차지합니다 — "
+                "업종 평균이라기보다 그 광고주의 값에 가깝습니다.")
+    return {"n_advertisers": n_adv, "top_advertiser_pct": top,
+            "top_brand_pct": d["top_brand_pct"], "n_brands": d["n_brand"],
+            "level": level, "note": note}
+
+
 def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026-12-31",
                   currency="KRW", gross=0.0, **filters):
     if dim not in DIMS:
@@ -589,7 +642,9 @@ def get_benchmark(media="G", dim="market", date_from="2025-01-01", date_to="2026
         # 매체명이 브랜드 행으로 선 경우를 표시한다(위 MEDIA_LIKE_BRANDS 주석 참조)
         _media_brand = (dim == "brand"
                         and str(r["dim"] or "").strip().lower() in MEDIA_LIKE_BRANDS)
+        _disc = _disclosure_for(dim, r["dim"], _dt.date.today().isoformat())
         row = {"dim": r["dim"], "name": dim_name(dim, r["dim"]), "n": r["n"],
+               "disclosure": _disc,
                "media_like_brand": _media_brand,
                "media_like_note": ("이것은 브랜드가 아니라 «매체 이름» 입니다. 캠페인 이름에 "
                                    "적힌 매체 표기가 브랜드로 잘못 읽힌 행이라, 서로 다른 "
@@ -1159,6 +1214,10 @@ def get_summary_context(media="G", dim="market", date_from="2025-01-01", date_to
                     "먼저 알려주십시오.")
         if r.get("n_low"):
             warn += " (표본이 적어 분위수가 캠페인 한둘에 흔들립니다)"
+        _d = r.get("disclosure") or {}
+        if _d.get("note"):
+            # 화면이 띄우는 지목가능성 경고를 AI 답변에도 보낸다
+            warn += " ⚠️ " + _d["note"]
         lines.append(f"- {r['name']} (캠페인 {r['n']}개, 지출 {r['spend']}): "
                      + ", ".join(parts) + warn)
     return "\n".join(lines)

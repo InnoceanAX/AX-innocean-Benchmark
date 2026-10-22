@@ -450,6 +450,15 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       // 업종 '기타' = 아직 분류되지 않은 것(DB 사전 미등재). 브랜드 'other' 와 달리 진짜 미상이다.
       // 🔴 브랜드 축에 매체명이 섞여 있다 — 서로 다른 광고주 여럿이 한 줄에 묶여 있다.
       //   빼면 금액이 조용히 사라지므로, 두되 «브랜드가 아니다» 를 글자로 말한다.
+      // 🔴 업종 줄이 사실상 한 광고주의 성적표인 경우 — 외부 공유 판단에 필요하다.
+      //   익명성의 단위는 «계정» 이 아니라 «고객» 이라, 광고주 수와 1위 비중을 같이 띄운다.
+      if(r.disclosure && r.disclosure.level!=='ok'){
+        var _d=r.disclosure, _id=(_d.level==='identifiable');
+        _v += ' <span class="isrc isrc-'+(_id?'unresolved':'rule')+'" title="'+
+              String(_d.note||'').replace(/"/g,'&quot;')+'">'+
+              (_id?('광고주 '+_d.n_advertisers+'곳'):('1위 '+Math.round(_d.top_advertiser_pct)+'%'))+
+              '</span>';
+      }
       if(r.media_like_brand){
         // ⚠️ cellVal 은 «원래 스크립트» 스코프라 모듈의 esc() 가 보이지 않는다.
         //   여기서 esc 를 부르면 ReferenceError 로 표 전체가 렌더되지 않는다(실제로 그랬다).
