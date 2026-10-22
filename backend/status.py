@@ -64,20 +64,26 @@ def main():
         {"key": "netflix", "label": "넷플릭스 Reach Curve",
          "secrets": ["netflix-netkey-staging", "netflix-netkey-production"],
          "view": f"`{PROJECT}.apac_kr_benchmark.v_netflix_reach`",
-         "human": "1Password 에서 NetKey 를 꺼내 "
-                  "python deploy/set_netflix_key.py --env staging 실행 "
-                  "(발급일도 함께 기록 — 유효기간 1년)"},
+         "human_cred": "NetKey 를 Secret Manager 에 주입 — "
+                       "python inject_netflix_key.py --shred",
+         "human_cache": "DB 가 첫 호출·격자 선계산을 합니다. "
+                        "⚠️ 첫 호출에서 «Staging 이 실제 값인가 더미인가» 를 먼저 보셔야 합니다. "
+                        "사람 몫: 미데전에 «발급일» 확인(유효기간 1년 — 만료되면 조용히 실패합니다)"},
         {"key": "google", "label": "Google ReachPlanService",
          "secrets": ["google-ads-developer-token"],
          "view": f"`{PROJECT}.apac_kr_benchmark.v_google_reach_plan`",
-         "human": "MCC API 센터에서 기본(Basic) 등급 토큰 확인 — "
-                  "8286530634(lc2015) · 7297527650(dplan360) · 9958618792(hmca). "
-                  "없으면 신청(심사 필요). 테스트 등급은 실제 예측이 안 나온다"},
+         "human_cred": "MCC API 센터에서 기본(Basic) 등급 토큰 확인 — "
+                       "8286530634(lc2015) · 7297527650(dplan360) · 9958618792(hmca). "
+                       "없으면 신청(심사 필요). ⚠️ 테스트 등급은 즉시 나오지만 테스트 계정만 "
+                       "되어 실제 도달 예측이 안 나옵니다",
+         "human_cache": "토큰은 있으나 수집이 없습니다 — DB 에 ReachPlanService 연동을 요청하십시오"},
         {"key": "meta_rf", "label": "Meta Reach & Frequency",
          "secrets": [],   # 기존 토큰 재사용 — 권한만 추가하면 된다
          "view": f"`{PROJECT}.apac_kr_benchmark.v_meta_rf_curve`",
-         "human": "비즈니스 관리자에서 ads_management 부여 여부 «결정». "
-                  "R&F 전용 시스템 사용자 권고(1.9% 를 위해 13계정 ₩94.5억에 쓰기 권한)"},
+         "human_cred": "비즈니스 관리자에서 ads_management 부여 여부 «결정». "
+                       "R&F 전용 시스템 사용자 권고 — 얻는 것이 메타 지출의 1.9%(₩1.82억)인데 "
+                       "그 토큰이 덮는 범위는 13계정 ₩94.5억입니다",
+         "human_cache": "권한은 됐으나 수집이 없습니다 — DB 에 R&F 수집을 요청하십시오"},
     ]
 
     for v in vendors:
@@ -115,7 +121,20 @@ def main():
                 print(f"  {OK if avail else NO} 화면      {'켜짐' if avail else '꺼짐'}")
         except Exception as e:
             print(f"  (제공자 확인 실패: {str(e)[:60]})")
-        print(f"  -> 사람이 할 일: {v['human']}")
+        # 🔴 끝난 단계를 다시 시키지 않는다 — 막힌 «첫» 단계의 할 일만 보여준다.
+        #   전에는 자격증명이 들어온 뒤에도 「1Password 에서 꺼내 주입하라」가 그대로
+        #   떠서, 끝난 일을 또 하라고 말하고 있었다. 체크리스트가 거짓말을 하면
+        #   다음부터 안 읽는다.
+        cred_ok = bool(v["secrets"]) and names is not None and             any(s_ in names for s_ in v["secrets"])
+        if not v["secrets"]:
+            cred_ok = False          # 메타는 «권한» 이라 시크릿으로 판정할 수 없다
+        cache_ok = bool(rows and rows[0])
+        if cache_ok:
+            print("  -> 다음: 화면이 켜졌습니다. 곡선이 쌓이면 자동으로 반영됩니다")
+        elif cred_ok:
+            print(f"  -> 다음: {v['human_cache']}")
+        else:
+            print(f"  -> 사람이 할 일: {v['human_cred']}")
 
     # ── 우리 실측(메타 누적 도달) ──────────────────────────────────
     print("\n── 우리 실측 적합 (메타 누적 도달) " + "─" * 20)

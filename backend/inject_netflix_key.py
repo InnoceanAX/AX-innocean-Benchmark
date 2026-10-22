@@ -89,7 +89,7 @@ def main():
 
     def ok(r, *extra):
         if r.status_code not in (200, 201, *extra):
-            raise SystemExit(f"  실패 {r.status_code}: {r.text[:200]}")
+            raise RuntimeError(f"{r.status_code} {r.text[:160]}")
         return r
 
     done = 0
@@ -100,29 +100,58 @@ def main():
         if v.lower().startswith("bearer"):
             print(f"  [X] {env}: 'Bearer ' 접두가 붙어 있습니다 — 키 값만 있어야 합니다")
             continue
-        if S.get(f"{SM}/secrets/{sid}").status_code == 404:
-            ok(S.post(f"{SM}/secrets?secretId={sid}",
-                      json={"replication": {"automatic": {}}}))
-            print(f"  · {sid} 생성")
-        ver = ok(S.post(f"{SM}/secrets/{sid}:addVersion",
-                        json={"payload": {"data": base64.b64encode(v.encode()).decode()}})).json()
-        print(f"  [O] {sid}  버전 {ver['name'].split('/')[-1]} · 길이 {len(v)}자")
+        # 🔴 이미 같은 값이 들어 있으면 버전을 더 만들지 않는다 (멱등)
+        try:
+            cur = S.get(f"{SM}/secrets/{sid}/versions/latest:access")
+            if cur.status_code == 200:
+                import base64 as _b
+                if _b.b64decode(cur.json()["payload"]["data"]).decode() == v:
+                    print(f"  [=] {sid}  이미 같은 값 — 건너뜀")
+                    done += 1
+                    continue
+        except Exception:
+            pass
+        # ⚠️ 한 환경이 실패해도 다른 환경은 계속한다.
+        #   전에 staging 의 권한 단계에서 죽어 production 이 «아예 만들어지지 않았다»(실측).
+        #   부분 실패를 전체 실패로 만들면, 고친 뒤 처음부터 다시 해야 한다.
+        try:
+            if S.get(f"{SM}/secrets/{sid}").status_code == 404:
+                ok(S.post(f"{SM}/secrets?secretId={sid}",
+                          json={"replication": {"automatic": {}}}))
+                print(f"  · {sid} 생성")
+            ver = ok(S.post(f"{SM}/secrets/{sid}:addVersion",
+                            json={"payload": {"data": base64.b64encode(v.encode()).decode()}})).json()
+            print(f"  [O] {sid}  버전 {ver['name'].split('/')[-1]} · 길이 {len(v)}자")
+        except Exception as e:
+            print(f"  [X] {sid} 주입 실패: {str(e)[:120]}")
+            continue
 
-        pol = ok(S.post(f"{SM}/secrets/{sid}:getIamPolicy")).json()
-        binds = pol.get("bindings", [])
-        mem = f"serviceAccount:{SA}"
-        acc = next((b for b in binds if b["role"] == "roles/secretmanager.secretAccessor"), None)
-        if acc is None:
-            binds.append({"role": "roles/secretmanager.secretAccessor", "members": [mem]})
-        elif mem not in acc.get("members", []):
-            acc.setdefault("members", []).append(mem)
-        else:
-            binds = None
-        if binds is not None:
-            ok(S.post(f"{SM}/secrets/{sid}:setIamPolicy", json={"policy": {"bindings": binds}}))
-            print("       읽기 권한 부여 완료")
-        else:
-            print("       읽기 권한 이미 있음")
+        # ⚠️ IAM 부여가 실패해도 «멈추지 않는다». 값은 이미 들어갔고, 그게 핵심이다.
+        #   전에 여기서 SystemExit 로 죽어 production 이 아예 안 만들어졌다(실측).
+        #   그리고 perf-data-analyst 는 프로젝트 레벨 권한으로 이미 읽을 수 있다 —
+        #   명시 바인딩은 «관례» 이지 동작 조건이 아니다. 실패하면 알리고 넘어간다.
+        try:
+            pol = ok(S.post(f"{SM}/secrets/{sid}:getIamPolicy")).json()
+            binds = pol.get("bindings", [])
+            mem = f"serviceAccount:{SA}"
+            acc = next((b for b in binds
+                        if b["role"] == "roles/secretmanager.secretAccessor"), None)
+            if acc is None:
+                binds.append({"role": "roles/secretmanager.secretAccessor", "members": [mem]})
+            elif mem not in acc.get("members", []):
+                acc.setdefault("members", []).append(mem)
+            else:
+                binds = None
+            if binds is not None:
+                ok(S.post(f"{SM}/secrets/{sid}:setIamPolicy",
+                          json={"policy": {"bindings": binds}}))
+                print("       읽기 권한 부여 완료")
+            else:
+                print("       읽기 권한 이미 있음")
+        except Exception as e:
+            print(f"       (권한 부여 실패 — 값은 들어갔습니다: {str(e)[:80]})")
+            print("        perf-data-analyst 는 프로젝트 레벨 권한으로 읽을 수 있어 "
+                  "동작에는 지장이 없습니다. 관례대로 명시 바인딩이 필요하면 DB 에 요청하십시오.")
         done += 1
 
     del vals
