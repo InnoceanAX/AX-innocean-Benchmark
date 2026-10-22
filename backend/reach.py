@@ -906,14 +906,19 @@ class NetflixReachProvider(Provider):
     #    0 은 «깨끗해서» 일 수도 «아직 아무것도 없어서» 일 수도 있다 — 구분해야 한다.
     def available(self, market=""):
         if not _view_exists(CURVE_VIEW):
-            # 실측(2026-10-21): Secret Manager 29개에 netflix/netkey 시크릿이 없다.
-            #   토큰은 발급됐고 1Password 공유 링크 안에만 있다 — 꺼내는 것은 사람이 한다.
-            return False, ("넷플릭스 도달 곡선 캐시가 아직 없습니다. 호출 한도가 일 "
-                           f"{NETFLIX_RATE_LIMITS['day']}회라 야간에 격자를 선계산해 "
-                           "캐시에 넣는 구조가 전제입니다. "
-                           "해제 조건: 토큰은 이미 발급됐으나 Secret Manager 에 없습니다"
-                           "(1Password 공유 링크 안에만 있음). 사람이 꺼내 주입해야 합니다 — "
-                           "python deploy/set_netflix_key.py --env staging")
+            # 🔴 «내가 보지 않는 시스템의 상태를 단정하지 않는다» (2026-10-22)
+            #   전에는 "토큰이 Secret Manager 에 없습니다" 라고 적어뒀다. 토큰이 들어온
+            #   뒤에도 그 문장이 그대로 떠서 «이미 끝난 일» 을 시키고 있었다.
+            #   이 서비스는 apac_kr_benchmark 만 읽는다 — 금고를 볼 수 없다. 못 보는
+            #   것을 단정하면 반드시 틀린 때가 온다.
+            #   그래서 내가 «보는 것»(곡선 캐시)만 말하고, 금고 상태는 그걸 실제로
+            #   확인하는 도구(backend/status.py)로 넘긴다.
+            return False, ("넷플릭스 도달 곡선이 아직 캐시에 없습니다. 호출 한도가 일 "
+                           f"{NETFLIX_RATE_LIMITS['day']}회라 «야간 격자 선계산 → 캐시 → "
+                           "화면은 캐시만 조회» 가 전제입니다. "
+                           "준비 순서: ① NetKey 주입 ② 첫 호출로 Staging 이 실제 값인지 확인 "
+                           "③ 격자 선계산 ④ 여기가 자동으로 켜집니다. "
+                           "지금 어디까지 됐는지는 backend/status.py 가 알려줍니다.")
         n_ok, n_all = _curve_counts(market)
         if n_ok:
             return True, f"사용 가능 — 곡선 {n_ok:,}개" + (f" / 격자 {n_all:,}" if n_all else "")
