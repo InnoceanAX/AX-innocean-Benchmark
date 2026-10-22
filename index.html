@@ -611,6 +611,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   //   ② A1 Benchmark 가 KRW 고정이라, 기본값이 다르면 «같은 업종 CPM 이 두 제품에서
   //      다른 숫자» 로 보인다. 첫 화면은 같아야 한다
   //   전환은 그대로 열어 둔다 — 없애지 않는다.
+  // INVARIANT(currency-persists, untested): 매체를 바꿔도 고른 통화를 유지한다 — 단위가 말없이 바뀌면 비교가 깨진다.
   function applyDefaultCurrency(m){
     var cur=document.querySelector('#pgBM input[name="bm_cur"]:checked');
     if(cur) return;                      // 이미 고른 값이 있으면 건드리지 않는다
@@ -694,6 +695,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     var lr=document.getElementById('kpiLblR'); if(lr)lr.textContent=dimLabel()+'별 '+KU[curKpiR]+basisSuffix(curBasisR)+' 벤치마크(중앙값)';
   }
   // 환율 표시 갱신 (fx_rates_daily 최신값)
+  // INVARIANT(fx-fallback-marked, untested): 환율이 정적 폴백이면 «표시 없이» 보여주지 않는다 — 실측 차이 14.7%(1,325.57 vs 1,520.21).
   function updateExrate(){
     var fx=(window.BM_DATA&&BM_DATA.meta&&BM_DATA.meta.fx)||null, el=document.getElementById('exTxt'); if(!fx||!el)return;
     el.innerHTML='1 USD = '+(fx.USD||0).toLocaleString()+' KRW &nbsp;|&nbsp; 1 EUR = '+(fx.EUR||0).toLocaleString()+' KRW &nbsp;|&nbsp; 1 JPY = '+(fx.JPY||0)+' KRW'+(fx.asof?' &nbsp;<span style="color:#9CA3AF">('+fx.asof+' 기준)</span>':' &nbsp;<span style="color:#B45309">(\u26a0\ufe0f 고정 환율 \u2014 최신 환율을 못 불러왔습니다. 달러\u00b7유로 금액은 실제와 다를 수 있습니다)</span>');
@@ -2246,6 +2248,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   //   순서로 돌아오지 않는다 — 12칸 합성은 조회를 13번 하므로 느리고 3칸은 빠르다.
   //   늦게 온 옛 응답이 최신 결과를 덮으면 «고른 것과 다른 숫자» 가 조용히 보인다.
   //   그래서 번호를 붙이고, 돌아왔을 때 최신이 아니면 버린다.
+  // INVARIANT(stale-response-discarded, untested): 겹친 요청에서 «옛 응답» 이 화면을 덮지 않는다 — 고른 것과 다른 숫자가 표시 없이 보인다.
   var NFX_SEQ = 0;
   function rsSynthInit(dims){
     var box=el('rsSynth'); if(!box) return;
