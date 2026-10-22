@@ -1383,7 +1383,17 @@ def targeting_key(age_name="", gender_name=""):
 # ───────────────────────── 기간 앵커 · 셀 합성 ─────────────────────────
 # DB 실측 2026-10-22 (QA/40_DB_NETFLIX_REACH_P1_MEASURED.md) 에서 나온 것을
 # 여기에 그대로 옮긴다. 「가정」 이 아니라 「쟀다」 인 것만 쓴다.
-DUR_ANCHORS = (30, 60, 90)   # 실측한 기간. 이 밖은 외삽이므로 답하지 않는다.
+# 처음 실측한 기간. 🔴 이제 «기준» 이 아니다 — 격자 조회가 실패할 때의 대비용이다.
+#   45일이 들어오면서 넷이 됐고, 더 중요한 것은 «조합마다 있는 기간이 다르다» 는
+#   점이다(45일은 전체 조건에만 있고 데모 칸에는 없다). 상수로 묶으면 데모 칸의
+#   45일 요청이 (30,45) 로 묶여 포기하는데, (30,60) 이면 답할 수 있다.
+DUR_ANCHORS = (30, 60, 90)
+
+# DB 45일 실측 — 같은 노출에서 평가한 보간 오차. 🔴 상수가 아니라 «기울기» 다.
+#   935,660 노출 -0.067%  →  46,783,000 노출 -0.950%
+#   「1% 이내」로 뭉개면 이 기울기를 놓친다. 플래너는 큰 예산에서 판단한다.
+INTERP_ERR_SMALL_PCT = 0.07
+INTERP_ERR_LARGE_PCT = 0.95
 
 # 🔑 셀 합성 규칙 — DB 가 명시한 그대로다. 다른 규칙을 쓰면 숫자가 갈린다.
 #     총 노출 I 를 셀들의 «끝점 노출» 비율로 배분 → 각 곡선에서 보간 → 도달을 더한다
@@ -1466,6 +1476,32 @@ def _curve_rows(market, flight_days, key, limit=5):
         job_config=bigquery.QueryJobConfig(query_parameters=prm)).result()]
 
 
+def _grid_anchors(market, key):
+    """이 «조합» 에 실제로 쓸 수 있는 곡선이 있는 기간들. 하드코딩하지 않는다.
+
+    🔴 조합마다 있는 기간이 다르다 — 45일은 전체 조건에만 들어왔고 데모 칸에는
+      없다. 기간 목록을 상수로 두면 데모 칸의 45일 요청이 (30,45) 로 묶여
+      «45일이 없다» 고 포기하는데, (30,60) 으로는 답할 수 있다.
+      그리고 DB 가 격자를 채우는 대로 목록이 자동으로 늘어난다.
+    """
+    try:
+        c = _client()
+        prm = [bigquery.ScalarQueryParameter("mk", "STRING", (market or "KR").upper()),
+               bigquery.ScalarQueryParameter("tk", "STRING", key)]
+        rows = c.query(
+            f"SELECT DISTINCT flight_days FROM {CURVE_VIEW} "
+            f"WHERE country=@mk AND IFNULL(targeting_key,'none')=@tk "
+            f"AND IFNULL(curve_status,'')='ok' AND flight_days IS NOT NULL "
+            f"ORDER BY flight_days",
+            job_config=bigquery.QueryJobConfig(query_parameters=prm)).result()
+        got = [int(r.flight_days) for r in rows]
+        if got:
+            return got
+    except Exception:  # noqa: BLE001
+        pass
+    return list(DUR_ANCHORS)
+
+
 def _ok_pairs(market, flight_days, key):
     """한 조합의 «원곡선» (노출,도달) 쌍. 쓸 수 없으면 (None, 이유).
 
@@ -1507,10 +1543,11 @@ def _interp_duration(market, flight_days, key, media, budget, points):
       바깥으로 직선을 뻗으면 과대해진다 — 과대한 도달은 예산을 과소하게 만든다.
     """
     fd = int(flight_days or 30)
+    anchors = _grid_anchors(market, key)
     lo = hi = None
-    for i in range(len(DUR_ANCHORS) - 1):
-        if DUR_ANCHORS[i] < fd < DUR_ANCHORS[i + 1]:
-            lo, hi = DUR_ANCHORS[i], DUR_ANCHORS[i + 1]
+    for i in range(len(anchors) - 1):
+        if anchors[i] < fd < anchors[i + 1]:
+            lo, hi = anchors[i], anchors[i + 1]
             break
     if lo is None:
         return None
@@ -1530,19 +1567,77 @@ def _interp_duration(market, flight_days, key, media, budget, points):
     import datetime
     cpm, cpm_src = _cpm(media or "", market or "", datetime.date.today().isoformat())
     warn = [(f"ℹ️ 집행 {fd}일은 직접 부른 값이 아니라 실측한 {lo}일·{hi}일 "
-             f"사이를 보간한 값입니다(가중치 {w:.2f}). 도달 증가가 기간에 따라 "
-             "체감하므로 이 보간은 실제보다 «조금 낮게» 나옵니다."),
-            (f"⚠️ 두 앵커의 노출 정의역이 겹치는 구간({round(cap):,} 노출)까지만 "
-             "그립니다 — 그 바깥은 한쪽 기간만의 곡선이 됩니다.")]
+             f"사이를 보간한 값입니다(가중치 {w:.2f}). 실측 대조에서 보간은 "
+             f"실제보다 낮게 나왔고, 그 폭이 «노출과 함께 커집니다» — 작은 "
+             f"예산에서는 {INTERP_ERR_SMALL_PCT}% 정도이고 정의역 끝에서 "
+             f"{INTERP_ERR_LARGE_PCT}% 였습니다(45일 1건). 큰 예산에서 더 "
+             "보수적으로 읽히는 쪽입니다."),
+            # 🔴 이 상한은 «앵커에서 유도한 것» 이고 실측이 아니다. 정의역이
+            #   일수에 단조가 아니다 — 45일(46,783,000)이 30일(47,047,000)보다
+            #   좁았다. 보간할 기간의 정의역은 불러 보지 않으면 모른다.
+            (f"⚠️ 노출 상한 {round(cap):,} 은 두 앵커에서 «유도한» 값이고 이 "
+             f"기간을 직접 불러 확인한 값이 아닙니다. 실측에서 정의역이 기간에 "
+             "따라 단조롭지 않았습니다(45일이 30일보다 좁았습니다) — 끝 쪽 "
+             "구간은 벤더가 답하지 않을 범위일 수 있습니다.")]
     parsed, why = _slice_synthetic(pts, ra, cpm, budget, points, warn)
     if parsed is None:
         return {"found": False, "state": "error", "key": key, "note": why}
     return {"found": True, "state": "ok", "key": key, "basis": "duration_interp",
             "anchor_days": [lo, hi], "requested_days": fd,
+            "grid_anchors": anchors,
+            "max_imp_derived": round(cap),      # 유도값 — 실측 정의역이 아니다
+            "max_imp_is_measured": False,
             "targeting_label": ra.get("targeting_label"),
             "points": parsed["points"], "warnings": parsed["warnings"],
             "population": parsed.get("population"), "max_reach": parsed["max_reach"],
             "cpm": round(cpm, 2), "cpm_source": cpm_src}
+
+
+def combined_key(cells):
+    """고른 칸들을 «하나의 다중값 키» 로 만든다 — 격자에 실측 합본이 있는지 보려고.
+
+    격자에서 관측한 모양 그대로다(2026-10-22 실측):
+        age=AGE_25_34,AGE_35_49|gender=MALE
+    축 안에서는 enum 값을 쉼표로 묶고 정렬하며, 축은 age → gender 순이다.
+
+    🔴 이 키가 없으면 합성 추정치가 «실측을 가린다». DB 가 합본을 직접 부른
+      행이 격자에 있는데(1,920,479) 내 단일값 키로는 닿지 않아서, 두 칸을 고른
+      플래너에게 합성값(1,921,121)을 내보내고 있었다. 추정이 실측보다 먼저
+      나가면 화면에는 그게 추정인지 안 보인다.
+    """
+    ages, gens = set(), set()
+    for cl in (cells or []):
+        a = V1_AGE_ENUM.get((cl.get("age") or "").strip())
+        g = V1_GENDER_ENUM.get((cl.get("gender") or "").strip())
+        if a:
+            ages.add(a)
+        if g:
+            gens.add(g)
+    parts = []
+    if ages:
+        parts.append("age=" + ",".join(sorted(ages)))
+    if gens:
+        parts.append("gender=" + ",".join(sorted(gens)))
+    return "|".join(parts) if parts else "none"
+
+
+def _receipt(row, label=""):
+    """영수증 한 장 — 이 곡선이 어느 벤더 호출에서 나왔나.
+
+    ⚠️ curve_id 를 캐시 키나 «같은 곡선인가» 판단에 쓰지 않는다 — 같은 페이로드를
+      두 번 쏘면 값이 달라진다(DB E3). 사람이 벤더에 되묻기 위한 식별자 전용이다.
+    🔴 그리고 수집에 성공했으면 버리지 않는다. 곡선만 남기고 식별자를 버리면
+      «되물을 수 없는 숫자» 가 된다 — DB 가 기준칸 영수증을 하마터면 버렸고,
+      하필 그 칸이 89.6% 의 분모였다.
+    """
+    if not row:
+        return None
+    cid = row.get("curve_id")
+    if not cid:
+        return None
+    return {"curve_id": cid, "label": label or (row.get("targeting_label") or ""),
+            "flight_days": row.get("flight_days"),
+            "fetched_at": str(row.get("fetched_at") or "")[:19] or None}
 
 
 def _exclusive(cells):
@@ -1622,6 +1717,33 @@ def synth_curve(cells, market="KR", flight_days=30, media="",
     okx, why = _exclusive(cells or [])
     if not okx:
         return {"found": False, "state": "not_synthesizable", "note": why}
+
+    # 🔴 합성하기 «전에» 격자에 벤더 실측 합본이 있는지 본다. 있으면 그걸 쓴다 —
+    #   추정치가 실측을 가리면 안 된다. 격자에 age=A,B|gender=MALE 같은 다중값
+    #   행이 실제로 들어 있다(DB 가 합본을 직접 불렀다).
+    ckey = combined_key(cells or [])
+    try:
+        cres, _cerr = _ok_pairs(market, flight_days, ckey)
+    except Exception:  # noqa: BLE001
+        cres = None
+    if cres is not None:
+        import datetime as _dt
+        cpm0, src0 = _cpm(media or "", market or "",
+                          _dt.date.today().isoformat())
+        cw = [("ℹ️ 이 곡선은 고른 조건을 «벤더에 그대로 물어서» 받은 값입니다 — "
+               "칸을 더해 만든 추정이 아닙니다.")]
+        parsed0, why0 = _slice_synthetic(cres[0], cres[1], cpm0, budget, points, cw)
+        if parsed0 is not None:
+            return {"found": True, "state": "ok", "basis": "vendor_combined",
+                    "key": ckey, "full_cover": _is_full_cover(cells or []),
+                    "targeting_label": cres[1].get("targeting_label"),
+                    "points": parsed0["points"], "warnings": parsed0["warnings"],
+                    "population": parsed0.get("population"),
+                    "max_reach": parsed0["max_reach"],
+                    "max_imp": parsed0.get("max_imp"),
+                    "receipts": [r for r in [_receipt(cres[1])] if r],
+                    "cpm": round(cpm0, 2), "cpm_source": src0}
+
     got, missing = [], []
     for cl in (cells or []):
         key, _enums = targeting_key(cl.get("age", ""), cl.get("gender", ""))
@@ -1689,6 +1811,11 @@ def synth_curve(cells, market="KR", flight_days=30, media="",
             "full_cover": full,
             "fullcover_pct_of_untargeted": SYNTH_FULLCOVER_PCT if full else None,
             "cells": [k for k, _p, _r in got], "cell_labels": labels,
+            # 쓴 곡선들의 영수증 — 플래너가 「이 숫자 어디서 왔냐」 를 물으면
+            #   벤더에 바로 되물을 수 있다. 추정치일수록 출처가 필요하다.
+            "receipts": [r for r in (_receipt(r0, lb) for (_k, _p, r0), lb
+                                     in zip(got, labels)) if r],
+            "combined_key_tried": ckey,
             "points": parsed["points"], "warnings": parsed["warnings"],
             "population": parsed.get("population"), "max_reach": parsed["max_reach"],
             "max_imp_sum": round(etot),
@@ -1797,6 +1924,10 @@ def lookup_curve(market="KR", flight_days=30, age_name="", gender_name="",
             "points": parsed["points"], "warnings": parsed["warnings"],
             "population": parsed.get("population"), "max_reach": parsed["max_reach"],
             "implied_b": rows[0].get("implied_b"),
+            "receipts": [r for r in [_receipt(rows[0])] if r],
+            # «전연령·전성별» 은 광고주 변형까지 여러 행이 ok 로 들어 있다(E1).
+            #   곡선은 같지만 영수증은 행마다 다르므로 몇 장 있는지 같이 적는다.
+            "n_ok_rows": sum(1 for r in rows if (r.get("curve_status") or "") == "ok"),
             "cpm": round(cpm, 2), "cpm_source": cpm_src}
 
 

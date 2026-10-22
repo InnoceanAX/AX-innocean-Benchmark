@@ -2202,14 +2202,17 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     rsPickLoad();
     rsSynthInit(dims);
   }
+  var NFX_PSEQ = 0;
   function rsPickLoad(){
     var out=el('rsPickOut'); if(!out) return;
+    var pseq=++NFX_PSEQ;              // 겹친 요청 보호 — 합성과 같은 이유다
     var q=qs({market:(el('rsMarket')&&el('rsMarket').value)||'KR',
               flight_days:(el('rsDays')&&el('rsDays').value)||30,
               media:el('rsMedia')?el('rsMedia').value:'',
               age:NFX_PICK.age, gender:NFX_PICK.gender});
     out.innerHTML='<span style="color:var(--tm)">조회 중…</span>';
     j(API+'/reach/lookup?'+q).then(function(d){
+      if(pseq!==NFX_PSEQ) return;      // 더 최신 선택이 있다 — 버린다
       if(d.found){
         var last=(d.points||[])[d.points.length-1]||{};
         out.innerHTML='<b style="color:#1F7A3D">곡선 있음</b>'+
@@ -2227,7 +2230,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
         (wait?'계산 대기':'사용 불가')+'</b> — '+esc(d.note||'')+
         (wait?'<br><span style="color:var(--tm)">이 조합이 필요하시면 알려주십시오 — '+
               '다음 야간 목록에 넣으면 그 다음 날부터 바로 나옵니다.</span>':'');
-    }).catch(function(){ out.innerHTML=''; });
+    }).catch(function(){ if(pseq===NFX_PSEQ) out.innerHTML=''; });
   }
   // ═══════ 조합 더하기(합성) · 데모 커버리지 — DB 실측 2026-10-22 ═══════
   // ★ 왜 이게 있나
@@ -2239,6 +2242,11 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
   //   그래서 합성 결과에는 «합성» 이라고 적고 경고를 셋까지 다 띄운다 — 첫 줄만
   //   띄우면 「전부 고르면 전체가 아니다」 같은 중요한 둘째 줄이 가려진다.
   var NFX_SYN = {};          // 'age|gender' → true
+  // 🔴 겹친 요청 보호. 상자를 연달아 켜면 요청이 여러 건 겹치고, 응답은 보낸
+  //   순서로 돌아오지 않는다 — 12칸 합성은 조회를 13번 하므로 느리고 3칸은 빠르다.
+  //   늦게 온 옛 응답이 최신 결과를 덮으면 «고른 것과 다른 숫자» 가 조용히 보인다.
+  //   그래서 번호를 붙이고, 돌아왔을 때 최신이 아니면 버린다.
+  var NFX_SEQ = 0;
   function rsSynthInit(dims){
     var box=el('rsSynth'); if(!box) return;
     var ages=((dims||{}).Age)||[], gens=((dims||{}).Gender)||[];
@@ -2277,11 +2285,13 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       return;
     }
     var cells=keys.map(function(k){ return k.split('|').join(':'); }).join(',');
-    out.innerHTML='<span style="color:var(--tm)">더하는 중…</span>';
+    var seq=++NFX_SEQ;
+    out.innerHTML='<span style="color:var(--tm)">더하는 중… ('+keys.length+'칸)</span>';
     j(API+'/reach/synth?'+qs({market:(el('rsMarket')&&el('rsMarket').value)||'KR',
         flight_days:(el('rsDays')&&el('rsDays').value)||30,
         media:el('rsMedia')?el('rsMedia').value:'', cells:cells})
     ).then(function(d){
+      if(seq!==NFX_SEQ) return;        // 더 최신 선택이 있다 — 이 응답은 버린다
       if(!d||!d.found){
         // ⚠️ «못 더한다» 와 «아직 없다» 를 가른다. 앞은 조건을 바꿔야 하고
         //   뒤는 기다리면 된다 — 한 칸에 넣으면 플래너가 헛되게 기다린다.
@@ -2295,14 +2305,26 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
         return '<div style="margin-top:3px;color:'+(red?'#B91C1C':(amber?'#B45309':'var(--tm)'))+
                '">'+esc(w)+'</div>';
       }).join('');
-      out.innerHTML='<b style="color:#1F7A3D">합성 곡선</b> '+
-        '<span class="bdg" style="background:#EEF2FF;color:#3730A3">합성</span> — 최대 도달 '+
-        (d.max_reach||0).toLocaleString()+' 프로필'+
-        (d.max_imp_sum?('<span style="color:var(--tm)"> @ 노출 '+
-          d.max_imp_sum.toLocaleString()+'</span>'):'')+
+      // 🔴 «벤더가 그대로 답한 값» 과 «칸을 더해 만든 추정» 을 같은 모양으로 그리면
+      //   플래너는 둘을 같은 근거로 읽는다. 격자에 실측 합본이 있으면 서버가
+      //   그걸 먼저 주는데(basis=vendor_combined), 화면도 그걸 드러내야 한다.
+      var vend=(d.basis==='vendor_combined');
+      var imp=vend?d.max_imp:d.max_imp_sum;
+      // 영수증 — 「이 숫자 어디서 왔냐」 에 답할 수 있게. 추정치일수록 출처가 필요하다.
+      var rc=(d.receipts||[]);
+      var rcH=!rc.length?'':('<div style="margin-top:5px;font-size:10px;color:var(--tm)">'+
+        '넷플릭스 호출 ID '+rc.length+'건 — '+
+        rc.map(function(r){ return esc((r.label||'')+' '+String(r.curve_id).slice(0,8)); })
+          .join(' · ')+'</div>');
+      out.innerHTML='<b style="color:#1F7A3D">'+(vend?'벤더 실측 곡선':'합성 곡선')+'</b> '+
+        (vend?'<span class="bdg" style="background:#ECFDF5;color:#065F46">벤더 실측</span>'
+             :'<span class="bdg" style="background:#EEF2FF;color:#3730A3">합성</span>')+
+        ' — 최대 도달 '+(d.max_reach||0).toLocaleString()+' 프로필'+
+        (imp?('<span style="color:var(--tm)"> @ 노출 '+imp.toLocaleString()+
+          (vend?'':' (단순합)')+'</span>'):'')+
         (d.full_cover?' <span class="bdg" style="background:#FEF2F2;color:#B91C1C">'+
-          '전체 아님 '+d.fullcover_pct_of_untargeted+'%</span>':'')+ws;
-    }).catch(function(){ out.innerHTML=''; });
+          '합 ≠ 전체 '+(d.fullcover_pct_of_untargeted||89.6)+'%</span>':'')+ws+rcH;
+    }).catch(function(){ if(seq===NFX_SEQ) out.innerHTML=''; });
   }
   // 🔴 «12칸을 각각 부른 합» 과 «전체 호출» 이 다르다 — 89.6%. 결함이 아니라 정보다.
   //   플래너가 「전체 캠페인」 예산을 데모 합으로 잡으면 근거가 10% 어긋난다.

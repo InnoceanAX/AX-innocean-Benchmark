@@ -180,7 +180,11 @@ _real_ok_pairs = reach._ok_pairs
 
 def _fake_ok_pairs(market, fd, key):
     if key in pairs:
-        return (pairs[key], {"targeting_label": key, "ad_account_scope": "advertiser"}), None
+        return (pairs[key], {"targeting_label": key,
+                             "ad_account_scope": "advertiser",
+                             "curve_id": "cid-" + key[:14],
+                             "flight_days": fd,
+                             "fetched_at": "2026-10-22T10:00:00"}), None
     return None, "격자에 없습니다"
 
 
@@ -226,6 +230,45 @@ ck("방향을 단정하지 않는다(«높은» 단독 주장 금지)",
    sy.get("warnings", [""])[0][:60])
 ck("정의역 경고가 붙는다",
    sy.get("found") and any("단순합" in w for w in sy["warnings"]))
+
+print(chr(10) + "=== 🔴 격자에 벤더 실측 합본이 있으면 합성하지 않는다 ===")
+# 🔴 이것이 실제 결함이었다. 격자를 읽어 보니 다중값 행이 있다:
+#     age=AGE_25_34,AGE_35_49|gender=MALE   도달 1,920,479  노출끝 13,170,000
+#   내 targeting_key() 는 단일값만 만들어서 이 행을 «절대» 못 찾았고, 그래서
+#   두 칸을 고른 플래너에게 벤더 실측(1,920,479)이 격자에 있는데도 내 합성
+#   추정치(1,921,121)를 내보내고 있었다. 추정이 실측을 가리는 쪽이다.
+ck("combined_key 가 격자 모양과 같다",
+   reach.combined_key(cells2) == "age=AGE_25_34,AGE_35_49|gender=MALE",
+   reach.combined_key(cells2))
+ck("combined_key: 값이 정렬된다",
+   reach.combined_key([{"age": "35-49", "gender": "Male"},
+                       {"age": "25-34", "gender": "Male"}])
+   == "age=AGE_25_34,AGE_35_49|gender=MALE")
+ck("combined_key: 빈 선택은 none", reach.combined_key([]) == "none")
+
+COMBINED = _pw(13_170_000, 1_920_479, 0.86)
+pairs["age=AGE_25_34,AGE_35_49|gender=MALE"] = COMBINED
+vc = reach.synth_curve(cells2, media="넷플릭스", budget=10 ** 15, points=10)
+ck("실측 합본이 있으면 basis=vendor_combined", vc.get("basis") == "vendor_combined",
+   vc.get("basis"))
+ck("실측값(1,920,479)을 쓴다 — 합성값이 아니다",
+   abs((vc.get("max_reach") or 0) - 1_920_479) <= 2, vc.get("max_reach"))
+ck("정의역도 실측(13,170,000) 이다", vc.get("max_imp") == 13_170_000, vc.get("max_imp"))
+# ⚠️ «단순합» 이라는 뜻의 이름을 실측 정의역에 붙이지 않는다 — 이름이 뜻을 바꾼다
+ck("max_imp_sum 을 쓰지 않는다", vc.get("max_imp_sum") is None)
+ck("«벤더에 그대로 물었다» 고 적는다",
+   any("그대로 물어서" in w for w in (vc.get("warnings") or [])))
+ck("합성 경고를 붙이지 않는다",
+   not any("«합성»" in w for w in (vc.get("warnings") or [])))
+ck("영수증을 올린다", len(vc.get("receipts") or []) == 1, vc.get("receipts"))
+
+del pairs["age=AGE_25_34,AGE_35_49|gender=MALE"]
+fb = reach.synth_curve(cells2, media="넷플릭스", budget=10 ** 15, points=10)
+ck("합본이 없으면 합성으로 돌아간다", fb.get("basis") == "synthesis", fb.get("basis"))
+ck("합성 때는 영수증이 칸마다", len(fb.get("receipts") or []) == 2, fb.get("receipts"))
+ck("시도한 합본 키를 알려 준다",
+   fb.get("combined_key_tried") == "age=AGE_25_34,AGE_35_49|gender=MALE",
+   fb.get("combined_key_tried"))
 
 print("\n=== 합성을 «거절» 해야 하는 경우 ===")
 bad_sets = [
@@ -303,6 +346,11 @@ def _dur_ok_pairs(market, fd, key):
 
 reach._ok_pairs = _dur_ok_pairs
 reach._curve_rows = lambda *a, **k: []          # 정확히 일치하는 행은 없다 → 보간 경로
+# 🔴 앵커를 고정한다. 안 하면 _grid_anchors 가 «살아 있는 격자» 를 읽어서,
+#   DB 가 45일을 넣는 순간 이 테스트가 깨진다 — 내 코드는 그대로인데.
+#   배포 게이트가 남의 데이터에 의존하면 남이 격자를 채우는 것만으로
+#   내 배포가 막히고, 그때 깨진 이유가 내 코드처럼 보인다.
+reach._grid_anchors = lambda mk, k: [30, 60, 90]
 i45 = reach._interp_duration("KR", 45, "none", "넷플릭스", 10 ** 15, 8)
 ck("45일은 30·60 사이로 보간된다", i45 and i45.get("found"), (i45 or {}).get("note"))
 ck("앵커를 밝힌다", i45 and i45.get("anchor_days") == [30, 60])
@@ -325,6 +373,51 @@ ck("구간 안은 선형", abs(reach._interp_reach(pp, 1500.0) - 140.0) < 1e-6)
 ck("왼쪽 밖은 첫 값", reach._interp_reach(pp, 10.0) == 100.0)
 ck("오른쪽 밖은 끝 값(외삽 안 함)", reach._interp_reach(pp, 10 ** 9) == 300.0)
 ck("빈 곡선은 0", reach._interp_reach([], 100.0) == 0.0)
+
+
+print(chr(10) + "=== 🔴 앵커를 격자에서 읽는다 (조합마다 다르다) ===")
+# 🔴 DB 45일 실측이 두 전제를 깼다.
+#   ① 45일이 들어오면서 앵커가 넷이 됐다 — 하드코딩한 (30,60,90) 은 이미 틀렸다.
+#   ② 더 중요한 것: 45일은 «전체 조건에만» 있고 데모 칸에는 없다. 상수로 묶으면
+#     데모 칸의 45일 요청이 (30,45) 로 묶여 「45일이 없다」 고 포기하는데,
+#     (30,60) 이면 답할 수 있다. 그게 퇴행이다 — 여기서 걸리게 한다.
+dur[45] = _pw(46_783_000, 7_080_839, 0.8975)    # DB 실측 45일
+
+reach._grid_anchors = lambda mk, k: [30, 45, 60, 90]
+i50 = reach._interp_duration("KR", 50, "none", "넷플릭스", 10 ** 15, 8)
+ck("앵커가 넷이면 50일은 (45,60) 으로 묶인다",
+   i50 and i50.get("anchor_days") == [45, 60], (i50 or {}).get("anchor_days"))
+
+# 데모 칸처럼 45일이 «없는» 조합
+reach._grid_anchors = lambda mk, k: [30, 60]
+i45b = reach._interp_duration("KR", 45, "none", "넷플릭스", 10 ** 15, 8)
+ck("45일이 없는 조합은 (30,60) 으로 묶인다 — 포기하지 않는다",
+   i45b and i45b.get("anchor_days") == [30, 60], (i45b or {}).get("anchor_days"))
+ck("쓸 수 있는 앵커 목록을 올린다", i45b and i45b.get("grid_anchors") == [30, 60])
+
+print(chr(10) + "=== 🔴 노출 상한은 «유도값» 이다 — 정의역이 일수에 단조가 아니다 ===")
+# 실측: 30일 47,047,000 · 45일 46,783,000 · 60일 49,153,000
+#   45일이 30일보다 «좁다». cap = min(30,60) = 47,047,000 으로 그리면 45일의
+#   실제 정의역(46,783,000)보다 264,000 노출만큼 더 멀리 답한다.
+#   얼마나 깎을지는 또 추측이므로 깎지 않고 «유도값» 이라고 적는다.
+ck("유도값이라고 데이터로 표시한다", i45b and i45b.get("max_imp_is_measured") is False)
+ck("유도한 상한을 숫자로 올린다", i45b and i45b.get("max_imp_derived") == 47_047_000,
+   (i45b or {}).get("max_imp_derived"))
+ck("문구에 «유도» 가 들어간다",
+   i45b and any("유도" in w for w in i45b["warnings"]),
+   [w[:60] for w in (i45b or {}).get("warnings", [])])
+ck("«단조롭지 않다» 를 적는다",
+   i45b and any("단조롭지" in w for w in i45b["warnings"]))
+
+print(chr(10) + "=== 보간 오차는 상수가 아니라 기울기다 ===")
+# 🔴 실측 -0.067%(작은 노출) ~ -0.950%(정의역 끝). 「1% 이내」로 뭉개면
+#   그 기울기를 놓치고, 플래너는 큰 예산에서 판단한다.
+ck("오차가 «노출과 함께 커진다» 고 적는다",
+   i45b and any("노출과 함께 커집니다" in w for w in i45b["warnings"]))
+ck("두 끝의 오차를 숫자로 적는다",
+   i45b and any("0.07" in w and "0.95" in w for w in i45b["warnings"]))
+ck("«조금 낮게» 같은 뭉갠 말을 쓰지 않는다",
+   i45b and not any("조금 낮게" in w for w in i45b["warnings"]))
 
 reach._ok_pairs = _real_ok_pairs
 
