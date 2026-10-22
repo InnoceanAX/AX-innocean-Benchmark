@@ -2304,11 +2304,12 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
           '전체 아님 '+d.fullcover_pct_of_untargeted+'%</span>':'')+ws;
     }).catch(function(){ out.innerHTML=''; });
   }
-  // 🔴 «데모를 다 사도 전체가 아니다» — 실측 89.6%. 이건 결함이 아니라 정보다.
-  //   플래너가 12칸을 다 집행해도 10.4% 는 연령·성별로 닿을 수 없다. 그걸 모르면
-  //   「전체 캠페인」 예산을 데모 합으로 잡고 10% 를 헛되게 쓴다.
-  // ⚠️ «왜» 닿지 않는지는 우리도 모른다 — 그대로 적는다. 모르는 것을 아는 것처럼
-  //   적으면(예: 「키즈 프로필」로 단정) 플래너가 그 위에 판단을 올린다.
+  // 🔴 «12칸을 각각 부른 합» 과 «전체 호출» 이 다르다 — 89.6%. 결함이 아니라 정보다.
+  //   플래너가 「전체 캠페인」 예산을 데모 합으로 잡으면 근거가 10% 어긋난다.
+  // ⚠️ 제목을 «닿는 범위» 라고 적었다가 고쳤다 — 그건 원인을 단정하는 말이다.
+  //   측정한 것은 «합이 전체보다 적다» 까지고 원인은 재지 않았다. 추정치가 12칸
+  //   수준에서 비가산적이기만 해도 같은 수가 나오는데, 그러면 닿지 못하는
+  //   프로필은 «없다». 그래서 제목·본문에서 단정을 빼고 가설 셋을 그대로 띄운다.
   function rsCoverLoad(){
     var box=el('rsCover'); if(!box) return;
     j(API+'/reach/demo_coverage?'+qs({market:(el('rsMarket')&&el('rsMarket').value)||'KR',
@@ -2317,11 +2318,12 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       if(!d||!d.ok){ box.innerHTML=''; return; }
       box.innerHTML='<div style="margin-top:6px;padding:7px 9px;background:#FFFBEB;'+
         'border-left:3px solid #B45309;border-radius:4px">'+
-        '<b style="color:#92400E">데모로 닿는 범위 '+(d.coverage_pct||0)+'%</b>'+
+        '<b style="color:#92400E">12칸 합 = 전체의 '+(d.coverage_pct||0)+'%</b>'+
         '<div style="color:var(--tm);margin-top:3px">'+esc(d.note||'')+'</div>'+
-        '<div style="color:var(--tm);margin-top:3px">왜 닿지 않는지는 아직 '+
-        '확인 중입니다 — '+(d.gap_hypotheses||[]).map(esc).join(' / ')+
-        ' 중 하나입니다. 무엇이냐에 따라 해석이 달라집니다.</div></div>';
+        '<div style="color:var(--tm);margin-top:4px">원인은 아직 확인 중입니다 — '+
+        '<br>'+(d.gap_hypotheses||[]).map(function(x){return '· '+esc(x);}).join('<br>')+
+        '<br>무엇이냐에 따라 해석이 달라지고, ③이면 간극 자체가 없습니다. '+
+        '가산성을 확인한 것은 '+(d.verified_additive_cells||2)+'칸뿐입니다.</div></div>';
     }).catch(function(){ box.innerHTML=''; });
   }
   function rsCurveStatus(mk){

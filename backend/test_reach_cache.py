@@ -270,8 +270,20 @@ ck("«타게팅 없음이 아니다» 를 «맨 앞에» 적는다",
    (sf.get("warnings") or [""])[0][:60])
 ck("89.6% 를 숫자로 적는다",
    sf.get("found") and any("89.6" in w for w in sf["warnings"]))
-ck("«왜 그런지는 모른다» 를 적는다",
-   sf.get("found") and any("모릅니다" in w for w in sf["warnings"]))
+# 🔴 「원인」 을 단정하지 않는가. 전에는 「어떤 칸에도 안 드는 프로필이
+#   그만큼 있다」 고 적었는데 그건 관측된 차이에 원인을 붙인 추론이었다.
+#   특히 가설 ③(12칸 비가산)이면 «간극 자체가 없다» — 닿지 못하는 프로필이 없다.
+#   가설 둘만 제시하면 받는 쪽에 «없는 선택» 을 강요한다.
+ck("원인을 측정하지 않았다고 적는다",
+   sf.get("found") and any("측정하지 않았습니다" in w for w in sf["warnings"]))
+ck("가설을 셋 다 적는다",
+   sf.get("found") and all(h in " ".join(sf["warnings"])
+                           for h in ("정보가 없는", "전체를 덮지", "합산되도록")),
+   [w[:60] for w in (sf.get("warnings") or [])][1:2])
+ck("«닿을 수 없다» 고 단정하지 않는다",
+   sf.get("found") and not any("닿을 수 없" in w for w in sf["warnings"]))
+ck("가산성을 확인한 칸 수를 적는다",
+   sf.get("found") and any("2칸" in w for w in sf["warnings"]))
 # 🔴 0.2% 경고만 달고 끝내면 10.4% 어긋남을 0.2% 로 읽는다 — 50배다.
 ck("0.2% 경고가 전부가 아니다",
    sf.get("found") and sf["warnings"][0].find("0.2%") < 0,
