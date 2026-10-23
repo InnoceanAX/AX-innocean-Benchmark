@@ -833,7 +833,7 @@ def curve_status(market=""):
     return {"available": True, "market": (market or "").upper(), "rows": out,
             "n_grid": n_all, "n_usable": n_ok,
             "progress": round(n_ok / n_all * 100, 1) if n_all else 0.0,
-            "note": ("진행률의 분모는 격자 전체입니다 — 채워진 것만 세면 늘 100%% 가 됩니다. "
+            "note": ("진행률의 분모는 격자 전체입니다 — 채워진 것만 세면 늘 100% 가 됩니다. "
                      f"호출 한도가 일 {NETFLIX_RATE_LIMITS['day']}회라 며칠에 걸쳐 채워집니다.")}
 
 
