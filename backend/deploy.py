@@ -143,6 +143,8 @@ def deploy_service(with_secret=True, digest=""):
                     "valueSource": {"secretKeyRef": {"secret": GEMINI_SECRET, "version": "latest"}}})
     body = {
         "ingress": "INGRESS_TRAFFIC_ALL",
+        # IAP 를 켜 둔다 — 배포 본문에 없으면 PATCH 가 꺼 버린다(실제로 그랬다)
+        "iapEnabled": True,
         "template": {
             "serviceAccount": SERVICE_SA,   # 최소권한: 마트 읽기 + 시크릿만
             "containers": [{
@@ -176,14 +178,34 @@ def deploy_service(with_secret=True, digest=""):
                 f"배포가 반영되지 않았습니다 — 방금 빌드한 {digest[:19]}… 가 "
                 f"서비스 템플릿에 없습니다(현재 {imgs}). 옛 리비전이 계속 돕니다.")
         print(f"· 리비전 확인 {live} ← 방금 빌드한 이미지")
-    # 공개 접근 (allUsers invoker)
-    pol = {"policy": {"bindings": [{"role": "roles/run.invoker", "members": ["allUsers"]}]}}
+    # 🔴 전에 여기서 매 배포마다 «allUsers» 로 덮어썼다. 그래서 서비스가 인증 없이
+    #   인터넷 전체에 열려 있었고(광고주 벤치마크·넷플릭스 곡선·디플랜 NAS),
+    #   한 번 잠가도 «다음 배포가» 되돌렸다 — 잠금이 설정이 아니라 일시 상태였다.
+    #   2026-10-23 사용자 결정: 잠그고 A1 만 허용.
+    # ⚠️ 사람은 IAP(구글 로그인)로 들어온다. IAP 는 «자기 신원» 으로 서비스를
+    #   부르므로 그 에이전트에게도 invoker 가 있어야 한다 — 없으면 로그인은 되는데
+    #   화면이 403 이 된다(더 헷갈리는 상태다).
+    IAP_AGENT = f"serviceAccount:service-{PROJECT_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com"
+    pol = {"policy": {"bindings": [{
+        "role": "roles/run.invoker",
+        "members": sorted([IAP_AGENT] + [f"serviceAccount:{x}" for x in API_CONSUMERS]),
+    }]}}
     _ok(S.post(f"{base}/{SERVICE}:setIamPolicy", json=pol))
+    print(f"· 호출 권한: IAP 에이전트 + 소비자 {len(API_CONSUMERS)}곳 (공개 아님)")
     uri = S.get(f"{base}/{SERVICE}").json().get("uri")
     print(f"· Cloud Run {'갱신' if exists else '생성'} 완료: {SERVICE}")
     print("· URL:", uri)
     return uri
 
+
+# 🔴 서비스는 «공개가 아니다»(2026-10-23 사용자 결정). 사람은 IAP 구글 로그인,
+#   기계는 아래 목록의 서비스 계정만 부를 수 있다.
+#   ⚠️ 여기에 더하는 것은 «누구에게 보여 줄 것인가» 를 바꾸는 일이다 —
+#     코드 변경이 아니라 결정이므로, 사용자 승인 없이 늘리지 않는다.
+PROJECT_NUMBER = "291757702623"
+API_CONSUMERS = [
+    "a1-runner@innocean-perf-apac-kr.iam.gserviceaccount.com",   # A1 플랫폼(읽기 전용)
+]
 
 MART_JOB = "benchmark-mart-builder"
 
@@ -399,7 +421,7 @@ def verify():
         ("/api/v1/reach/demo_coverage?market=KR&flight_days=30", "데모 커버리지"),
     ]
     print(chr(10) + "=== 라이브 검증:", uri, "===")
-    bad = []
+    bad, blocked = [], []
     for path, name in CHECKS:
         st, body = hit(path)
         # ⚠️ 연결 단계 오류(ERR)만 다시 시도한다 — 새 리비전이 깨어나는 중이면
@@ -411,6 +433,16 @@ def verify():
             time.sleep(5)
             st, body = hit(path)
             retried = " (재시도)"
+        # 🔴 IAP 를 켠 뒤로 «로그인 화면도 HTTP 200» 이다. 상태코드만 보면 앱이
+        #   죽어도 통과한다 — 잠그면서 거짓 통과가 다시 생겼다.
+        #   본문이 로그인 HTML 이면 «확인 못 함» 이지 «통과» 가 아니다.
+        iap = (st == 200 and "accounts.google.com" in (body or "")
+               or st == 200 and (body or "").lstrip().startswith("<!doctype html")
+               and path.startswith("/api/"))
+        if iap:
+            blocked.append(name)
+            print(f" ????  {name:<10} IAP 로그인 화면 — 확인 못 함  {path[:40]}")
+            continue
         ok = (st == 200)
         print(f" {'OK  ' if ok else 'FAIL'} {name:<10} {st}{retried}  {path[:50]}")
         if not ok:
@@ -418,6 +450,11 @@ def verify():
     if bad:
         raise RuntimeError("라이브 검증 실패 — 배포는 됐지만 동작하지 않습니다: "
                            + " / ".join(bad))
+    # ⚠️ IAP 뒤라 못 본 것을 «적는다». 조용히 넘기면 「7종 200」 이 거짓이 된다.
+    if blocked:
+        print(f" ⚠️ IAP 뒤라 {len(blocked)}종을 확인하지 못했습니다 "
+              f"({', '.join(blocked)}) — 서비스 계정으로 IAP 를 통과하는 방법이 "
+              "아직 없습니다(ID 토큰 audience 네 가지 전부 401).")
     return uri
 
 
@@ -565,7 +602,7 @@ def main():
     # 🔴 「✅ 배포 완료」 는 «안 한 검사» 까지 했다고 읽히게 한다. 확인한 것과
     #   확인하지 않은 것을 나눠 적는다 — 뺀 것을 잊으면 그게 구멍이 된다.
     print("\n✅ 확인함 — 이미지 다이제스트 고정 · 리비전 반영(되읽음) · "
-          "엔드포인트 7종 200 · 프론트 문법 · 테스트"
+          "프론트 문법 · 테스트"
           + " · 불변식↔테스트 대조 · 돌연변이 14개(테스트에 이가 있는가)"
           + ("" if a.service_only else " · 마트 Job 스모크(실행·import·자격증명·상류 접근)"))
     # ⚠️ 스모크가 덮은 부분은 이 목록에서 뺀다. 이미 확인한 것을 「확인하지 않음」에
