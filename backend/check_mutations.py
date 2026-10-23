@@ -31,9 +31,9 @@ MUTATIONS = [
      "if npts is not None and npts < 4:",
      "if npts is not None and npts != 100:"),
 
-    ("active-rows-only", "내려 둔 행을 다시 읽는다",
-     'f"AND {ACTIVE_SQL} "\n            f"ORDER BY',
-     'f"ORDER BY'),
+    ("active-rows-only", "내려 둔 행 필터를 끈다",
+     'ACTIVE_SQL = "IFNULL(is_active, TRUE)"',
+     'ACTIVE_SQL = "TRUE"'),
 
     ("fetch-failed-two-answers", "캡 도달을 안 가른다",
      'if r.get("retry_exhausted") is True:\n        return "fetch_failed_capped", att',
@@ -79,6 +79,11 @@ MUTATIONS = [
     ("interp-rejects-non-monotone", "단조성 검사를 끈다",
      "    if drops:",
      "    if False:  # mutated"),
+
+    ("no-flight-mixing", "세대 정렬을 뺀다",
+     'f"IF(IFNULL(is_latest_flight,FALSE),0,1), "',
+     'f"" '),
+
 
     ("no-unverified-codes", "«422» 를 다시 박는다",
      '"note": "모집단이 작아 매체가 출력을 억제한 조건입니다. "',

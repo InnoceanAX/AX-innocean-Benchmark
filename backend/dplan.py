@@ -155,11 +155,50 @@ def get_summary(date_from="2026-01", date_to="2026-12", c=None):
             "n": r["n"], "imp": _num(r["imp"]), "clk": _num(r["clk"]), "views": _num(r["views"]),
             "spend": _money(cost) if cost is not None else None,
             "cpm": _money(r["imp"] and cost and cost / r["imp"] * 1000) if ok else None,
+            # 숫자 칸 — 소비처가 계산에 쓰려고 문자열을 파싱하지 않게 한다.
+            #   포맷(통화 기호·자릿점)이 바뀌는 날 파싱이 «조용히» 틀리고,
+            #   그 원인이 제 쪽에 있는데 상대가 찾게 된다.
+            "imp_n": int(r["imp"] or 0),
+            "clk_n": int(r["clk"] or 0),
+            "views_n": int(r["views"] or 0),
+            "spend_n": float(cost) if cost is not None else None,
+            "cpm_n": (float(cost) / float(r["imp"]) * 1000
+                      if ok and cost and r["imp"] else None),
             "cost_ok": ok,
             "cost_note": None if ok else "광고비 기준 미확인(총액 의심) — 단가지표 제외",
             "spend_basis": r["bases"],
         })
+    # «전체» 합계 — 🔴 광고비 기준이 확인된 매체만 더한다. cost_ok=false 는 총액
+    #   의심이라 단가지표에서 뺐는데 합계에 넣으면 그 금액이 다시 들어온다.
+    #   ⚠️ 뺀 곳을 «센다». 안 적으면 합계가 작은 이유를 아무도 모른다.
+    ok_rows = [x for x in out if x["cost_ok"]]
+    skipped = [x["media"] for x in out if not x["cost_ok"]]
+    imp_ok = sum(x["imp_n"] for x in ok_rows)
+    spend_ok = sum(x["spend_n"] or 0 for x in ok_rows)
+    total = {
+        "n": sum(x["n"] for x in out),
+        "imp_n": sum(x["imp_n"] for x in out),
+        "clk_n": sum(x["clk_n"] for x in out),
+        "views_n": sum(x["views_n"] for x in out),
+        "imp": _num(sum(x["imp_n"] for x in out)),
+        "clk": _num(sum(x["clk_n"] for x in out)),
+        "views": _num(sum(x["views_n"] for x in out)),
+        # 금액·CPM 은 «확인된 매체만» 이다. 노출·클릭과 분모가 다르다는 뜻이고,
+        #   그래서 cpm_n 을 imp_n(전체)이 아니라 imp_ok 로 나눈다.
+        "spend_n": spend_ok,
+        "spend": _money(spend_ok),
+        "cpm_n": (spend_ok / imp_ok * 1000) if imp_ok else None,
+        "cpm": _money(spend_ok / imp_ok * 1000) if imp_ok else None,
+        "spend_media": len(ok_rows),
+        "spend_excluded_media": skipped,
+        "note": (f"금액·CPM 은 광고비 기준이 확인된 {len(ok_rows)}개 매체만 더한 "
+                 f"값입니다"
+                 + (f" — {len(skipped)}개 제외({', '.join(skipped[:4])}"
+                    + ("…" if len(skipped) > 4 else "") + ")" if skipped else "")
+                 + ". 노출·클릭·조회는 전체입니다 — 분모가 다릅니다."),
+    }
     return {"media": out, "n_media": len(out), "currency": "KRW",
+            "total": total,
             "date_from": date_from, "date_to": date_to,
             "freshness": freshness(c),
             "source": "디플랜 NAS", "never_sum_with_api": True}

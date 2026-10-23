@@ -791,6 +791,12 @@ def _curve_status_cached(day, market):
 
     ★ 분모를 «채워진 것» 으로 잡지 않는다 — 그러면 커버리지가 늘 100% 로 나온다.
       격자 전체가 분모고, 그 안에서 ok 가 몇인지가 진행률이다.
+
+    🔴 세 가지를 안 걸러 숫자가 틀려 있었다(2026-10-23):
+      ① is_active — 내려 둔 실험 칸이 격자 수에 들어갔다
+      ② is_latest_flight — 플라이트 세대가 둘이라 격자가 «두 배» 로 보였다
+      ③ fetch_failed 를 «기다리면 되는 것» 과 «재시도가 멈춘 것» 으로 안 갈랐다.
+        lookup 은 가르는데 이 표는 안 갈라서, 같은 상태가 두 화면에서 다른 뜻이었다.
     """
     if not _view_exists(CURVE_VIEW):
         return []
@@ -800,8 +806,14 @@ def _curve_status_cached(day, market):
         bigquery.ScalarQueryParameter("mk", "STRING", market or "KR")])
     try:
         rows = list(c.query(
-            f"SELECT IFNULL(curve_status,'not_requested') st, COUNT(*) n "
-            f"FROM {CURVE_VIEW} {where} GROUP BY st ORDER BY n DESC",
+            f"SELECT CASE WHEN IFNULL(curve_status,'not_requested')='fetch_failed' "
+            f"            AND IFNULL(retry_exhausted,FALSE) "
+            f"       THEN 'fetch_failed_capped' "
+            f"       ELSE IFNULL(curve_status,'not_requested') END st, COUNT(*) n "
+            f"FROM {CURVE_VIEW} {where} "
+            f"{'AND' if where else 'WHERE'} {ACTIVE_SQL} "
+            f"AND IFNULL(is_latest_flight, TRUE) "
+            f"GROUP BY st ORDER BY n DESC",
             job_config=job).result())
     except Exception:
         return []
@@ -1219,7 +1231,16 @@ def points_from_cache(rows, cpm, budget, points=20):
                 warn.append(f"도달률은 범위입니다 — 모집단 {round(lo):,}~{round(hi):,} "
                             f"«프로필»(벤더 제공, 폭 ±{pop['spread_pct']/2:.0f}%). "
                             "단일 %가 아니라 띠로 읽으십시오. 프로필은 사람 수가 아닙니다.")
+    # ⚠️ 어느 «플라이트 세대» 의 곡선인지 올린다. 같은 조합에 세대가 둘일 수 있고
+    #   값이 다르다(실측: 25-34 Male 612,282 vs 607,628). 안 적으면 화면이 둘을
+    #   같은 것으로 보여 주고, 날짜가 바뀐 줄 아무도 모른다.
+    _fs = row.get("flight_start")
+    if _fs is not None and not row.get("is_latest_flight", True):
+        warn.append(f"⚠️ 이 곡선은 {_fs} 시작 플라이트 기준이고 «최신 세대가 "
+                    "아닙니다». 최신 세대에는 아직 이 조건이 없습니다.")
     return {"points": out, "warnings": warn, "scope": scope,
+            "flight_start": str(_fs) if _fs is not None else None,
+            "is_latest_flight": bool(row.get("is_latest_flight", True)),
             # ⚠️ v1 에서는 항상 'unknown' 이다(실측 22/22). 이 값으로 분기하지 마십시오 —
             #   다른 가지에 영원히 안 들어갑니다. v2 에서 의미가 생깁니다.
             "scope_informative": False,
@@ -1558,6 +1579,9 @@ VALUES_SQL = ("IFNULL((SELECT STRING_AGG(x, ',' ORDER BY x) "
               "FROM UNNEST(IFNULL(targeting_value_ids, [])) x), '')")
 
 
+# INVARIANT(no-flight-mixing): 플라이트 세대를 섞지 않는다. 같은 조합에 세대가
+#   둘일 수 있고 값이 다르다 — 칸마다 따로 조회하는 합성·커버리지가 섞으면
+#   «서로 다른 세대의 합» 이 되는데 틀린 티가 안 난다.
 def _rows_sql(limit=5, with_values=False):
     """격자 조회 SQL — 순수 함수로 둬서 조건이 빠지면 테스트가 잡게 한다.
 
@@ -1574,7 +1598,15 @@ def _rows_sql(limit=5, with_values=False):
             f"WHERE country=@mk AND flight_days=@fd "
             f"AND {match} "
             f"AND {ACTIVE_SQL} "
-            f"ORDER BY IF(IFNULL(curve_status,'')='ok',0,1), fetched_at DESC "
+            # 🔴 «최신 플라이트» 를 먼저 올린다. 전에는 fetched_at 만 봤는데 그건
+            #   «최신 수집» 이지 최신 세대가 아니다 — DB 가 옛 세대의 한 칸만 다시
+            #   받으면 그 칸만 옛 세대가 되고, 칸마다 따로 조회하는 합성·커버리지가
+            #   «서로 다른 세대의 합» 을 낸다(숫자는 그럴듯하고 틀린 티가 안 난다).
+            # ⚠️ 거르지 «않고» 정렬만 한다. is_latest_flight 가 아직 NULL 인 옛 행이
+            #   있을 수 있어, 거르면 멀쩡한 곡선이 사라진다.
+            f"ORDER BY IF(IFNULL(curve_status,'')='ok',0,1), "
+            f"IF(IFNULL(is_latest_flight,FALSE),0,1), "
+            f"flight_start DESC, fetched_at DESC "
             f"LIMIT {int(limit)}")
 
 
@@ -1614,6 +1646,7 @@ def _grid_anchors(market, key):
             f"WHERE country=@mk AND IFNULL(targeting_key,'none')=@tk "
             f"AND IFNULL(curve_status,'')='ok' AND flight_days IS NOT NULL "
             f"AND {ACTIVE_SQL} "          # 내려 둔 실험 칸을 앵커로 쓰지 않는다
+            f"AND IFNULL(is_latest_flight, TRUE) "   # 옛 세대를 앵커로 쓰지 않는다
             f"ORDER BY flight_days",
             job_config=bigquery.QueryJobConfig(query_parameters=prm)).result()
         got = [int(r.flight_days) for r in rows]
@@ -1874,6 +1907,7 @@ def synth_curve(cells, market="KR", flight_days=30, media="",
                     "max_reach": parsed0["max_reach"],
                     "max_imp": parsed0.get("max_imp"),
                     "receipts": [r for r in [_receipt(cres[1])] if r],
+                    "provenance": PROVENANCE,
                     "cpm": round(cpm0, 2), "cpm_source": src0}
 
     got, missing = [], []
@@ -1949,6 +1983,7 @@ def synth_curve(cells, market="KR", flight_days=30, media="",
             "receipts": [r for r in (_receipt(r0, lb) for (_k, _p, r0), lb
                                      in zip(got, labels)) if r],
             "combined_key_tried": ckey,
+            "provenance": PROVENANCE,
             "points": parsed["points"], "warnings": parsed["warnings"],
             "population": parsed.get("population"), "max_reach": parsed["max_reach"],
             "max_imp_sum": round(etot),
@@ -2005,6 +2040,23 @@ def synth_selfcheck(market="KR", flight_days=30):
             "gap_cause": "unknown",
             "verified_additive_cells": VERIFIED_ADDITIVE_CELLS,
             "gap_hypotheses": GAP_HYPOTHESES}
+
+
+# 🔑 «격자에서 그대로» 와 «벤치마크가 계산한 것» 을 필드 단위로 가른다(DB 권고).
+#   소비처가 숫자를 받을 때 그게 벤더 값인지 우리 해석인지 알아야 한다.
+#   ⚠️ points 가 benchmark 쪽인 게 중요하다 — 격자는 «노출→도달» 이고 화면의
+#     «예산→도달» 은 우리가 CPM 으로 환산한 것이다. 그 CPM 은 광고주 1곳 자료라
+#     «가정» 이다(cpm_source 에 적힌다). 모르고 쓰면 그 가정이 소비처 숫자에 들어간다.
+PROVENANCE = {
+    "grid": ["key", "targeting_label", "max_reach", "max_impression", "implied_b",
+             "flight_start", "is_latest_flight", "receipts", "n_ok_rows", "state"],
+    "benchmark": ["points", "cost", "imps", "frequency", "reach_pct_lower",
+                  "reach_pct_upper", "cpm", "warnings", "population",
+                  "basis", "max_imp_sum", "coverage_pct"],
+    "note": ("grid = 넷플릭스 격자에서 그대로 넘어온 값. "
+             "benchmark = 벤치마크가 계산한 값(예산 환산·보간·합성·경고). "
+             "예산축은 CPM 환산이고 그 CPM 은 가정입니다 — cpm_source 를 보십시오."),
+}
 
 
 def lookup_curve(market="KR", flight_days=30, age_name="", gender_name="",
@@ -2068,6 +2120,13 @@ def lookup_curve(market="KR", flight_days=30, age_name="", gender_name="",
             "population": parsed.get("population"), "max_reach": parsed["max_reach"],
             "implied_b": rows[0].get("implied_b"),
             "receipts": [r for r in [_receipt(rows[0])] if r],
+            # A1 요청 — 정의역 끝. synth 에는 있었는데 lookup 에는 없었다.
+            #   격자의 max_impression 과 내가 점에서 센 끝이 같은지 실측했다(8/8 일치).
+            "max_impression": rows[0].get("max_impression"),
+            "max_imp": parsed.get("max_imp"),
+            "flight_start": parsed.get("flight_start"),
+            "is_latest_flight": parsed.get("is_latest_flight"),
+            "provenance": PROVENANCE,
             # «전연령·전성별» 은 광고주 변형까지 여러 행이 ok 로 들어 있다(E1).
             #   곡선은 같지만 영수증은 행마다 다르므로 몇 장 있는지 같이 적는다.
             "n_ok_rows": sum(1 for r in rows if (r.get("curve_status") or "") == "ok"),

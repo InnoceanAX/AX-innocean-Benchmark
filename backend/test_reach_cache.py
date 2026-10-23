@@ -519,6 +519,33 @@ print(chr(10) + "=== 🔴 내려 둔 행(is_active=FALSE)을 쓰지 않는다 ==
 #   DB 가 내려 둔 칸의 곡선과 영수증을 쓰고 있었다.
 #   이 키는 곡선이 같아서(6,482,607) 숫자가 안 바뀌어 «안 보였다». 하지만 DB 가
 #   «틀려서» 내린 행이면 그대로 쓴다 — 그러면 is_active 가 아무 일도 하지 않는다.
+# INV(no-flight-mixing)
+# 🔴 DB 가 새 플라이트 세대를 돌리기 시작했다(2026-11-01). 같은 조합에 세대가 둘이고
+#   값이 «다르다» — 25-34 Male 이 612,282(10-23) vs 607,628(11-01).
+#   내 조회는 fetched_at 만 봤는데 그건 «최신 수집» 이지 «최신 세대» 가 아니다.
+#   합성·커버리지는 칸마다 따로 조회하므로, 한 칸만 어긋나면 «서로 다른 세대의 합»
+#   이 된다. 숫자는 그럴듯하고 틀린 티가 안 난다.
+_fsql = reach._rows_sql(5)
+ck("조회가 최신 플라이트를 먼저 올린다",
+   "is_latest_flight" in _fsql, _fsql[:160])
+ck("정렬에 flight_start 가 들어간다", "flight_start DESC" in _fsql)
+# ⚠️ 거르지 «않는다». is_latest_flight 가 아직 NULL 인 옛 행이 있을 수 있고,
+#   거르면 멀쩡한 곡선이 사라진다 — 「없다」 와 「안 최신이다」 는 다르다.
+ck("세대로 «거르지는» 않는다(정렬만)",
+   "AND IFNULL(is_latest_flight" not in _fsql, _fsql[:200])
+# 옛 세대를 쓰면 화면이 그 사실을 말해야 한다
+_old_row = dict(_row(), flight_start="2026-10-23", is_latest_flight=False)
+_d_old, _ = reach.points_from_cache([_old_row], CPM, BUD, points=5)
+ck("옛 세대면 그 사실을 경고한다",
+   _d_old and any("최신 세대가 아닙니다" in w for w in _d_old["warnings"]),
+   [w[:50] for w in (_d_old or {}).get("warnings", [])])
+ck("옛 세대면 is_latest_flight=False 를 올린다",
+   _d_old and _d_old.get("is_latest_flight") is False)
+_new_row = dict(_row(), flight_start="2026-11-01", is_latest_flight=True)
+_d_new, _ = reach.points_from_cache([_new_row], CPM, BUD, points=5)
+ck("최신 세대면 경고하지 않는다",
+   _d_new and not any("최신 세대가 아닙니다" in w for w in _d_new["warnings"]))
+
 # INV(active-rows-only)
 _sql = reach._rows_sql(5)
 ck("조회 SQL 이 is_active 를 거른다", "is_active" in _sql, _sql[:140])
