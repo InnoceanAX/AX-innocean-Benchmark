@@ -1716,7 +1716,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
           <div class="fcell" style="margin-bottom:10px"><label>총 예산 (원)</label><input type="number" id="rsBudget" value="2000000000" step="100000000"></div>
           <div class="fcell" style="margin-bottom:10px"><label>집행기간 (플라이트)</label><select id="rsDays"><option value="7">7일</option><option value="14">14일</option><option value="30" selected>30일</option><option value="60">60일</option><option value="90">90일</option></select></div>
           <div class="fcell" style="margin-bottom:10px"><label>도달 가능 모집단 (가정)</label><input type="number" id="rsUniverse" value="36000000" step="1000000"></div>
-          <div class="fcell" style="margin-bottom:12px"><label>접촉 집중도 k (가정)</label><input type="number" id="rsK" value="1" step="0.1" min="0.1"></div>
+          <!-- 🔴 «접촉 집중도 k (가정)» 입력을 뺐다 — 두 겹으로 죽은 칸이었다. ⓐ /api/v1/reach/curve 에 k 파라미터가 아예 없어 질의에 안 실렸고 ⓑ 실려도 k 는 assumption 제공자만 쓰는데 기본은 fitted 라 무시한다(실측: k=0.5/1.0/2.0 에서 곡선 불변). assumption 을 화면에 올릴 날이 오면 그때 되살린다. -->
           <button class="btn-pri" id="rsRun" style="width:100%;padding:9px;border:none;cursor:pointer;font-family:inherit;font-size:13px">다시 계산</button>
         </div>
         <div class="pvbox" style="margin-top:16px">
@@ -2208,7 +2208,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     var pseq=++NFX_PSEQ;              // 겹친 요청 보호 — 합성과 같은 이유다
     var q=qs({market:(el('rsMarket')&&el('rsMarket').value)||'KR',
               flight_days:(el('rsDays')&&el('rsDays').value)||30,
-              media:el('rsMedia')?el('rsMedia').value:'',
+              media:'넷플릭스'  /* 🔴 넷플릭스 격자 전용 패널이다. 왼쪽 «매체» 선택값(기본 M)을 보내면 넷플릭스 곡선을 Meta CPM (₩1,832)으로 환산한다 — 실제 ₩33,620 대비 18.4배다. 도달은 맞고 «그걸 얻는 예산» 이 틀리므로 플래너가 예산을 18분의 1로 잡는다. */,
               age:NFX_PICK.age, gender:NFX_PICK.gender});
     out.innerHTML='<span style="color:var(--tm)">조회 중…</span>';
     j(API+'/reach/lookup?'+q).then(function(d){
@@ -2217,9 +2217,10 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
         var last=(d.points||[])[d.points.length-1]||{};
         out.innerHTML='<b style="color:#1F7A3D">곡선 있음</b>'+
           (d.targeting_label?(' <span style="color:var(--tm)">('+esc(d.targeting_label)+')</span>'):'')+
-          ' — 최대 도달 '+
+          '<br>곡선의 최대 도달 '+
           (d.max_reach||0).toLocaleString()+' 프로필'+
-          (last.cost?(' · 예산 '+(last.cost/100000000).toFixed(1)+'억 기준'):'')+
+          (last.cost?('<br>이 화면의 예산 상한 '+(last.cost/100000000).toFixed(1)+
+            '억에서는 '+(last.reach||0).toLocaleString()+' 프로필'):'')+
           ((d.warnings||[]).length?('<br><span style="color:#B45309">'+
             esc(d.warnings[0])+'</span>'):'');
         return;
@@ -2290,7 +2291,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
     out.innerHTML='<span style="color:var(--tm)">더하는 중… ('+keys.length+'칸)</span>';
     j(API+'/reach/synth?'+qs({market:(el('rsMarket')&&el('rsMarket').value)||'KR',
         flight_days:(el('rsDays')&&el('rsDays').value)||30,
-        media:el('rsMedia')?el('rsMedia').value:'', cells:cells})
+        media:'넷플릭스'  /* 🔴 넷플릭스 격자 전용 패널이다. 왼쪽 «매체» 선택값(기본 M)을 보내면 넷플릭스 곡선을 Meta CPM (₩1,832)으로 환산한다 — 실제 ₩33,620 대비 18.4배다. 도달은 맞고 «그걸 얻는 예산» 이 틀리므로 플래너가 예산을 18분의 1로 잡는다. */, cells:cells})
     ).then(function(d){
       if(seq!==NFX_SEQ) return;        // 더 최신 선택이 있다 — 이 응답은 버린다
       if(!d||!d.found){
@@ -2574,7 +2575,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       }).join('');
       var a={}; (d.assumptions||[]).forEach(function(x){a[x.key]=x;});
       if(a.universe) el('rsUniverse').title=a.universe.note;
-      if(a.k) el('rsK').title=a.k.note;
+      
     });
   }
   if(el('rsRun')) el('rsRun').onclick=rsRun;

@@ -1799,8 +1799,14 @@ def _receipt(row, label=""):
     cid = row.get("curve_id")
     if not cid:
         return None
+    _fs = row.get("flight_start")
     return {"curve_id": cid, "label": label or (row.get("targeting_label") or ""),
             "flight_days": row.get("flight_days"),
+            # 🔑 칸별 «세대» 를 싣는다. 합성은 칸마다 따로 조회하고 세대를 거르지는
+            #   않으므로(거르면 옛 행이 사라진다), 영수증에 없으면 소비처가
+            #   «같은 세대끼리 더한 것인지» 확인할 길이 없다.
+            "flight_start": str(_fs) if _fs is not None else None,
+            "is_latest_flight": bool(row.get("is_latest_flight", True)),
             "fetched_at": str(row.get("fetched_at") or "")[:19] or None}
 
 
@@ -1971,6 +1977,16 @@ def synth_curve(cells, market="KR", flight_days=30, media="",
             "해석이 갈립니다 — " + " / ".join(GAP_HYPOTHESES) + ". 특히 ③이면 "
             f"간극 자체가 없습니다: 가산성을 확인한 것은 «{VERIFIED_ADDITIVE_CELLS}칸» "
             "뿐이고(차이 0.03%) 12칸은 확인하지 못했습니다. 넷플릭스에 문의 중입니다."))
+    # 🔴 칸마다 세대가 다르면 «서로 다른 세대의 합» 이다. 숫자는 그럴듯하고 틀린
+    #   티가 안 난다 — 그래서 섞였으면 말한다. 막지는 않는다(한쪽 세대에만 있는
+    #   칸이 있을 수 있고, 그때 거절하면 쓸 수 있는 답을 버린다).
+    _gens = sorted({str(r0.get("flight_start")) for (_k, _p, r0) in got
+                    if r0.get("flight_start") is not None})
+    if len(_gens) > 1:
+        warn.insert(0, "🔴 고른 칸들이 «서로 다른 플라이트 세대» 에서 왔습니다("
+                       + " · ".join(_gens) + "). 세대마다 값이 다르므로 이 합은 "
+                       "한 시점의 수치가 아닙니다 — 영수증의 flight_start 를 "
+                       "확인하십시오.")
     parsed, why2 = _slice_synthetic(pts, got[0][2], cpm, budget, points, warn)
     if parsed is None:
         return {"found": False, "state": "error", "note": why2}
@@ -1983,6 +1999,10 @@ def synth_curve(cells, market="KR", flight_days=30, media="",
             "receipts": [r for r in (_receipt(r0, lb) for (_k, _p, r0), lb
                                      in zip(got, labels)) if r],
             "combined_key_tried": ckey,
+            "flight_starts": _gens,
+            "is_latest_flight": all(bool(r0.get("is_latest_flight", True))
+                                    for (_k, _p, r0) in got),
+            "mixed_flights": len(_gens) > 1,
             "provenance": PROVENANCE,
             "points": parsed["points"], "warnings": parsed["warnings"],
             "population": parsed.get("population"), "max_reach": parsed["max_reach"],
@@ -2028,6 +2048,11 @@ def synth_selfcheck(market="KR", flight_days=30):
     cov = syn_r / base * 100 if base else None
     gap = base - syn_r
     return {"ok": True, "measured_all": round(base), "synth_cells": round(syn_r),
+            # 칸들과 기준선이 «같은 세대» 인지 — 아니면 비율이 한 시점의 것이 아니다
+            "cells_flight_starts": syn.get("flight_starts"),
+            "cells_mixed_flights": bool(syn.get("mixed_flights")),
+            "baseline_flight_start": (res[1].get("flight_start") and
+                                      str(res[1]["flight_start"])) if res else None,
             "coverage_pct": round(cov, 1) if cov is not None else None,
             "gap_profiles": round(gap), "flight_days": int(flight_days or 30),
             "note": (f"연령×성별 {len(cells)}칸을 다 더하면 {round(syn_r):,} 프로필이고, "
