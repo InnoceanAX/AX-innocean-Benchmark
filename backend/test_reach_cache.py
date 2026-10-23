@@ -446,6 +446,37 @@ print("\n=== 보간 헬퍼 ===")
 pp = [(1000.0, 100.0), (2000.0, 180.0), (4000.0, 300.0)]
 ck("구간 안은 선형", abs(reach._interp_reach(pp, 1500.0) - 140.0) < 1e-6)
 ck("왼쪽 밖은 첫 값", reach._interp_reach(pp, 10.0) == 100.0)
+# INV(cap-is-marked)
+# 🔴 곡선이 «상한에 잘린» 구간을 그렇게 말해야 한다. 평평한 선을 그대로 두면
+#   「모집단 전체에 닿았다」 로 읽히는데, 모형이 아니라 상한이 말한 것이다.
+#   실측(2026-10-23): Meta 적합 20억 · 가정 모집단 3,600만에서 점 20개 중 18개가
+#   같은 값이었고, 모형 예측은 20억에서 3억 3천만(가정의 9배)이었다.
+# a·imps^b 가 cap 에 닿는 지점을 «식으로» 푼다 — 점을 훑으면 점 간격만큼 뭉툭해지고
+#   성긴 구간(상한 이전에 2개뿐이었다)에서는 아예 못 찾는다.
+_A, _B, _CAP, _CPM = 2.0, 1.0, 1_000.0, 1_000.0   # reach = 2·imps → cap 에서 imps=500
+_c = reach._cap_point(_A, _B, _CAP, _CPM, budget=10 ** 9, source="assumed_universe")
+ck("상한 지점을 식으로 푼다", _c and _c["at_imps"] == 500, _c)
+ck("상한 예산도 같이 준다", _c and _c["at_cost"] == 500, _c)
+ck("상한의 «출처» 를 밝힌다", _c and _c["source"] == "assumed_universe")
+ck("«모형이 아니라 상한» 이라고 적는다", _c and "상한" in (_c.get("note") or ""))
+# ⚠️ 예산 안에서 상한에 «안 닿으면» None 이다. 「상한이 없다」 와 「이 예산에서는
+#   안 닿는다」 는 다르고, 뒤는 그래프가 멀쩡하다는 뜻이라 표시할 게 없다.
+ck("예산 안에서 안 닿으면 None",
+   reach._cap_point(_A, _B, _CAP, _CPM, budget=100, source="assumed_universe") is None)
+ck("상한이 없으면 None",
+   reach._cap_point(_A, _B, 0, _CPM, budget=10 ** 9, source="assumed_universe") is None)
+
+# 🔴 축만 줄이면 안 된다 — 상한 이전에 점이 없으면 확대해도 꺾이는 모양이 안 보인다.
+_g = reach._cost_grid(2_000_000_000, 20, 211_098_594)
+_in = sum(1 for x in _g if x <= 211_098_594)
+ck("상한 이전 구간에 점을 «몰아» 뽑는다", _in >= 10, f"{_in}/{len(_g)}")
+ck("상한 뒤도 조금은 그린다(상한이 있다는 사실이 보이게)",
+   len(_g) - _in >= 2, f"{len(_g) - _in}개")
+ck("점 수는 요청한 만큼", len(_g) == 20, len(_g))
+# 상한이 없으면 등간격 그대로
+_g2 = reach._cost_grid(1_000_000, 10, None)
+ck("상한이 없으면 등간격", abs(_g2[0] - 100_000) < 1 and len(_g2) == 10, _g2[:2])
+
 # INV(no-extrapolation)
 # ⚠️ 표시를 「120일은 보간하지 않는다」 위에 달아 뒀었다. 그건 «앵커 밖
 #   기간» 을 거절하는 것이고, 곡선 끝 밖 외삽을 막는 성질은 여기다.

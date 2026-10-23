@@ -132,6 +132,53 @@ def _cpm(media, market, day):
         "YouTube 가 14.9배 차이). 매체를 바꾸거나, 노출을 직접 입력하십시오.")
 
 
+# INVARIANT(cap-is-marked): 곡선이 «상한에 잘린» 구간을 그렇게 말한다. 평평한 선을
+#   그대로 두면 「모집단 전체에 닿았다」 로 읽히는데, 모형이 아니라 상한이 말한 것이다.
+def _cap_point(a, b, cap, cpm, budget, source):
+    """멱함수 reach=a·imps^b 가 상한 cap 에 «처음 닿는» 예산을 푼다.
+
+    점을 훑어 찾지 않고 식으로 푼다 — 훑으면 점 간격만큼 뭉툭해지고,
+    점이 성긴 구간(지금 상한 이전에 2개)에서는 아예 못 찾는다.
+
+    ⚠️ 상한 밖이면 None 이다. 「상한이 없다」 와 「예산 안에서 안 닿는다」 는
+      다른 말이고, 뒤는 그래프가 멀쩡하다는 뜻이라 표시할 게 없다.
+    """
+    if not cap or cap <= 0 or a <= 0 or b <= 0 or not cpm:
+        return None
+    try:
+        imps_at = (cap / a) ** (1.0 / b)
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return None
+    cost_at = imps_at * cpm / 1000.0
+    if cost_at <= 0 or cost_at >= budget:
+        return None          # 이 예산 안에서는 상한에 안 닿는다 — 표시할 게 없다
+    return {"at_cost": round(cost_at), "at_imps": round(imps_at),
+            "value": round(cap), "source": source,
+            "note": ("여기부터는 모형이 아니라 «상한» 입니다 — "
+                     + ("도달 가능 모집단(가정)에 닿았습니다."
+                        if source == "assumed_universe"
+                        else "자료가 여기서 끝납니다."))}
+
+
+def _cost_grid(budget, n, cap_cost=None, share=0.7):
+    """예산 축의 점들. 상한이 있으면 «그 이전» 에 점을 몰아 뽑는다.
+
+    🔴 전에는 cost = budget·i/n 로 등간격이었다. 상한이 예산의 15% 지점이면
+      점 20개 중 «3개» 만 꺾이는 구간에 들어간다 — 확대해도 모양이 안 보인다.
+    ⚠️ 상한 뒤도 «조금은» 그린다. 아예 자르면 「상한이 있다」 는 사실이 안 보인다.
+    """
+    n = max(2, int(n))
+    if not cap_cost or cap_cost <= 0 or cap_cost >= budget:
+        return [budget * i / n for i in range(1, n + 1)]
+    n_in = max(2, int(round(n * share)))
+    n_out = max(1, n - n_in)
+    # 상한 직전까지 촘촘히, 상한 지점을 «정확히» 포함, 그 뒤는 성기게
+    g = [cap_cost * i / n_in for i in range(1, n_in + 1)]
+    for j in range(1, n_out + 1):
+        g.append(cap_cost + (budget - cap_cost) * j / n_out)
+    return g
+
+
 def _reach_fraction(imps, universe, k):
     """노출 → 도달률. 접촉 횟수가 NBD(음이항)를 따른다는 가정.
 
@@ -622,8 +669,8 @@ class FittedReachProvider(Provider):
         cap = float(universe) if universe else None   # 사용자가 상한(모집단)을 주면 그 위로 안 올라간다
         pts = []
         n = max(int(points), 2)
-        for i in range(1, n + 1):
-            cost = budget * i / n
+        cap_info = _cap_point(a, b, cap, cpm, budget, "assumed_universe")
+        for cost in _cost_grid(budget, n, cap_info and cap_info["at_cost"]):
             imps = cost / cpm * 1000.0
             reach = a * (imps ** b)
             if cap:
@@ -634,6 +681,9 @@ class FittedReachProvider(Provider):
         return {
             "provider": self.name, "provider_label": self.label,
             "fitted": True,
+            # 🔑 상한에 닿는 지점. 없으면 None — 「상한이 없다」 가 아니라
+            #   「이 예산 안에서는 안 닿는다」 는 뜻이고, 그러면 그래프가 멀쩡하다.
+            "cap": cap_info,
             "estimate_badge": f"실측 적합 — Meta 캠페인 {n_fit:,}개로 적합 (R²={r2:.2f})",
             "points": pts,
             "measured": {"cpm": round(cpm, 2), "cpm_source": cpm_src,

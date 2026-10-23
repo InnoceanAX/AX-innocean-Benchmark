@@ -85,6 +85,10 @@ MUTATIONS = [
      'f"" '),
 
 
+    ("cap-is-marked", "상한 지점을 안 풀고 None 을 돌려준다",
+     "    if not cap or cap <= 0 or a <= 0 or b <= 0 or not cpm:",
+     "    if True:"),
+
     ("no-unverified-codes", "«422» 를 다시 박는다",
      '"note": "모집단이 작아 매체가 출력을 억제한 조건입니다. "',
      '"note": "모집단이 작아 매체가 출력을 억제한 조건입니다(미공개, 422). "'),

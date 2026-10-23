@@ -1745,7 +1745,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
           <div id="rsCmpWhat"></div>
           <div id="rsCmpBlocked"></div>
         </div>
-        <div class="note" id="rsCaveat" style="margin-top:16px"></div>
+        <div id="rsCapNote"></div><div class="note" id="rsCaveat" style="margin-top:16px"></div>
       </div>
     </div>
   </div>
@@ -2553,18 +2553,42 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       }).join('');
       if(window.Chart){
         if(rsChart) rsChart.destroy();
+        // 🔴 카테고리 축이었다. 백엔드가 «볼 구간» 에 점을 몰아 뽑게 되면서
+        //   점 간격이 불균등해졌는데, 카테고리 축은 그걸 «같은 너비» 로 그린다 —
+        //   0.15억→0.30억과 2.11억→5.09억이 같아 보인다. 선형 축으로 바꾼다.
+        var _cap=d.cap||null;
+        var _E=100000000;
         rsChart=new Chart(el('rsChart'),{type:'line',data:{
-          labels:pts.map(function(p){return (p.cost/100000000).toFixed(0)+'억';}),
           datasets:[{label:hasPct?'Reach 1+ (%, 프로필 기준)':'Reach 1+ (프로필)',
-            data:pts.map(function(p){return hasPct?p.reach_pct:p.reach;}),
+            data:pts.map(function(p){return {x:p.cost/_E, y:(hasPct?p.reach_pct:p.reach)};}),
             borderColor:getComputedStyle(document.documentElement).getPropertyValue('--ind').trim()||'#4F46E5',
-            backgroundColor:'rgba(79,70,229,.08)',fill:true,tension:.3,pointRadius:3}]},
-          options:{responsive:true,maintainAspectRatio:false,
+            backgroundColor:'rgba(79,70,229,.08)',fill:true,tension:.3,pointRadius:3,
+            // 상한 뒤의 점은 «흐리게» — 지우지 않는다. 지우면 「상한이 있다」 가 안 보인다.
+            segment:{borderDash:function(c){
+              return (_cap && c.p0.parsed.x >= _cap.at_cost/_E) ? [5,4] : undefined;}}}]},
+          options:{responsive:true,maintainAspectRatio:false,parsing:false,
             scales:{y:{beginAtZero:true,ticks:{callback:function(v){
                       return hasPct?(v+'%'):(v>=10000?(v/10000).toFixed(0)+'만':v);}},
                     title:{display:true,text:hasPct?'Reach 1+ (%, 프로필 기준)':'Reach 1+ (프로필)'}},
-                    x:{title:{display:true,text:'예산'}}},
-            plugins:{legend:{display:false}}}});
+                    x:{type:'linear',beginAtZero:true,
+                       title:{display:true,text:'예산 (억원)'},
+                       ticks:{callback:function(v){
+                         return (v<1?v.toFixed(2):v.toFixed(v<10?1:0))+'억';}}}},
+            plugins:{legend:{display:false},
+              tooltip:{callbacks:{title:function(it){
+                return (it[0].parsed.x<1?it[0].parsed.x.toFixed(2)
+                        :it[0].parsed.x.toFixed(1))+'억';}}}}}});
+        // 🔑 상한을 «말한다». 평평한 선만 두면 「모집단 전체에 닿았다」 로 읽히는데,
+        //   모형이 아니라 상한이 말한 것이다.
+        var _cb=el('rsCapNote');
+        if(_cb) _cb.innerHTML = !_cap ? '' :
+          ('<div style="margin-top:8px;padding:8px 10px;background:#FFFBEB;'+
+           'border-left:3px solid #B45309;border-radius:4px;font-size:11px">'+
+           '<b style="color:#92400E">예산 '+(_cap.at_cost/_E).toFixed(2)+'억부터는 '+
+           '그래프가 «상한» 입니다</b><div style="color:var(--tm);margin-top:3px">'+
+           esc(_cap.note)+' 상한값 '+(_cap.value||0).toLocaleString()+
+           ' · 그 뒤 구간은 점선으로 그렸습니다 — 예산을 더 써도 이 그림에서는 '+
+           '늘지 않습니다.</div></div>');
       }
       el('rsCaveat').innerHTML='<b>이 숫자를 읽을 때</b><ul>'+
         d.caveats.map(function(c){return '<li>'+c.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')+'</li>';}).join('')+'</ul>';
