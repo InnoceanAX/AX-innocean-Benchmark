@@ -1711,7 +1711,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       <div>
         <div class="pvbox">
           <h4>조건</h4>
-          <div class="fcell" style="margin-bottom:10px"><label>매체</label><select id="rsMedia"></select></div>
+          <div class="fcell" style="margin-bottom:10px"><label>매체</label><select id="rsMedia"></select></div><div id="rsBasisNote"></div><div id="rsBasisLegend" style="font-size:10px;color:var(--tm);margin:-4px 0 12px"></div>
           <div class="fcell" style="margin-bottom:10px"><label>국가</label><select id="rsMarket"></select></div>
           <div class="fcell" style="margin-bottom:10px"><label>총 예산 (원)</label><input type="number" id="rsBudget" value="2000000000" step="100000000"></div>
           <div class="fcell" style="margin-bottom:10px"><label>집행기간 (플라이트)</label><select id="rsDays"><option value="7">7일</option><option value="14">14일</option><option value="30" selected>30일</option><option value="60">60일</option><option value="90">90일</option></select></div>
@@ -2099,9 +2099,47 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
 
   /* ───────────────────────── 도달 시뮬레이터 ───────────────────────── */
   var rsChart=null;
+  /* 고른 매체의 «근거» 를 드롭다운 아래 한 줄로. A1 과 같은 문구를 쓴다 —
+     문구가 갈리면 보는 사람이 어느 화면을 믿을지 모른다. 문구는 백엔드에서
+     내려오므로 한 곳을 고치면 두 화면이 같이 바뀐다. */
+  function rsBasisNote(){
+    var box=el('rsBasisNote'); if(!box) return;
+    var v=el('rsMedia')&&el('rsMedia').value;
+    var b=(window.RS_BASIS||{})[v];
+    if(!b){ box.innerHTML=''; return; }
+    var color=({measured:'#065F46',borrowed:'#B45309',borrowed_nas:'#B45309',
+                assumed:'#9CA3AF',unavailable:'#B91C1C'})[b.code]||'#6B7280';
+    var bg=({measured:'#ECFDF5',borrowed:'#FFFBEB',borrowed_nas:'#FFFBEB',
+             assumed:'#F9FAFB',unavailable:'#FEF2F2'})[b.code]||'#F9FAFB';
+    box.innerHTML='<div style="margin:-4px 0 10px;padding:7px 9px;background:'+bg+
+      ';border-left:3px solid '+color+';border-radius:4px;font-size:11px;'+
+      'color:var(--tm)">'+esc(b.note||'')+'</div>';
+  }
   function rsInit(){
     if(!el('rsMedia').options.length){
+      /* 🔑 매체마다 «도달 근거» 가 다르다 — 도달 적합은 Meta 하나뿐이고 나머지는
+         CPM 만 자기 실측이다. 그 차이가 안 보이면 모든 매체가 같은 근거인 줄 안다.
+         목록을 한 번에 받아 꼬리표를 단다(매체마다 곡선을 부르면 BQ 를 15번 탄다). */
+      j(API+'/reach/media_basis?market=KR').then(function(mb){
+        var list=(mb&&mb.media)||[];
+        if(list.length){
+          window.RS_BASIS={};
+          el('rsMedia').innerHTML=list.map(function(x){
+            window.RS_BASIS[x.value]=x;
+            /* 곡선이 안 나오는 매체는 «고를 수 없게» 둔다 — 고르게 해 놓고
+               오류를 띄우면 플래너는 자기가 뭘 잘못한 줄 안다. */
+            return '<option value="'+esc(x.value)+'"'+
+              (x.code==='unavailable'?' disabled':'')+'>'+
+              esc(x.label)+' · '+esc(x.basis_label||'')+'</option>';
+          }).join('');
+          el('rsMedia').value='M';
+          rsBasisNote();
+          var lg=el('rsBasisLegend');
+          if(lg) lg.textContent=(mb&&mb.legend)||'';
+        }
+      }).catch(function(){});
       j(API+'/dplan/summary?date_from=2026-01&date_to=2026-12').then(function(s){
+        if(el('rsMedia').options.length) return;   /* 위에서 이미 채웠으면 건드리지 않는다 */
         var opts='<option value="ALL">전체(API 통합)</option>'+
           ['G','M','D','T','N','K'].map(function(m){
             return '<option value="'+m+'">'+({G:'Google',M:'Meta',D:'DV360',T:'TikTok',N:'Naver',K:'Kakao'}[m])+'</option>';
@@ -2602,7 +2640,7 @@ window.addEventListener('popstate',function(e){var p=(e.state&&e.state.pg)||'L';
       
     });
   }
-  if(el('rsRun')) el('rsRun').onclick=rsRun;
+  if(el('rsRun')) el('rsRun').onclick=rsRun; if(el('rsMedia')) el('rsMedia').addEventListener('change', rsBasisNote);
   ['rsMedia','rsMarket'].forEach(function(id){ var e=el(id); if(e) e.onchange=rsRun; });
 
   /* ── 업종 벤치마크 보강: 신선도 · 표본수 신뢰도 · 내 위치 ── */

@@ -89,6 +89,10 @@ MUTATIONS = [
      "    if not cap or cap <= 0 or a <= 0 or b <= 0 or not cpm:",
      "    if True:"),
 
+    ("basis-is-named", "_is_meta 가 다시 «이름만» 보게 한다",
+     '    return (not cpm_source) or ("bm_campaign_monthly" in cpm_source)',
+     "    return True"),
+
     ("no-unverified-codes", "«422» 를 다시 박는다",
      '"note": "모집단이 작아 매체가 출력을 억제한 조건입니다. "',
      '"note": "모집단이 작아 매체가 출력을 억제한 조건입니다(미공개, 422). "'),

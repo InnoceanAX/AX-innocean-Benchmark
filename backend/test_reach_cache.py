@@ -446,6 +446,34 @@ print("\n=== 보간 헬퍼 ===")
 pp = [(1000.0, 100.0), (2000.0, 180.0), (4000.0, 300.0)]
 ck("구간 안은 선형", abs(reach._interp_reach(pp, 1500.0) - 140.0) < 1e-6)
 ck("왼쪽 밖은 첫 값", reach._interp_reach(pp, 10.0) == 100.0)
+# INV(basis-is-named)
+# 🔴 도달 적합은 Meta 캠페인 «하나» 뿐이고 다른 매체는 CPM 만 자기 실측이다.
+#   그 차이가 드롭다운에 안 보이면 플래너는 모든 매체가 같은 근거인 줄 안다.
+#   (A1 요청 · 사용자 결정 2026-10-25)
+for _code in ("measured", "borrowed", "borrowed_nas", "assumed", "unavailable"):
+    ck(f"근거 {_code} 에 라벨과 설명이 있다",
+       _code in reach.REACH_BASIS
+       and reach.REACH_BASIS[_code].get("label")
+       and reach.REACH_BASIS[_code].get("note"), _code)
+# 🔴 «없음» 을 «추정» 과 같은 칸에 넣지 않는다. A1 은 TikTok 을 「도달 추정」 으로
+#   적었는데 실제로는 CPM 실측이 없어 그릴 수 없다 — 플래너가 안 나올 곡선을 기다린다.
+ck("«곡선 없음» 이 «추정» 과 다른 코드다",
+   reach.REACH_BASIS["unavailable"]["label"]
+   != reach.REACH_BASIS["borrowed"]["label"])
+# 🔴 _is_meta 가 «이름» 이 아니라 «CPM 출처» 로 판정해야 한다. 전에는 이름만 봐서
+#   「인스타그램」(디플랜 NAS)이 True 로 나왔고 «매체가 섞여 있습니다» 경고가 꺼졌다 —
+#   적합은 Meta API 캠페인이고 CPM 은 NAS 표였는데 「안 섞였다」 고 말하고 있었다.
+ck("Meta 코드 + API 출처면 «안 섞임»",
+   reach._is_meta("M", "bm_campaign_monthly (API 실측)") is True)
+ck("Meta 이름이어도 NAS 출처면 «섞임»",
+   reach._is_meta("인스타그램", "bm_dplan_creative_monthly (디플랜 NAS)") is False)
+ck("Meta 코드여도 NAS 출처면 «섞임»",
+   reach._is_meta("M", "bm_dplan_creative_monthly (디플랜 NAS)") is False)
+ck("Meta 가 아니면 출처와 무관하게 «섞임»",
+   reach._is_meta("G", "bm_campaign_monthly (API 실측)") is False)
+ck("범례가 «Meta 하나뿐» 이라고 말한다",
+   "Meta" in reach.REACH_BASIS_LEGEND and "하나" in reach.REACH_BASIS_LEGEND)
+
 # INV(cap-is-marked)
 # 🔴 곡선이 «상한에 잘린» 구간을 그렇게 말해야 한다. 평평한 선을 그대로 두면
 #   「모집단 전체에 닿았다」 로 읽히는데, 모형이 아니라 상한이 말한 것이다.

@@ -195,9 +195,88 @@ def _reach_fraction(imps, universe, k):
     return 1.0 - (1.0 + grp / k) ** (-k)
 
 
-def _is_meta(media):
-    """도달 적합은 Meta 캠페인 기준이다. CPM 을 다른 매체에서 가져오면 조합이 섞인다."""
-    return (media or "").strip().upper() in ("M", "META", "인스타그램", "인스타그램+스레드", "페이스북")
+# INVARIANT(basis-is-named): 매체마다 «도달의 근거» 를 이름 붙여 돌려준다. 도달 적합은
+#   Meta 캠페인 하나뿐이고 다른 매체는 CPM 만 자기 실측이다 — 그 차이가 드롭다운에
+#   안 보이면 플래너는 모든 매체가 같은 근거인 줄 안다.
+REACH_BASIS = {
+    "measured": {
+        "label": "도달 실측",
+        "note": ("Meta 캠페인의 실제 누적 도달로 맞춘 곡선입니다. "
+                 "비용(CPM)도 Meta 실측입니다."),
+    },
+    "borrowed": {
+        "label": "도달 추정",
+        "note": ("비용(CPM)은 {media} 실측입니다. {media} 의 도달 데이터가 없어 "
+                 "도달은 Meta 에서 맞춘 곡선을 빌려 씁니다."),
+    },
+    "borrowed_nas": {
+        "label": "도달 추정",
+        "note": ("비용(CPM)은 디플랜 벤치마크 표입니다(광고주가 적으면 «가정» 입니다). "
+                 "도달은 Meta 에서 맞춘 곡선을 빌려 씁니다."),
+    },
+    "assumed": {
+        "label": "도달 가정",
+        "note": "실측으로 맞춘 곡선이 없어 도달을 가정식(NBD)으로 셉니다.",
+    },
+    # 🔴 A1 은 TikTok 을 «도달 추정» 으로 적었는데 실제로는 그릴 수 없다.
+    #   「추정이라도 있다」 와 「없다」 는 다른 답이고, 섞으면 플래너가 기다린다.
+    "unavailable": {
+        "label": "곡선 없음",
+        "note": ("{media} 의 CPM 실측이 없어 예산→노출 환산을 할 수 없습니다. "
+                 "다른 매체 CPM 으로 대신 쓰면 노출이 자릿수로 틀립니다."),
+    },
+}
+REACH_BASIS_LEGEND = ("도달을 우리 데이터로 맞춘 매체는 지금 Meta 하나입니다. "
+                      "나머지는 비용만 그 매체 실측이고 도달은 추정입니다.")
+
+
+def reach_basis(media, market="KR", day=None, display=None):
+    """이 매체의 도달 근거. {code, label, note, cpm, cpm_source} 또는 unavailable.
+
+    🔑 «이름» 이 아니라 «CPM 출처» 로 판정한다. 전에는 _is_meta 가 이름만 보고
+      「인스타그램」 을 Meta 로 쳐서 «매체가 섞여 있습니다» 경고를 껐는데, 그 CPM 은
+      디플랜 NAS(₩3,670)이고 적합은 Meta API 캠페인이었다 — 출처가 다른데
+      「안 섞였다」 고 말하고 있었다.
+    """
+    import datetime
+    day = day or datetime.date.today().isoformat()
+    # 문구에는 «사람이 읽는 이름» 을 쓴다. 코드 글자를 그대로 내보내면
+    #   「G 실측입니다」 가 된다 — 드롭다운에는 Google 이라고 적어 놓고.
+    shown = (display or media or "이 매체")
+    try:
+        cpm, src = _cpm(media or "", market or "", day)
+    except Exception as e:  # noqa: BLE001
+        b = REACH_BASIS["unavailable"]
+        return {"code": "unavailable", "label": b["label"],
+                "note": b["note"].format(media=shown),
+                "cpm": None, "cpm_source": None, "reason": str(e)[:160]}
+    is_api = "bm_campaign_monthly" in (src or "")
+    if _is_meta_code(media) and is_api:
+        code = "measured"
+    elif is_api:
+        code = "borrowed"
+    else:
+        code = "borrowed_nas"
+    b = REACH_BASIS[code]
+    return {"code": code, "label": b["label"],
+            "note": b["note"].format(media=shown),
+            "cpm": round(cpm, 2), "cpm_source": src}
+
+
+def _is_meta_code(media):
+    """Meta «API 수집» 매체 코드인가. 이름이 비슷한 NAS 항목은 여기 안 든다."""
+    return (media or "").strip().upper() in ("M", "META")
+
+
+def _is_meta(media, cpm_source=""):
+    """적합과 CPM 이 «같은 자료» 에서 왔는가 — 그래야 「안 섞였다」 고 말할 수 있다.
+
+    🔴 전에는 이름만 봤다. 「인스타그램」(디플랜 NAS)이 True 로 나와 경고가 꺼졌는데
+      적합은 Meta API 캠페인이고 CPM 은 NAS 표였다. 이름이 같다고 자료가 같지 않다.
+    """
+    if not _is_meta_code(media):
+        return False
+    return (not cpm_source) or ("bm_campaign_monthly" in cpm_source)
 
 
 class Provider:
@@ -681,6 +760,9 @@ class FittedReachProvider(Provider):
         return {
             "provider": self.name, "provider_label": self.label,
             "fitted": True,
+            # 🔑 A1 요청 — 매체별 «도달 근거». 드롭다운이 이걸로 꼬리표를 단다.
+            "basis": reach_basis(media, market),
+            "basis_legend": REACH_BASIS_LEGEND,
             # 🔑 상한에 닿는 지점. 없으면 None — 「상한이 없다」 가 아니라
             #   「이 예산 안에서는 안 닿는다」 는 뜻이고, 그러면 그래프가 멀쩡하다.
             "cap": cap_info,
@@ -763,7 +845,7 @@ class FittedReachProvider(Provider):
                  f"매체가 다르면 도달 특성도 다르므로, 이 조합은 «Meta 의 도달 패턴을 "
                  f"{media} 단가에 적용하면» 이라는 가정으로만 읽으십시오. "
                  f"Meta 를 선택하면 이 경고가 사라집니다.")
-            ] if not _is_meta(media) else []) + [
+            ] if not _is_meta(media, cpm_src) else []) + [
                 f"**Meta 캠페인 {n_fit:,}개**({scope})로 적합했습니다. 다른 매체에는 그대로 적용되지 않습니다.",
                 "🔴 이 곡선은 **«캠페인 사이»의 관계**입니다 — «이 정도 노출을 산 캠페인들은 평균 이만큼 도달했다». "
                 "**«지금 이 캠페인에 돈을 더 쓰면»** 의 답이 아닙니다. 한 캠페인 안의 포화는 같은 사람에게 반복 노출되며 "

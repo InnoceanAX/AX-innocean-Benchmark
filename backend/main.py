@@ -335,6 +335,47 @@ def reach_curve_status(market: str = "KR"):
                             status_code=500)
 
 
+@app.get("/api/v1/reach/media_basis")
+def reach_media_basis(market: str = "KR"):
+    """매체별 «도달 근거» 목록 — 드롭다운이 꼬리표를 달 수 있게.
+
+    ★ 왜 목록으로 주나
+      드롭다운이 매체마다 /reach/curve 를 부르면 BigQuery 를 15번 탄다.
+      근거 판정은 CPM 조회 하나면 되므로 한 번에 준다.
+
+    🔴 세 단계가 아니라 «넷» 이다. A1 은 TikTok 을 «도달 추정» 으로 적었는데
+      실제로는 CPM 실측이 없어 «그릴 수 없다» — 「추정이라도 있다」 와 「없다」 는
+      다른 답이고, 섞으면 플래너가 나오지도 않을 곡선을 기다린다.
+    """
+    try:
+        import dplan as _dp
+        out = []
+        for code, name in (("ALL", "전체(API 통합)"), ("G", "Google"), ("M", "Meta"),
+                           ("D", "DV360"), ("T", "TikTok"), ("N", "Naver"),
+                           ("K", "Kakao")):
+            b = reach.reach_basis(code, market, display=name)
+            out.append({"value": code, "label": name, "source": "api",
+                        **{("basis_label" if k == "label" else k): v
+                           for k, v in b.items()}})
+        try:
+            for m in (_dp.get_summary().get("media") or []):
+                nm = m.get("media")
+                if not nm:
+                    continue
+                b = reach.reach_basis(nm, market, display=nm)
+                out.append({"value": nm, "label": f"{nm} (NAS)",
+                            "source": "nas",
+                            **{("basis_label" if k == "label" else k): v
+                               for k, v in b.items()}})
+        except Exception:  # noqa: BLE001
+            pass        # NAS 목록을 못 읽어도 API 매체는 돌려준다
+        return JSONResponse({"media": out, "n": len(out),
+                             "legend": reach.REACH_BASIS_LEGEND,
+                             "basis_codes": list(reach.REACH_BASIS)})
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"media": [], "error": str(e)}, status_code=500)
+
+
 @app.get("/api/v1/reach/markets")
 def reach_markets():
     """도달 곡선을 적합할 수 있는 시장 목록(표본 하한 이상)."""
