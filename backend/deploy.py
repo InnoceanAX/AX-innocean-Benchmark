@@ -397,9 +397,36 @@ def verify():
     base = f"https://{REGION}-run.googleapis.com/v2/projects/{PROJECT}/locations/{REGION}/services"
     uri = S.get(f"{base}/{SERVICE}").json().get("uri")
     import urllib.request
+    # 🔑 IAP 를 통과하는 토큰 — «self-signed JWT» 다(A1 이 쓰는 방식, 2026-10-24).
+    #   aud = 서비스URL + "/*" · iss = sub = 서비스계정.
+    #   ⚠️ Google 서명 ID 토큰(IDTokenCredentials)은 «안 된다» — audience 를 넷이나
+    #     바꿔 가며 댔는데 전부 401 이었다. 차이는 audience 가 아니라 «토큰 종류» 였고,
+    #     나는 같은 잣대로 네 번 잰 셈이었다.
+    def _iap_token():
+        try:
+            import json as _json
+            import time as _time
+            import google.auth.jwt as _gjwt
+            from google.oauth2 import service_account as _sa
+            info = _json.loads(open(SA_KEY, encoding="utf-8").read())
+            signer = _sa.Credentials.from_service_account_info(info).signer
+            em = info["client_email"]
+            now = int(_time.time())
+            return _gjwt.encode(signer, {
+                "iss": em, "sub": em, "aud": uri + "/*",
+                "iat": now, "exp": now + 3600, "email": em}).decode("utf-8")
+        except Exception as e:  # noqa: BLE001
+            print(f"  · [알림] IAP 토큰을 못 만들었습니다: {str(e)[:70]}")
+            return None
+
+    _tok = _iap_token()
+
     def hit(path):
         try:
-            with urllib.request.urlopen(uri + path, timeout=30) as r:
+            req = urllib.request.Request(uri + path)
+            if _tok:
+                req.add_header("Authorization", "Bearer " + _tok)
+            with urllib.request.urlopen(req, timeout=30) as r:
                 return r.status, r.read(200).decode("utf-8", "ignore")
         except Exception as e:
             return "ERR", str(e)[:120]
@@ -444,6 +471,9 @@ def verify():
             print(f" ????  {name:<10} IAP 로그인 화면 — 확인 못 함  {path[:40]}")
             continue
         ok = (st == 200)
+        if ok and path.startswith("/api/") and not (body or "").lstrip().startswith(("{", "[")):
+            ok = False
+            body = "본문이 JSON 이 아닙니다: " + (body or "")[:60]
         print(f" {'OK  ' if ok else 'FAIL'} {name:<10} {st}{retried}  {path[:50]}")
         if not ok:
             bad.append(f"{name} {path[:58]} -> {st} {body[:70]}")
@@ -602,7 +632,7 @@ def main():
     # 🔴 「✅ 배포 완료」 는 «안 한 검사» 까지 했다고 읽히게 한다. 확인한 것과
     #   확인하지 않은 것을 나눠 적는다 — 뺀 것을 잊으면 그게 구멍이 된다.
     print("\n✅ 확인함 — 이미지 다이제스트 고정 · 리비전 반영(되읽음) · "
-          "프론트 문법 · 테스트"
+          "엔드포인트 7종 — API 6종은 본문이 JSON 인지까지 · 프론트 문법 · 테스트"
           + " · 불변식↔테스트 대조 · 돌연변이 14개(테스트에 이가 있는가)"
           + ("" if a.service_only else " · 마트 Job 스모크(실행·import·자격증명·상류 접근)"))
     # ⚠️ 스모크가 덮은 부분은 이 목록에서 뺀다. 이미 확인한 것을 「확인하지 않음」에
