@@ -446,6 +446,29 @@ print("\n=== 보간 헬퍼 ===")
 pp = [(1000.0, 100.0), (2000.0, 180.0), (4000.0, 300.0)]
 ck("구간 안은 선형", abs(reach._interp_reach(pp, 1500.0) - 140.0) < 1e-6)
 ck("왼쪽 밖은 첫 값", reach._interp_reach(pp, 10.0) == 100.0)
+# INV(hold-is-not-waiting)
+# 🔴 «보류» 는 «안 한다» 는 결정이고 «아직» 은 «기다리면 된다» 다.
+#   섞으면 사람이 기다린다 — fetch_failed 를 캡 도달과 안 갈랐던 것과 같은 집안이다.
+#   (A1 요청 · 사용자 결정 2026-10-25: Meta R&F 보류)
+#   ⚠️ 보류 이유가 둘이다 — 이득이 1.9% 로 작고, «권한을 받을 수도 없다»
+#     (7계정 주인이 각국 이노션 비즈니스 · Manage campaigns 비활성, A1 실측).
+#     전에 내가 「해제 조건: ads_management 를 부여하면 된다」 「R&F 전용 시스템
+#     사용자로 7계정만 묶자」 고 적어 뒀는데 둘 다 쓸 수 없는 길이었다.
+_provs = {p["name"]: p for p in (reach.providers().get("providers") or [])}
+_hold = [p for p in _provs.values() if p.get("decision") == "hold"]
+ck("보류로 표시된 제공자가 있다", len(_hold) >= 1, list(_provs))
+for _p in _hold:
+    _st = str(_p.get("status") or "")
+    _bad = [w for w in reach.HOLD_WORDS if w in _st]
+    ck(f"보류({_p['name']})에 기다림 말투가 없다", not _bad, _bad)
+    ck(f"보류({_p['name']})가 «보류» 라고 말한다", "보류" in _st, _st[:60])
+# ⚠️ «아직» 인 쪽은 기다림 말투가 맞다 — 금지하면 「언제 되나」 에 답을 못 한다.
+_pend = [p for p in _provs.values() if p.get("decision") == "pending"]
+ck("«아직» 인 제공자는 금지하지 않는다(있어도 통과)", True)
+ck("보류와 아직을 «다른 값» 으로 든다",
+   {p.get("decision") for p in _hold} != {p.get("decision") for p in _pend}
+   or not _pend)
+
 # INV(basis-is-named)
 # 🔴 도달 적합은 Meta 캠페인 «하나» 뿐이고 다른 매체는 CPM 만 자기 실측이다.
 #   그 차이가 드롭다운에 안 보이면 플래너는 모든 매체가 같은 근거인 줄 안다.

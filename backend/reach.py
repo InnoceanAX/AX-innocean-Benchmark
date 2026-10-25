@@ -279,10 +279,18 @@ def _is_meta(media, cpm_source=""):
     return (not cpm_source) or ("bm_campaign_monthly" in cpm_source)
 
 
+# INVARIANT(hold-is-not-waiting): «보류» 는 «안 한다» 는 결정이고 «아직» 은
+#   «기다리면 된다» 다. 보류인 제공자가 기다림 말투를 쓰면 사람이 기다린다 —
+#   fetch_failed 를 캡 도달과 안 갈랐던 것과 같은 집안이다.
+HOLD_WORDS = ("기다리", "연결되면", "해제 조건", "곧 ")
+
+
 class Provider:
     name = "base"
     label = "base"
     fitted = False
+    # "hold"=안 하기로 정했다 · "pending"=기다리면 된다 · None=쓸 수 있다
+    decision = None
     # 🔑 «예측» 인가 «실측» 인가, 그리고 «무엇을 재는가».
     #   세 벤더 곡선을 나란히 놓으면 모양이 서로 다르게 나온다. 그게 결함이 아니라
     #   재는 대상이 달라서라는 것을 제공자마다 글자로 들고 있어야 한다 —
@@ -1480,6 +1488,7 @@ class _VendorForecastProvider(Provider):
 
 
 class GoogleReachPlanProvider(_VendorForecastProvider):
+    decision = "pending"   # 개발자 토큰 신청 중
     name = "google_reachplan"
     label = "Google Ads ReachPlanService"
     fitted = True
@@ -1503,6 +1512,7 @@ class GoogleReachPlanProvider(_VendorForecastProvider):
 
 
 class MetaRFProvider(_VendorForecastProvider):
+    decision = "hold"   # 사용자 결정 2026-10-25
     name = "meta_rf"
     label = "Meta Reach & Frequency API"
     fitted = True
@@ -1515,19 +1525,32 @@ class MetaRFProvider(_VendorForecastProvider):
     #   → HTTP 403 (#200) Requires ads_management permission to manage the object
     #   토큰 권한: read_insights · ads_read · pages_* (SYSTEM_USER · 유효)
     #   즉 «새 연동» 이 아니라 «권한 한 줄» 이다 — 호스트·토큰·계정이 모두 그대로다.
-    blocked_reason = ("메타 토큰에 ads_management 권한이 없습니다(현재 ads_read 까지). "
-                      "R&F 예측 생성에 그 권한이 필요하며 메타가 직접 그렇게 답합니다 — "
-                      "HTTP 403 (#200) Requires ads_management permission. "
-                      "해제 조건: 비즈니스 관리자에서 ads_management 를 부여해야 합니다"
-                      "(새 앱·새 연동 불필요 — 호스트·토큰·계정 그대로). "
-                      "⚠️ 다만 교환이 비대칭입니다(DB 실측 180일): R&F 가 덮는 예약형"
-                      "(RESERVED) 집행은 ₩1.82억으로 메타 지출의 1.9% 인데, 이 토큰이 "
-                      "덮는 범위는 13계정 ₩94.5억입니다 — 1.9% 를 계획하려고 전체에 "
-                      "«쓰기» 권한을 붙이는 셈입니다. 그래서 R&F 전용 시스템 사용자를 "
-                      "따로 만들어 해당 7계정만 묶는 쪽을 권합니다. "
-                      "자격 자체는 충족돼 보입니다 — 예약형 캠페인 172개가 "
-                      "도달·인지 목표군으로 실제 돌고 있습니다. "
-                      "다만 R&F 예측 가능 여부는 계정·국가·목표 조합별이라 불러봐야 압니다.")
+    # 🔴 사용자 결정 2026-10-25: «보류». 그리고 A1 실측이 내 «권고» 를 무효로 만들었다.
+    #   내가 적어 뒀던 것: 「해제 조건: 비즈니스 관리자에서 ads_management 를 부여하면
+    #     된다」 「R&F 전용 시스템 사용자로 7계정만 묶는 쪽을 권합니다」
+    #     「자격 자체는 충족돼 보입니다」
+    #   A1 실측(2026-10-25): 7계정의 «주인» 이 각 나라 이노션 비즈니스이고
+    #     (Innocean ID · Innocean Brazil 등), 그 비즈니스에서 «Manage campaigns» 가
+    #     비활성이라 ads_management 를 «받을 수 없다».
+    #   즉 내 권고는 «할 수 있는데 안 한 일» 이 아니라 «할 수 없는 일» 이었다.
+    #   「해제 조건」 으로 적어 두면 다음 사람이 그 길을 따라가 막힌다.
+    # ⚠️ 「기다리는 중」 「연결되면 그려집니다」 를 쓰지 않는다. 보류는 «안 한다» 는
+    #   결정이지 «아직» 이 아니다 — 섞으면 사람이 기다린다.
+    blocked_reason = ("보류 — 예약형 계정의 «주인 비즈니스» 에서 쓰기 권한"
+                      "(ads_management)을 받아야 하는데 받을 수 없습니다. "
+                      "7개 계정의 주인이 각 나라 이노션 비즈니스이고(Innocean ID · "
+                      "Innocean Brazil 등) 그 비즈니스에서 «Manage campaigns» 가 "
+                      "비활성입니다(A1 실측 2026-10-25). "
+                      "그리고 이득이 작아 미룹니다 — R&F 가 덮는 예약형 집행은 "
+                      "₩1.82억으로 메타 지출의 1.9% 인데, 그 권한이 덮는 범위는 "
+                      "13계정 ₩94.5억입니다(DB 실측 180일). "
+                      "1.9% 를 계획하려고 전체에 쓰기 권한을 붙이는 셈이라 "
+                      "교환이 비대칭입니다. "
+                      "⚠️ 전에 여기에 «R&F 전용 시스템 사용자로 7계정만 묶자» 고 "
+                      "적어 뒀는데, 주인 비즈니스에서 권한 자체가 안 나오므로 "
+                      "그 방법도 쓸 수 없습니다. "
+                      "다시 보려면 이 두 가지가 바뀌어야 합니다 — 주인 비즈니스의 "
+                      "권한 설정, 그리고 예약형 비중.")
 
 
 _PROVIDERS = [AssumptionProvider(), FittedReachProvider(), NetflixReachProvider(),
@@ -1541,7 +1564,8 @@ def providers():
         out.append({"name": p.name, "label": p.label, "fitted": p.fitted,
                     "kind": getattr(p, "kind", "forecast"),
                     "measures": getattr(p, "measures", ""),
-                    "available": ok, "status": why})
+                    "available": ok, "status": why,
+                    "decision": getattr(p, "decision", None)})
     return {"providers": out,
             "default": "assumption",
             "note": "fitted=true 인 제공자가 활성화되면 기본값을 그쪽으로 옮기세요."}

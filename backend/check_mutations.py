@@ -93,6 +93,10 @@ MUTATIONS = [
      '    return (not cpm_source) or ("bm_campaign_monthly" in cpm_source)',
      "    return True"),
 
+    ("hold-is-not-waiting", "보류 문구에 기다림 말투를 다시 넣는다",
+     'blocked_reason = ("보류 — 예약형 계정의',
+     'blocked_reason = ("연결되면 그려집니다. 해제 조건 — 예약형 계정의'),
+
     ("no-unverified-codes", "«422» 를 다시 박는다",
      '"note": "모집단이 작아 매체가 출력을 억제한 조건입니다. "',
      '"note": "모집단이 작아 매체가 출력을 억제한 조건입니다(미공개, 422). "'),
