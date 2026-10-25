@@ -465,6 +465,19 @@ for _p in _hold:
 # ⚠️ «아직» 인 쪽은 기다림 말투가 맞다 — 금지하면 「언제 되나」 에 답을 못 한다.
 _pend = [p for p in _provs.values() if p.get("decision") == "pending"]
 ck("«아직» 인 제공자는 금지하지 않는다(있어도 통과)", True)
+# ⚠️ 같은 사실을 «두 자리» 에서 내보낸다 — providers[] 와 compare 의 blocked[].
+#   한쪽에만 넣으면 그 자리만 소비처 내장 문장으로 대체되고, 내가 문구를 고쳐도
+#   거기만 옛말로 남는다. 실제로 providers 에만 넣어 뒀었다(A1 이 짚어 줬다).
+#   «안전장치를 만들고 범위를 안 넓힘» — 오늘 여러 번 걸린 자리다.
+_cmp = reach.compare_curves(budget=10 ** 9, media="넷플릭스", market="KR",
+                            points=2, flight_days=30)
+_bl = {b["name"]: b for b in (_cmp.get("blocked") or [])}
+ck("blocked[] 에도 decision 이 실린다",
+   all("decision" in b for b in _bl.values()), list(_bl))
+ck("두 자리의 decision 이 어긋나지 않는다",
+   all(_bl[n].get("decision") == _provs[n].get("decision")
+       for n in _bl if n in _provs),
+   {n: (_bl[n].get("decision"), _provs.get(n, {}).get("decision")) for n in _bl})
 ck("보류와 아직을 «다른 값» 으로 든다",
    {p.get("decision") for p in _hold} != {p.get("decision") for p in _pend}
    or not _pend)

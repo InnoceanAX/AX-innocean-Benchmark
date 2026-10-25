@@ -2343,13 +2343,18 @@ def compare_curves(budget=2_000_000_000, media="", market="KR", universe=None,
         meta = {"name": p.name, "label": p.label, "kind": getattr(p, "kind", "forecast"),
                 "measures": getattr(p, "measures", ""), "fitted": p.fitted}
         if not ok:
-            blocked.append(dict(meta, reason=why))
+            # A1 이 providers[] 와 blocked[] «둘 다» 에서 decision 을 읽는다.
+            #   한쪽에만 넣으면 그 자리만 소비처 내장 문장으로 대체되고,
+            #   내가 문구를 고쳐도 거기만 옛말로 남는다.
+            blocked.append(dict(meta, reason=why,
+                                decision=getattr(p, "decision", None)))
             continue
         try:
             d = p.curve(budget=budget, media=media, market=market, universe=universe,
                         points=points, k=k, flight_days=flight_days)
         except Exception as e:  # noqa: BLE001
-            blocked.append(dict(meta, reason=str(e)))
+            blocked.append(dict(meta, reason=str(e),
+                                decision=getattr(p, "decision", None)))
             continue
         series.append(dict(meta,
                            badge=d.get("estimate_badge", ""),
